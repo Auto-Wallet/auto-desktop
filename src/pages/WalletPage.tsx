@@ -30,20 +30,26 @@ export default function WalletPage() {
   return (
     <div className="wallet">
       <header className="wallet-head">
-        <div className="acct" onClick={() => setMenuOpen((o) => !o)}>
+        {/* The whole pill is the account switcher — click to switch / add / import. */}
+        <div
+          className={`acct${menuOpen ? " open" : ""}`}
+          onClick={() => setMenuOpen((o) => !o)}
+          title={t("wallet.switchAccount")}
+        >
           <Avatar address={active.address} />
           <div className="acct-meta">
             <div className="acct-label">
               {active.label}
-              {active.signer ? (
-                <span className="badge signer">{t("wallet.signer")}</span>
-              ) : (
-                <span className="badge watch">{t("wallet.watch")}</span>
-              )}
+              {/* Only watch-only accounts get a badge; the signer account is the
+                  default and needs none (feedback: "签名" was confusing). */}
+              {!active.signer && <span className="badge watch">{t("wallet.watch")}</span>}
             </div>
             <div className="acct-addr">{shortAddress(active.address, 10, 8)}</div>
           </div>
-          <span className={`caret${menuOpen ? " up" : ""}`}>▾</span>
+          <span className="acct-switch">
+            {t("wallet.switchAccount")}
+            <span className={`caret${menuOpen ? " up" : ""}`}>⌄</span>
+          </span>
         </div>
 
         <div className="head-actions">

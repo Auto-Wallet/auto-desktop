@@ -26,6 +26,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.pasteAddr": "Paste 0x address…",
     "wallet.add": "Add",
     "wallet.lock": "Lock",
+    "wallet.switchAccount": "Switch account",
 
     "lock.tagline": "Your keys, your coins.",
     "lock.create": "Create a new wallet",
@@ -68,9 +69,9 @@ const DICT: Record<Lang, Record<string, string>> = {
   },
   zh: {
     "nav.wallet": "钱包",
-    "nav.dapps": "dApps",
+    "nav.dapps": "应用",
     "nav.settings": "设置",
-    "nav.opened": "已打开的 DAPP",
+    "nav.opened": "已打开的应用",
 
     "wallet.assets": "资产",
     "wallet.chains": "{n} 条链",
@@ -84,6 +85,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.pasteAddr": "粘贴 0x 地址…",
     "wallet.add": "添加",
     "wallet.lock": "锁定",
+    "wallet.switchAccount": "切换账户",
 
     "lock.tagline": "你的私钥，你的资产。",
     "lock.create": "创建新钱包",
@@ -104,7 +106,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "lock.errMatch": "两次输入的密码不一致。",
     "lock.errPhrase": "请输入 12 或 24 个助记词。",
 
-    "dapps.title": "dApps",
+    "dapps.title": "应用",
     "dapps.search": "搜索或粘贴 dApp 网址…",
     "dapps.add": "添加",
     "dapps.empty": "还没有 dApp —— 在上方粘贴网址即可添加。",

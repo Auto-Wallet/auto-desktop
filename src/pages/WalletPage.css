@@ -24,6 +24,33 @@
   flex: 1;
   cursor: pointer;
   border-radius: var(--r-md);
+  padding: 6px 8px;
+  margin: -6px -8px;
+  border: 1px solid transparent;
+  transition: background 0.12s, border-color 0.12s;
+}
+.acct:hover {
+  background: var(--bg-soft);
+  border-color: var(--border-mid);
+}
+.acct.open {
+  background: var(--bg-soft);
+  border-color: var(--indigo);
+}
+
+/* Visible "switch account ⌄" affordance so the dropdown is discoverable. */
+.acct-switch {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--indigo);
+  background: var(--indigo-soft);
+  padding: 5px 10px;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
 }
 
 .avatar {
@@ -71,8 +98,8 @@
 }
 
 .caret {
-  color: var(--ink-3);
-  font-size: 12px;
+  font-size: 15px;
+  line-height: 1;
   transition: transform 0.15s ease;
 }
 .caret.up {
