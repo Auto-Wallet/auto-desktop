@@ -23,6 +23,8 @@ mod vault;
 // EIP-1559 transaction encoding + signing (pure). eth_sendTransaction fills the
 // fields from the node in lib.rs, then builds + signs here.
 mod eth_tx;
+// EIP-712 typed-data hashing (pure) for eth_signTypedData_v4.
+mod eip712;
 
 #[derive(Serialize)]
 struct Wallet {
@@ -471,9 +473,59 @@ async fn handle_signing<R: Runtime>(
                 Err("User rejected the request (4001)".to_string())
             }
         }
+        "eth_signTypedData_v4" => {
+            // Params are [address, typedData]; the typed data is usually a JSON
+            // string, occasionally an object.
+            let raw = params
+                .get(1)
+                .ok_or("eth_signTypedData_v4: missing typed-data param")?;
+            let typed: Value = match raw {
+                Value::String(s) => serde_json::from_str(s)
+                    .map_err(|e| format!("eth_signTypedData_v4: invalid typed-data JSON: {e}"))?,
+                other => other.clone(),
+            };
+            // Surface obvious structural errors BEFORE prompting (e.g. unknown type).
+            eip712::signing_hash(&typed)?;
+            let req = PendingRequest {
+                id: next_request_id(),
+                method: method.to_string(),
+                origin: origin.to_string(),
+                summary: preview_typed_data(&typed),
+            };
+            if request_approval(app, req).await {
+                sign_typed_data(&typed)
+            } else {
+                Err("User rejected the request (4001)".to_string())
+            }
+        }
         other => Err(format!(
             "{other} not implemented yet (signing lands incrementally)"
         )),
+    }
+}
+
+/// Sign an EIP-712 typed-data digest with the active vault key → 65-byte r‖s‖v hex.
+fn sign_typed_data(typed: &Value) -> Result<Value, String> {
+    let digest = eip712::signing_hash(typed)?;
+    let (signature, recovery_id) = with_active_key(|k| k.sign_prehash_recoverable(&digest))?
+        .map_err(|e| format!("eth_signTypedData_v4: signing failed: {e}"))?;
+    let mut sig = signature.to_bytes().to_vec(); // 64 bytes: r ‖ s
+    sig.push(27 + recovery_id.to_byte()); // v
+    Ok(json!(format!("0x{}", hex::encode(sig))))
+}
+
+/// A human-readable summary of typed data for the approval window.
+fn preview_typed_data(typed: &Value) -> String {
+    let primary = typed.get("primaryType").and_then(|v| v.as_str()).unwrap_or("typed data");
+    let domain = typed
+        .get("domain")
+        .and_then(|d| d.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if domain.is_empty() {
+        format!("Sign typed data ({primary})")
+    } else {
+        format!("Sign {primary} for {domain}")
     }
 }
 
@@ -1476,10 +1528,11 @@ mod e2e {
         assert_eq!(call(&wv, "eth_chainId", json!([])).unwrap(), json!("0x1"));
         assert_eq!(call(&wv, "net_version", json!([])).unwrap(), json!("1"));
 
-        // A not-yet-implemented signing method (eth_signTypedData_v4) is rejected
-        // up-front (no approval window, returns immediately). personal_sign and
-        // eth_sendTransaction (which DO wait for approval) are covered separately.
-        let err = call(&wv, "eth_signTypedData_v4", json!([SPIKE_ACCOUNT, "{}"])).unwrap_err();
+        // A still-unimplemented signing method (eth_signTypedData_v3) is rejected
+        // up-front (no approval window, returns immediately). personal_sign,
+        // eth_sendTransaction and eth_signTypedData_v4 (which DO prompt) are covered
+        // separately.
+        let err = call(&wv, "eth_signTypedData_v3", json!([SPIKE_ACCOUNT, "{}"])).unwrap_err();
         assert!(
             err.as_str().unwrap_or_default().contains("not implemented"),
             "expected not-implemented error, got: {err}"
@@ -1615,6 +1668,73 @@ mod e2e {
         assert!(
             err.as_str().unwrap_or_default().contains("4001"),
             "expected user-rejected (4001), got: {err}"
+        );
+    }
+
+    /// eth_signTypedData_v4 end-to-end through the approval flow (OFFLINE — EIP-712
+    /// is pure). The returned signature must recover, over the EIP-712 digest, to the
+    /// unlocked signer — proving the typed-data hashing + approve→sign path.
+    #[test]
+    fn e2e_sign_typed_data_v4_approve() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        let approval = approval_webview(app);
+
+        let typed = json!({
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"}
+                ],
+                "Person": [
+                    {"name": "name", "type": "string"},
+                    {"name": "wallet", "type": "address"}
+                ],
+                "Mail": [
+                    {"name": "from", "type": "Person"},
+                    {"name": "to", "type": "Person"},
+                    {"name": "contents", "type": "string"}
+                ]
+            },
+            "primaryType": "Mail",
+            "domain": {
+                "name": "Ether Mail", "version": "1", "chainId": 1,
+                "verifyingContract": "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"
+            },
+            "message": {
+                "from": {"name": "Cow", "wallet": "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826"},
+                "to": {"name": "Bob", "wallet": "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"},
+                "contents": "Hello, Bob!"
+            }
+        });
+        let typed_str = serde_json::to_string(&typed).unwrap();
+
+        let dapp_for_thread = dapp.clone();
+        let signer = std::thread::spawn(move || {
+            call(&dapp_for_thread, "eth_signTypedData_v4", json!([SPIKE_ACCOUNT, typed_str]))
+        });
+
+        let id = wait_for_pending_id();
+        // The approval window shows a typed-data summary.
+        let pending = invoke(&approval, "get_pending_requests", json!({})).unwrap();
+        assert_eq!(pending[0]["summary"], json!("Sign Mail for Ether Mail"));
+        invoke(&approval, "approve_request", json!({ "id": id })).expect("approve ok");
+
+        let sig = signer.join().unwrap().expect("signature returned");
+        let raw = hex::decode(sig.as_str().unwrap().trim_start_matches("0x")).unwrap();
+        assert_eq!(raw.len(), 65, "EIP-712 signature must be 65 bytes");
+
+        // Recover over the EIP-712 digest → must be the unlocked signer (Anvil #0).
+        let digest = eip712::signing_hash(&typed).unwrap();
+        let signature = k256::ecdsa::Signature::from_slice(&raw[..64]).unwrap();
+        let recid = k256::ecdsa::RecoveryId::from_byte(raw[64] - 27).unwrap();
+        let vk = VerifyingKey::recover_from_prehash(&digest, &signature, recid).unwrap();
+        assert_eq!(
+            address_from_verifying_key(&vk).to_lowercase(),
+            SPIKE_ACCOUNT.to_lowercase()
         );
     }
 
