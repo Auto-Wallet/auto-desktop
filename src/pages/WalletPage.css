@@ -179,6 +179,26 @@
   background: var(--bg-soft);
 }
 
+.acct-menu-lock {
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 10px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.acct-menu-lock:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
 .add-row {
   display: flex;
   flex-wrap: wrap;

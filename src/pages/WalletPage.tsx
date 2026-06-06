@@ -8,6 +8,7 @@ import {
   useAccounts,
   useActiveAccount,
 } from "../lib/accounts";
+import { addVaultAccount, lockVault } from "../lib/vault";
 import { useBalances, type BalanceState } from "../lib/useBalances";
 import { useT } from "../lib/i18n";
 
@@ -190,10 +191,32 @@ function AccountMenu({
             {error && <div className="add-error">{error}</div>}
           </div>
         ) : (
-          <button className="acct-menu-add" onClick={() => setAdding(true)}>
-            + {t("wallet.addWatch")}
-          </button>
+          <>
+            <button
+              className="acct-menu-add"
+              onClick={async () => {
+                const addr = await addVaultAccount();
+                setActive(addr);
+                onClose();
+              }}
+            >
+              + {t("wallet.addAccount")}
+            </button>
+            <button className="acct-menu-add" onClick={() => setAdding(true)}>
+              + {t("wallet.addWatch")}
+            </button>
+          </>
         )}
+
+        <button
+          className="acct-menu-lock"
+          onClick={async () => {
+            await lockVault();
+            onClose();
+          }}
+        >
+          🔒 {t("wallet.lock")}
+        </button>
       </div>
     </>
   );

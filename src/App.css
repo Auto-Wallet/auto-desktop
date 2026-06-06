@@ -5,6 +5,29 @@
   background: var(--bg);
 }
 
+/* Boot splash shown while the vault status loads. */
+.boot {
+  height: 100vh;
+  width: 100vw;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+}
+.boot img {
+  animation: boot-pulse 1.1s ease-in-out infinite;
+}
+@keyframes boot-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* ----- Sidebar ----- */
 .sidebar {
   width: 232px;
