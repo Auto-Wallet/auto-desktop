@@ -9,19 +9,20 @@ import LockScreen from "./pages/LockScreen";
 import { faviconOf, type Dapp } from "./lib/dapps";
 import { closeDapp, dappLabel } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
+import { useActiveAccount } from "./lib/accounts";
 import { loadChains } from "./lib/chains";
 import { useT } from "./lib/i18n";
+import { Icon } from "./lib/icons";
+import { setThemePref, useEffectiveTheme } from "./lib/theme";
+import { shortAddress } from "./lib/format";
+import { Avatar, ToastHost } from "./lib/ui";
 
 type Page = "wallet" | "dapps" | "browser" | "settings";
 type Tab = { id: string; dapp: Dapp };
 
-const NAV: { key: "wallet" | "dapps"; i18n: string; icon: string }[] = [
-  { key: "wallet", i18n: "nav.wallet", icon: "👛" },
-  { key: "dapps", i18n: "nav.dapps", icon: "🧩" },
-];
+const SIDEBAR_KEY = "autodesktop.sidebarCollapsed";
 
 function App() {
-  const { t } = useT();
   const vault = useVault();
 
   // Gate the whole app behind the vault: load its status on boot, then show the
@@ -31,25 +32,32 @@ function App() {
   const phaseRef = useRef(vault.phase);
   phaseRef.current = vault.phase;
   useEffect(() => {
-    void loadChains(); // pull the effective chain registry (built-ins + custom)
+    void loadChains();
     void refreshVaultStatus().then(() => {
       if (phaseRef.current === "unlocked") setSessionUnlocked(true);
     });
   }, []);
-  // Locking the wallet (or any drop to a non-unlocked phase) re-closes the gate.
   useEffect(() => {
     if (vault.phase === "locked" || vault.phase === "absent") setSessionUnlocked(false);
   }, [vault.phase]);
 
   const [page, setPage] = useState<Page>("wallet");
+  const [collapsed, setCollapsed] = useState<boolean>(
+    () => localStorage.getItem(SIDEBAR_KEY) === "1",
+  );
+  function toggleSidebar() {
+    setCollapsed((c) => {
+      localStorage.setItem(SIDEBAR_KEY, c ? "0" : "1");
+      return !c;
+    });
+  }
+
   // Every open dApp is a persistent tab (its own native webview); switching tabs
   // just shows/hides them. VISION feature ②③.
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
 
-  // Open (or focus) a tab for a dApp.
   function openTab(dapp: Dapp) {
     setTabs((prev) => (prev.some((t) => t.id === dapp.id) ? prev : [...prev, { id: dapp.id, dapp }]));
     setActiveId(dapp.id);
@@ -57,7 +65,7 @@ function App() {
   }
 
   function closeTab(id: string) {
-    void closeDapp(dappLabel(id)); // destroy the native webview
+    void closeDapp(dappLabel(id));
     const remaining = tabs.filter((t) => t.id !== id);
     setTabs(remaining);
     if (activeId === id) {
@@ -67,7 +75,6 @@ function App() {
     }
   }
 
-  // Boot splash while we read the vault status, then the lock/setup gate.
   if (vault.phase === "loading") {
     return (
       <div className="boot">
@@ -76,56 +83,29 @@ function App() {
     );
   }
   if (!sessionUnlocked) {
-    return <LockScreen onDone={() => setSessionUnlocked(true)} />;
+    return (
+      <>
+        <LockScreen onDone={() => setSessionUnlocked(true)} />
+        <ToastHost />
+      </>
+    );
   }
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="brand-mark" src={mascot} alt="" width={28} height={28} />
-          <span className="brand-name">AutoDesktop</span>
-        </div>
-
-        <nav className="nav">
-          {NAV.map((item) => (
-            <button
-              key={item.key}
-              className={`nav-item${page === item.key ? " active" : ""}`}
-              onClick={() => setPage(item.key)}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              {t(item.i18n)}
-            </button>
-          ))}
-
-          {tabs.length > 0 && (
-            <>
-              <div className="nav-section">{t("nav.opened")}</div>
-              {tabs.map((t) => (
-                <TabItem
-                  key={t.id}
-                  tab={t}
-                  active={page === "browser" && t.id === activeId}
-                  onOpen={() => {
-                    setActiveId(t.id);
-                    setPage("browser");
-                  }}
-                  onClose={() => closeTab(t.id)}
-                />
-              ))}
-            </>
-          )}
-        </nav>
-
-        <button
-          className={`nav-item settings${page === "settings" ? " active" : ""}`}
-          onClick={() => setPage("settings")}
-        >
-          <span className="nav-icon">⚙️</span>
-          {t("nav.settings")}
-        </button>
-      </aside>
+      <Sidebar
+        collapsed={collapsed}
+        onToggle={toggleSidebar}
+        page={page}
+        setPage={setPage}
+        tabs={tabs}
+        activeId={activeId}
+        onOpenTab={(id) => {
+          setActiveId(id);
+          setPage("browser");
+        }}
+        onCloseTab={closeTab}
+      />
 
       <main className="main">
         {page === "wallet" && <WalletPage />}
@@ -135,36 +115,156 @@ function App() {
         )}
         {page === "settings" && <SettingsPage />}
       </main>
+
+      <ToastHost />
     </div>
   );
 }
 
-function TabItem({
-  tab,
-  active,
-  onOpen,
-  onClose,
+function Sidebar({
+  collapsed,
+  onToggle,
+  page,
+  setPage,
+  tabs,
+  activeId,
+  onOpenTab,
+  onCloseTab,
 }: {
-  tab: Tab;
-  active: boolean;
-  onOpen: () => void;
-  onClose: () => void;
+  collapsed: boolean;
+  onToggle: () => void;
+  page: Page;
+  setPage: (p: Page) => void;
+  tabs: Tab[];
+  activeId: string | null;
+  onOpenTab: (id: string) => void;
+  onCloseTab: (id: string) => void;
 }) {
+  const { t } = useT();
+  const account = useActiveAccount();
+  const theme = useEffectiveTheme();
+
+  const nav: { key: "wallet" | "dapps"; i18n: string; icon: "wallet" | "compass" }[] = [
+    { key: "wallet", i18n: "nav.wallet", icon: "wallet" },
+    { key: "dapps", i18n: "nav.explore", icon: "compass" },
+  ];
+
   return (
-    <div className={`nav-item tab${active ? " active" : ""}`} onClick={onOpen}>
-      <img className="tab-favicon" src={faviconOf(tab.dapp.url)} alt="" width={16} height={16} />
-      <span className="tab-name">{tab.dapp.name}</span>
+    <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
+      <div className="side-top">
+        <div className="brand">
+          <img className="brand-mark" src={mascot} alt="" />
+          {!collapsed && (
+            <span className="brand-name">
+              Auto<b>Desktop</b>
+            </span>
+          )}
+        </div>
+        <button
+          className="icon-btn bare"
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={onToggle}
+          style={collapsed ? { alignSelf: "center" } : undefined}
+        >
+          <Icon name="sidebar" size={17} />
+        </button>
+      </div>
+
+      <nav className="nav">
+        {nav.map((item) => (
+          <button
+            key={item.key}
+            className={`nav-item${page === item.key ? " active" : ""}`}
+            title={collapsed ? t(item.i18n) : ""}
+            onClick={() => setPage(item.key)}
+          >
+            <span className="nav-ic">
+              <Icon name={item.icon} size={19} />
+            </span>
+            {!collapsed && <span className="nav-label">{t(item.i18n)}</span>}
+          </button>
+        ))}
+
+        {tabs.length > 0 && (
+          <>
+            {!collapsed ? (
+              <div className="nav-section">{t("nav.opened")}</div>
+            ) : (
+              <div style={{ height: 12 }} />
+            )}
+            {tabs.map((tab) => (
+              <div
+                key={tab.id}
+                className={`nav-item tab-item${page === "browser" && tab.id === activeId ? " active" : ""}`}
+                title={collapsed ? tab.dapp.name : ""}
+                onClick={() => onOpenTab(tab.id)}
+              >
+                <img className="tab-fav" src={faviconOf(tab.dapp.url)} alt="" />
+                {!collapsed && (
+                  <>
+                    <span className="tab-name">{tab.dapp.name}</span>
+                    <button
+                      className="tab-close"
+                      title="Close tab"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCloseTab(tab.id);
+                      }}
+                    >
+                      <Icon name="close" size={13} />
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+      </nav>
+
       <button
-        className="tab-close"
-        title="Close tab"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
+        className={`nav-item${page === "settings" ? " active" : ""}`}
+        title={collapsed ? t("nav.settings") : ""}
+        onClick={() => setPage("settings")}
+        style={{ marginBottom: 8 }}
       >
-        ×
+        <span className="nav-ic">
+          <Icon name="settings" size={19} />
+        </span>
+        {!collapsed && <span className="nav-label">{t("nav.settings")}</span>}
       </button>
-    </div>
+
+      <div className="side-foot">
+        <div className="theme-seg">
+          <button
+            className={theme === "light" ? "on" : ""}
+            title="Light"
+            onClick={() => setThemePref("light")}
+          >
+            <Icon name="sun" size={16} />
+          </button>
+          <button
+            className={theme === "dark" ? "on" : ""}
+            title="Dark"
+            onClick={() => setThemePref("dark")}
+          >
+            <Icon name="moon" size={16} />
+          </button>
+        </div>
+        <button
+          className="acct-foot"
+          onClick={() => setPage("wallet")}
+          title={collapsed ? account.label : ""}
+        >
+          <Avatar address={account.address} size={30} />
+          {!collapsed && (
+            <div className="acct-foot-meta">
+              <div className="acct-foot-name">{account.label}</div>
+              <div className="acct-foot-addr">{shortAddress(account.address, 6, 4)}</div>
+            </div>
+          )}
+        </button>
+      </div>
+    </aside>
   );
 }
 

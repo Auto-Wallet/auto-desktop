@@ -2,6 +2,7 @@ import { useState } from "react";
 import "./LockScreen.css";
 import mascot from "../assets/mascot.png";
 import { useT } from "../lib/i18n";
+import { Icon } from "../lib/icons";
 import {
   connectLedger,
   createVault,
@@ -14,13 +15,12 @@ import {
   type LedgerAccount,
 } from "../lib/vault";
 
-// The wallet's front door (VISION ④⑤ — real key ownership). Shown by App whenever
-// the vault isn't unlocked for this session. Paths:
+// The wallet's front door (VISION ④⑤ — real key ownership), restyled to the
+// Aurora design. Shown by App whenever the vault isn't unlocked for this session:
 //   * absent vault → a first-run chooser: Create HD / Import (phrase|key) / Ledger
 //   * existing vault → Unlock with the password (+ a forgot-password reset escape)
 // Keys never appear here; only addresses, and the mnemonic ONCE on the backup
-// screen for the user to write down (the universal wallet pattern, in the trusted
-// shell — never the dApp boundary).
+// screen for the user to write down.
 
 type Mode = "choose" | "create" | "import" | "ledger" | "backup" | "unlock" | "reset";
 
@@ -28,38 +28,22 @@ export default function LockScreen({ onDone }: { onDone: () => void }) {
   const { t } = useT();
   const vault = useVault();
   const [mode, setMode] = useState<Mode>(vault.phase === "locked" ? "unlock" : "choose");
-  const [mnemonic, setMnemonic] = useState(""); // shown on the backup screen after create
+  const [mnemonic, setMnemonic] = useState("");
 
   return (
     <div className="lock">
+      <span className="lock-aura" />
       <div className="lock-card">
         <div className="lock-brand">
-          <img src={mascot} alt="" width={56} height={56} />
+          <div className="lock-mark-wrap">
+            <span className="ring" />
+            <img className="lock-mark" src={mascot} alt="" />
+          </div>
           <h1>AutoDesktop</h1>
           <p className="lock-tag">{t("lock.tagline")}</p>
         </div>
 
-        {mode === "choose" && (
-          <div className="lock-choose">
-            <div className="lock-choose-title">{t("lock.chooseTitle")}</div>
-            <ChooseOption
-              title={t("lock.optCreate")}
-              desc={t("lock.optCreateDesc")}
-              onClick={() => setMode("create")}
-            />
-            <ChooseOption
-              title={t("lock.optImport")}
-              desc={t("lock.optImportDesc")}
-              onClick={() => setMode("import")}
-            />
-            <ChooseOption
-              title={t("lock.optLedger")}
-              desc={t("lock.optLedgerDesc")}
-              onClick={() => setMode("ledger")}
-            />
-          </div>
-        )}
-
+        {mode === "choose" && <Choose onPick={setMode} />}
         {mode === "create" && (
           <CreateForm
             onBack={() => setMode("choose")}
@@ -69,17 +53,10 @@ export default function LockScreen({ onDone }: { onDone: () => void }) {
             }}
           />
         )}
-
         {mode === "import" && <ImportForm onBack={() => setMode("choose")} onDone={onDone} />}
-
         {mode === "ledger" && <LedgerPanel onBack={() => setMode("choose")} onDone={onDone} />}
-
         {mode === "backup" && <BackupScreen mnemonic={mnemonic} onDone={onDone} />}
-
-        {mode === "unlock" && (
-          <UnlockForm onDone={onDone} onForgot={() => setMode("reset")} />
-        )}
-
+        {mode === "unlock" && <UnlockForm onDone={onDone} onForgot={() => setMode("reset")} />}
         {mode === "reset" && (
           <ResetForm onBack={() => setMode("unlock")} onReset={() => setMode("choose")} />
         )}
@@ -88,38 +65,85 @@ export default function LockScreen({ onDone }: { onDone: () => void }) {
   );
 }
 
-function ChooseOption({
-  title,
-  desc,
-  onClick,
-}: {
-  title: string;
-  desc: string;
-  onClick: () => void;
-}) {
+function Choose({ onPick }: { onPick: (m: Mode) => void }) {
+  const { t } = useT();
+  const opts: { m: Mode; ic: "plus" | "download" | "ledger"; t: string; d: string; coral?: boolean }[] = [
+    { m: "create", ic: "plus", t: t("lock.optCreate"), d: t("lock.optCreateDesc") },
+    { m: "import", ic: "download", t: t("lock.optImport"), d: t("lock.optImportDesc"), coral: true },
+    { m: "ledger", ic: "ledger", t: t("lock.optLedger"), d: t("lock.optLedgerDesc") },
+  ];
   return (
-    <button className="lock-option" onClick={onClick}>
-      <span className="lock-option-text">
-        <span className="lock-option-title">{title}</span>
-        <span className="lock-option-desc">{desc}</span>
-      </span>
-      <span className="lock-option-chevron">›</span>
-    </button>
+    <div className="lock-body">
+      <div className="lock-h">{t("lock.chooseTitle")}</div>
+      {opts.map((o) => (
+        <button key={o.m} className={`opt${o.coral ? " coral" : ""}`} onClick={() => onPick(o.m)}>
+          <span className="opt-ic">
+            <Icon name={o.ic} size={20} />
+          </span>
+          <span className="opt-tx">
+            <span className="opt-t">{o.t}</span>
+            <span className="opt-d">{o.d}</span>
+          </span>
+          <span className="opt-ch">
+            <Icon name="chevronR" size={18} />
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
-function CreateForm({
-  onBack,
-  onCreated,
+function pwScore(pw: string): number {
+  let s = 0;
+  if (pw.length >= 8) s++;
+  if (pw.length >= 12) s++;
+  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) s++;
+  if (/[0-9!@#$%^&*]/.test(pw)) s++;
+  return Math.min(s, 4);
+}
+
+function PasswordField({
+  value,
+  onChange,
+  placeholder,
+  autoFocus,
+  onEnter,
 }: {
-  onBack: () => void;
-  onCreated: (mnemonic: string) => void;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  autoFocus?: boolean;
+  onEnter?: () => void;
 }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="lock-input-wrap">
+      <input
+        className="input"
+        type={show ? "text" : "password"}
+        value={value}
+        autoFocus={autoFocus}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && onEnter) onEnter();
+        }}
+        style={{ paddingRight: 44 }}
+      />
+      <button className="reveal" type="button" tabIndex={-1} onClick={() => setShow((s) => !s)}>
+        <Icon name={show ? "eyeOff" : "eye"} size={17} />
+      </button>
+    </div>
+  );
+}
+
+function CreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: (m: string) => void }) {
   const { t } = useT();
   const [pw, setPw] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const score = pwScore(pw);
 
   async function submit() {
     if (pw.length < 8) return setError(t("lock.errShort"));
@@ -127,8 +151,8 @@ function CreateForm({
     setBusy(true);
     setError(null);
     try {
-      const mnemonic = await createVault(pw);
-      onCreated(mnemonic);
+      const m = await createVault(pw);
+      onCreated(m);
     } catch (e) {
       setError(errText(e));
       setBusy(false);
@@ -136,38 +160,53 @@ function CreateForm({
   }
 
   return (
-    <div className="lock-form">
-      <label className="lock-label">{t("lock.newPassword")}</label>
-      <input
-        className="lock-input"
-        type="password"
-        autoFocus
-        value={pw}
-        onChange={(e) => setPw(e.target.value)}
-        placeholder={t("lock.min8")}
-      />
-      <input
-        className="lock-input"
-        type="password"
-        value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && submit()}
-        placeholder={t("lock.confirm")}
-      />
-      {error && <div className="lock-error">{error}</div>}
-      <button className="lock-primary" disabled={busy} onClick={submit}>
-        {busy ? "…" : t("lock.create")}
+    <div className="lock-body">
+      <div className="lock-h">{t("lock.create")}</div>
+      <div className="field">
+        <label className="field-label">{t("lock.newPassword")}</label>
+        <PasswordField
+          value={pw}
+          onChange={(v) => {
+            setPw(v);
+            setError(null);
+          }}
+          placeholder={t("lock.min8")}
+          autoFocus
+        />
+        <div className={`pw-strength s${score}`}>
+          <i />
+          <i />
+          <i />
+          <i />
+        </div>
+      </div>
+      <div className="field">
+        <label className="field-label">{t("lock.confirm")}</label>
+        <PasswordField
+          value={confirm}
+          onChange={(v) => {
+            setConfirm(v);
+            setError(null);
+          }}
+          placeholder={t("lock.confirm")}
+          onEnter={submit}
+        />
+      </div>
+      {error && (
+        <div className="lock-err">
+          <Icon name="alert" size={16} /> {error}
+        </div>
+      )}
+      <button className="btn btn-aurora btn-lg btn-block" disabled={busy} onClick={submit}>
+        {busy ? "…" : t("lock.continue")}
       </button>
-      <button className="lock-link" onClick={onBack}>
-        ‹ {t("lock.back")}
+      <button className="lock-link lock-back" onClick={onBack}>
+        <Icon name="chevronL" size={14} /> {t("lock.back")}
       </button>
     </div>
   );
 }
 
-// Import an existing wallet — either a BIP-39 recovery phrase or a single raw
-// private key, chosen by the tab toggle. The private-key path yields a one-account
-// wallet (no HD derivation), matching the backend.
 function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
   const { t } = useT();
   const [tab, setTab] = useState<"phrase" | "privkey">("phrase");
@@ -201,77 +240,77 @@ function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
   }
 
   return (
-    <div className="lock-form">
-      <div className="lock-tabs">
-        <button
-          className={`lock-tab${tab === "phrase" ? " active" : ""}`}
-          onClick={() => setTab("phrase")}
-        >
+    <div className="lock-body">
+      <div className="lock-h">{t("lock.optImport")}</div>
+      <div className="seg lock-seg">
+        <button className={tab === "phrase" ? "on" : ""} onClick={() => setTab("phrase")}>
           {t("lock.importTab.phrase")}
         </button>
-        <button
-          className={`lock-tab${tab === "privkey" ? " active" : ""}`}
-          onClick={() => setTab("privkey")}
-        >
+        <button className={tab === "privkey" ? "on" : ""} onClick={() => setTab("privkey")}>
           {t("lock.importTab.privkey")}
         </button>
       </div>
 
       {tab === "phrase" ? (
-        <>
-          <label className="lock-label">{t("lock.recoveryPhrase")}</label>
+        <div className="field">
+          <label className="field-label">{t("lock.recoveryPhrase")}</label>
           <textarea
-            className="lock-textarea"
+            className="textarea mono"
             autoFocus
             rows={3}
             value={phrase}
-            onChange={(e) => setPhrase(e.target.value)}
+            onChange={(e) => {
+              setPhrase(e.target.value);
+              setError(null);
+            }}
             placeholder={t("lock.phrasePlaceholder")}
           />
-        </>
+        </div>
       ) : (
-        <>
-          <label className="lock-label">{t("lock.privateKey")}</label>
+        <div className="field">
+          <label className="field-label">{t("lock.privateKey")}</label>
           <textarea
-            className="lock-textarea"
+            className="textarea mono"
             autoFocus
             rows={2}
             value={privkey}
-            onChange={(e) => setPrivkey(e.target.value)}
+            onChange={(e) => {
+              setPrivkey(e.target.value);
+              setError(null);
+            }}
             placeholder={t("lock.privkeyPlaceholder")}
           />
-        </>
+        </div>
       )}
 
-      <input
-        className="lock-input"
-        type="password"
-        value={pw}
-        onChange={(e) => setPw(e.target.value)}
-        placeholder={t("lock.newPassword")}
-      />
-      <input
-        className="lock-input"
-        type="password"
-        value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && submit()}
-        placeholder={t("lock.confirm")}
-      />
-      {error && <div className="lock-error">{error}</div>}
-      <button className="lock-primary" disabled={busy} onClick={submit}>
+      <div className="field">
+        <label className="field-label">{t("lock.newPassword")}</label>
+        <PasswordField value={pw} onChange={(v) => { setPw(v); setError(null); }} placeholder={t("lock.min8")} />
+      </div>
+      <div className="field">
+        <label className="field-label">{t("lock.confirm")}</label>
+        <PasswordField
+          value={confirm}
+          onChange={(v) => { setConfirm(v); setError(null); }}
+          placeholder={t("lock.confirm")}
+          onEnter={submit}
+        />
+      </div>
+      {error && (
+        <div className="lock-err">
+          <Icon name="alert" size={16} /> {error}
+        </div>
+      )}
+      <button className="btn btn-aurora btn-lg btn-block" disabled={busy} onClick={submit}>
         {busy ? "…" : tab === "phrase" ? t("lock.import") : t("lock.importPrivkey")}
       </button>
-      <button className="lock-link" onClick={onBack}>
-        ‹ {t("lock.back")}
+      <button className="lock-link lock-back" onClick={onBack}>
+        <Icon name="chevronL" size={14} /> {t("lock.back")}
       </button>
     </div>
   );
 }
 
-// Connect a Ledger hardware wallet (no app password — the device PIN protects it).
-// Scans the device over USB-HID for accounts, the user picks one, and it becomes
-// the wallet. Signing later happens on the device itself.
 function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
   const { t } = useT();
   type Step = "intro" | "scanning" | "pick" | "connecting";
@@ -306,8 +345,16 @@ function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => voi
   }
 
   return (
-    <div className="lock-form">
-      <div className="lock-info-title">{t("lock.ledgerTitle")}</div>
+    <div className="lock-body">
+      <div className="lock-h">{t("lock.ledgerTitle")}</div>
+      <div className="ledger-art">
+        <div className="ledger-dev">
+          <div className="scr">
+            <i />
+          </div>
+          <div className="btn1" />
+        </div>
+      </div>
 
       {step === "pick" ? (
         <ul className="ledger-list">
@@ -316,7 +363,7 @@ function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => voi
               <button className="ledger-acct" onClick={() => pick(a)}>
                 <span className="ledger-idx">#{a.index}</span>
                 <span className="ledger-addr">{shortAddr(a.address)}</span>
-                <span className="lock-option-chevron">›</span>
+                <Icon name="chevronR" size={16} />
               </button>
             </li>
           ))}
@@ -331,46 +378,63 @@ function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => voi
         </div>
       )}
 
-      {error && <div className="lock-error">{error}</div>}
+      {error && (
+        <div className="lock-err">
+          <Icon name="alert" size={16} /> {error}
+        </div>
+      )}
 
       {(step === "intro" || step === "scanning") && (
-        <button className="lock-primary" disabled={step === "scanning"} onClick={scan}>
+        <button className="btn btn-aurora btn-lg btn-block" disabled={step === "scanning"} onClick={scan}>
           {step === "scanning" ? "…" : error ? t("lock.retry") : t("lock.ledgerScan")}
         </button>
       )}
 
-      <button className="lock-link" onClick={onBack}>
-        ‹ {t("lock.back")}
+      <button className="lock-link lock-back" onClick={onBack}>
+        <Icon name="chevronL" size={14} /> {t("lock.back")}
       </button>
     </div>
   );
 }
 
 function shortAddr(a: string): string {
-  return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
+  return a.length > 12 ? `${a.slice(0, 8)}…${a.slice(-6)}` : a;
 }
 
 function BackupScreen({ mnemonic, onDone }: { mnemonic: string; onDone: () => void }) {
   const { t } = useT();
+  const [revealed, setRevealed] = useState(false);
   const [acked, setAcked] = useState(false);
   const words = mnemonic.trim().split(/\s+/);
 
   return (
-    <div className="lock-form">
-      <div className="lock-warn">{t("lock.backupWarn")}</div>
-      <ol className="mnemonic-grid">
-        {words.map((w, i) => (
-          <li key={i} className="mnemonic-word">
-            <span className="mnemonic-idx">{i + 1}</span>
-            {w}
-          </li>
-        ))}
-      </ol>
+    <div className="lock-body">
+      <div className="lock-h">{t("lock.recoveryPhrase")}</div>
+      <div className="warn-box">
+        <Icon name="alert" size={16} /> {t("lock.backupWarn")}
+      </div>
+      <div style={{ position: "relative" }}>
+        <ol className={`mnemonic${revealed ? "" : " blurred"}`}>
+          {words.map((w, i) => (
+            <li key={i}>
+              <span className="n">{i + 1}</span>
+              {w}
+            </li>
+          ))}
+        </ol>
+        {!revealed && (
+          <div className="reveal-mnemonic" onClick={() => setRevealed(true)}>
+            <span className="pill">
+              <Icon name="eye" size={15} /> {t("lock.tapReveal")}
+            </span>
+          </div>
+        )}
+      </div>
       <label className="lock-check">
         <input type="checkbox" checked={acked} onChange={(e) => setAcked(e.target.checked)} />
         {t("lock.backupAck")}
       </label>
-      <button className="lock-primary" disabled={!acked} onClick={onDone}>
+      <button className="btn btn-aurora btn-lg btn-block" disabled={!acked} onClick={onDone}>
         {t("lock.continue")}
       </button>
     </div>
@@ -396,20 +460,18 @@ function UnlockForm({ onDone, onForgot }: { onDone: () => void; onForgot: () => 
   }
 
   return (
-    <div className="lock-form">
-      <label className="lock-label">{t("lock.password")}</label>
-      <input
-        className="lock-input"
-        type="password"
-        autoFocus
-        value={pw}
-        onChange={(e) => setPw(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && submit()}
-        placeholder={t("lock.password")}
-      />
-      {error && <div className="lock-error">{error}</div>}
-      <button className="lock-primary" disabled={busy} onClick={submit}>
-        {busy ? "…" : t("lock.unlock")}
+    <div className="lock-body">
+      <div className="field">
+        <label className="field-label">{t("lock.password")}</label>
+        <PasswordField value={pw} onChange={(v) => { setPw(v); setError(null); }} placeholder={t("lock.password")} autoFocus onEnter={submit} />
+      </div>
+      {error && (
+        <div className="lock-err">
+          <Icon name="alert" size={16} /> {error}
+        </div>
+      )}
+      <button className="btn btn-aurora btn-lg btn-block" disabled={busy} onClick={submit}>
+        <Icon name="unlock" size={18} /> {busy ? "…" : t("lock.unlock")}
       </button>
       <button className="lock-link" onClick={onForgot}>
         {t("lock.forgot")}
@@ -418,9 +480,6 @@ function UnlockForm({ onDone, onForgot }: { onDone: () => void; onForgot: () => 
   );
 }
 
-// Forgot-password escape hatch. Deleting the keystore is IRREVERSIBLE — gated
-// behind an explicit, clearly-worded acknowledgement. Recovery is ONLY via the
-// user's own mnemonic/key backup (AutoDesktop keeps no copy).
 function ResetForm({ onBack, onReset }: { onBack: () => void; onReset: () => void }) {
   const { t } = useT();
   const [acked, setAcked] = useState(false);
@@ -440,19 +499,25 @@ function ResetForm({ onBack, onReset }: { onBack: () => void; onReset: () => voi
   }
 
   return (
-    <div className="lock-form">
-      <div className="lock-info-title">{t("lock.resetTitle")}</div>
-      <div className="lock-warn lock-warn-danger">{t("lock.resetWarn")}</div>
+    <div className="lock-body">
+      <div className="lock-h">{t("lock.resetTitle")}</div>
+      <div className="warn-box danger">
+        <Icon name="alert" size={16} /> {t("lock.resetWarn")}
+      </div>
       <label className="lock-check">
         <input type="checkbox" checked={acked} onChange={(e) => setAcked(e.target.checked)} />
         {t("lock.resetAck")}
       </label>
-      {error && <div className="lock-error">{error}</div>}
-      <button className="lock-danger" disabled={!acked || busy} onClick={submit}>
-        {busy ? "…" : t("lock.resetConfirm")}
+      {error && (
+        <div className="lock-err">
+          <Icon name="alert" size={16} /> {error}
+        </div>
+      )}
+      <button className="btn btn-danger btn-lg btn-block" disabled={!acked || busy} onClick={submit}>
+        <Icon name="trash" size={17} /> {busy ? "…" : t("lock.resetConfirm")}
       </button>
-      <button className="lock-link" onClick={onBack}>
-        ‹ {t("lock.back")}
+      <button className="lock-link lock-back" onClick={onBack}>
+        <Icon name="chevronL" size={14} /> {t("lock.back")}
       </button>
     </div>
   );

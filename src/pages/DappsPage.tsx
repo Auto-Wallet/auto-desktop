@@ -11,26 +11,27 @@ import {
   type Dapp,
 } from "../lib/dapps";
 import { useT } from "../lib/i18n";
+import { Icon } from "../lib/icons";
+import { toast } from "../lib/toast";
 
+// dApps page (VISION ②) — Aurora: search + add, a Pinned section, the grid, and
+// per-card pin / remove / double-click rename. Real store (localStorage).
 export default function DappsPage({ onOpen }: { onOpen?: (dapp: Dapp) => void }) {
   const { t } = useT();
   const dapps = useDapps();
   const [query, setQuery] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
 
-  const visible = useMemo(() => {
+  const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const filtered = q
-      ? dapps.filter(
-          (d) => d.name.toLowerCase().includes(q) || hostOf(d.url).includes(q),
-        )
+    return q
+      ? dapps.filter((d) => d.name.toLowerCase().includes(q) || hostOf(d.url).includes(q))
       : dapps;
-    // Pinned first, then alphabetical.
-    return [...filtered].sort((a, b) => {
-      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
   }, [dapps, query]);
+
+  const pinned = filtered.filter((d) => d.pinned).sort((a, b) => a.name.localeCompare(b.name));
+  const rest = filtered.filter((d) => !d.pinned).sort((a, b) => a.name.localeCompare(b.name));
+  const looksLikeUrl = /\.[a-z]{2,}/i.test(query) && filtered.length === 0;
 
   function submitAdd() {
     const value = query.trim();
@@ -39,21 +40,20 @@ export default function DappsPage({ onOpen }: { onOpen?: (dapp: Dapp) => void })
       addDapp(value);
       setQuery("");
       setAddError(null);
+      toast(t("dapps.added"));
     } catch (e) {
       setAddError(e instanceof Error ? e.message : String(e));
     }
   }
 
-  const looksLikeUrl = /\.[a-z]{2,}/i.test(query) && !visible.length;
-
   return (
-    <div className="dapps">
-      <header className="dapps-head">
-        <h1>{t("dapps.title")}</h1>
-        <div className="search-wrap">
-          <span className="search-icon">⌕</span>
+    <>
+      <div className="topbar">
+        <div className="topbar-title">{t("dapps.exploreTitle")}</div>
+        <div className="grow" />
+        <div className="dapps-search">
+          <Icon name="search" size={18} />
           <input
-            className="search"
             placeholder={t("dapps.search")}
             value={query}
             onChange={(e) => {
@@ -65,31 +65,59 @@ export default function DappsPage({ onOpen }: { onOpen?: (dapp: Dapp) => void })
             }}
           />
           {looksLikeUrl && (
-            <button className="search-add" onClick={submitAdd}>
-              + {t("dapps.add")}
+            <button className="btn btn-primary btn-sm" onClick={submitAdd}>
+              {t("dapps.add")}
             </button>
           )}
         </div>
-      </header>
+      </div>
 
       {addError && <div className="dapps-error">{addError}</div>}
 
-      {visible.length === 0 ? (
-        <div className="dapps-empty">
-          {query ? (
-            <>No matches. Press <b>{t("dapps.add")}</b> to save “{query}”.</>
+      <div className="page scroll">
+        <div className="dapps-pad">
+          {pinned.length > 0 && (
+            <>
+              <div className="dapp-section-label">
+                <Icon name="star" size={13} fill="currentColor" /> {t("dapps.pinned")}
+              </div>
+              <div className="dapp-grid">
+                {pinned.map((d) => (
+                  <DappCard key={d.id} dapp={d} onOpen={onOpen} />
+                ))}
+              </div>
+            </>
+          )}
+
+          <div className="dapp-section-label">
+            <Icon name="apps" size={13} /> {pinned.length ? t("dapps.all") : t("dapps.yours")}
+          </div>
+          {rest.length === 0 && pinned.length === 0 ? (
+            <div className="empty">
+              {query ? (
+                <>
+                  No matches. Press <b>{t("dapps.add")}</b> to save “{query}”.
+                </>
+              ) : (
+                t("dapps.empty")
+              )}
+            </div>
           ) : (
-            t("dapps.empty")
+            <div className="dapp-grid">
+              {rest.map((d) => (
+                <DappCard key={d.id} dapp={d} onOpen={onOpen} />
+              ))}
+              <button className="dapp-card dapp-add-card" onClick={() => toast(t("dapps.addHint"), "info")}>
+                <Icon name="plus" size={26} />
+                <div className="dapp-name" style={{ color: "inherit", marginTop: 4 }}>
+                  {t("dapps.addCard")}
+                </div>
+              </button>
+            </div>
           )}
         </div>
-      ) : (
-        <div className="dapp-grid">
-          {visible.map((d) => (
-            <DappCard key={d.id} dapp={d} onOpen={onOpen} />
-          ))}
-        </div>
-      )}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -104,26 +132,26 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
 
   return (
     <div className="dapp-card" onClick={() => !editing && onOpen?.(dapp)}>
-      <div className="card-top">
+      <div className="dapp-top">
         <button
-          className={`pin${dapp.pinned ? " on" : ""}`}
+          className={`dapp-icobtn${dapp.pinned ? " pinned" : ""}`}
           title={dapp.pinned ? "Unpin" : "Pin"}
           onClick={(e) => {
             e.stopPropagation();
             togglePin(dapp.id);
           }}
         >
-          {dapp.pinned ? "★" : "☆"}
+          <Icon name="star" size={16} fill={dapp.pinned ? "currentColor" : "none"} />
         </button>
         <button
-          className="remove"
+          className="dapp-icobtn rm"
           title="Remove"
           onClick={(e) => {
             e.stopPropagation();
             removeDapp(dapp.id);
           }}
         >
-          ×
+          <Icon name="close" size={15} />
         </button>
       </div>
 
@@ -132,7 +160,7 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
       {editing ? (
         <input
           autoFocus
-          className="name-edit"
+          className="dapp-name-edit"
           value={name}
           onClick={(e) => e.stopPropagation()}
           onChange={(e) => setName(e.target.value)}
@@ -145,7 +173,7 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
       ) : (
         <div
           className="dapp-name"
-          title="Double-click to rename"
+          title={dapp.name}
           onDoubleClick={(e) => {
             e.stopPropagation();
             setName(dapp.name);
@@ -163,17 +191,13 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
 function Favicon({ dapp }: { dapp: Dapp }) {
   const [failed, setFailed] = useState(false);
   if (failed) {
-    return (
-      <div className="dapp-logo fallback">{dapp.name.charAt(0).toUpperCase()}</div>
-    );
+    return <div className="dapp-logo fb">{dapp.name.charAt(0).toUpperCase()}</div>;
   }
   return (
     <img
       className="dapp-logo"
       src={faviconOf(dapp.url)}
       alt=""
-      width={44}
-      height={44}
       onError={() => setFailed(true)}
     />
   );

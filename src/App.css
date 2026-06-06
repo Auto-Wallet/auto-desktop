@@ -1,8 +1,14 @@
+/* ============================================================
+   App shell — window layout, collapsible sidebar, nav, footer.
+   (The OS draws the title bar / traffic lights; we fill its content area.)
+   ============================================================ */
+
 .app {
   display: flex;
   height: 100vh;
   width: 100vw;
   background: var(--bg);
+  overflow: hidden;
 }
 
 /* Boot splash shown while the vault status loads. */
@@ -28,36 +34,73 @@
   }
 }
 
-/* ----- Sidebar ----- */
+/* ---- Sidebar ---- */
 .sidebar {
-  width: 232px;
-  min-width: 232px;
+  width: 240px;
+  min-width: 240px;
   height: 100%;
-  background: var(--bg-elevated);
-  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  padding: 14px 12px;
-  gap: 4px;
+  padding: 12px 12px 12px;
+  transition: width 0.26s cubic-bezier(0.4, 0, 0.2, 1),
+    min-width 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sidebar.collapsed {
+  width: 72px;
+  min-width: 72px;
 }
 
+.side-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 0;
+}
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px 16px;
+  padding: 4px 6px 14px;
+  min-width: 0;
+  flex: 1;
 }
-
 .brand-mark {
-  display: block;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  flex: none;
+  box-shadow: var(--sh-sm), inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+  object-fit: cover;
 }
-
 .brand-name {
+  font-family: var(--font-display);
   font-weight: 700;
-  font-size: 16px;
+  font-size: 17px;
   letter-spacing: -0.02em;
   color: var(--ink);
+  white-space: nowrap;
+}
+.brand-name b {
+  color: var(--brand-ink);
+  font-weight: 700;
+}
+.sidebar.collapsed .brand-name,
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .nav-section,
+.sidebar.collapsed .tab-name,
+.sidebar.collapsed .tab-close,
+.sidebar.collapsed .acct-foot-meta {
+  display: none;
+}
+.sidebar.collapsed .side-top {
+  flex-direction: column;
+  align-items: stretch;
+}
+.sidebar.collapsed .brand {
+  justify-content: center;
+  padding: 4px 0 10px;
 }
 
 .nav {
@@ -65,67 +108,88 @@
   flex-direction: column;
   gap: 2px;
   flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
-
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 11px;
   width: 100%;
-  padding: 10px 11px;
+  padding: 9px 11px;
   border: none;
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--ink-2);
   font: inherit;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   text-align: left;
+  white-space: nowrap;
+  transition: background 0.13s, color 0.13s;
 }
-
 .nav-item:hover {
-  background: var(--bg-soft);
+  background: var(--surface-2);
   color: var(--ink);
 }
-
 .nav-item.active {
-  background: var(--indigo-soft);
-  color: var(--indigo);
-  font-weight: 600;
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--brand);
+}
+.nav-ic {
+  width: 19px;
+  height: 19px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 9px 0;
 }
 
-.nav-icon {
-  width: 18px;
-  text-align: center;
-  font-size: 15px;
-}
-
-/* ----- Opened dApps section ----- */
 .nav-section {
-  font-size: 10px;
-  letter-spacing: 0.09em;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
   font-weight: 700;
   color: var(--ink-4);
-  padding: 16px 10px 6px;
+  padding: 16px 11px 6px;
+  text-transform: uppercase;
 }
 
-.nav-item.tab {
+/* opened dApp tabs */
+.tab-item {
   gap: 9px;
-  padding: 8px 10px;
-  font-size: 13.5px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 600;
 }
-.tab-favicon {
-  border-radius: 4px;
+.tab-fav {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
   flex: none;
-  background: var(--bg-soft);
+  background: var(--surface-3);
+  object-fit: cover;
 }
 .tab-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .tab-close {
   flex: none;
@@ -135,37 +199,101 @@
   background: transparent;
   border-radius: 5px;
   color: var(--ink-4);
-  font-size: 15px;
-  line-height: 1;
   cursor: pointer;
   opacity: 0;
+  display: grid;
+  place-items: center;
 }
-.nav-item.tab:hover .tab-close {
+.tab-item:hover .tab-close {
   opacity: 1;
 }
 .tab-close:hover {
-  background: var(--border-mid);
+  background: var(--line-3);
   color: var(--ink);
 }
 
-.settings {
-  margin-top: auto;
+/* sidebar footer */
+.side-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.theme-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+}
+.sidebar.collapsed .theme-seg {
+  flex-direction: column;
+}
+.theme-seg button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--r-pill);
+  padding: 6px;
+  color: var(--ink-3);
+  display: grid;
+  place-items: center;
+}
+.theme-seg button.on {
+  background: var(--surface);
+  color: var(--brand-ink);
+  box-shadow: var(--sh-sm);
 }
 
-/* ----- Main ----- */
+.acct-foot {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.acct-foot:hover {
+  border-color: var(--line-3);
+}
+.sidebar.collapsed .acct-foot {
+  justify-content: center;
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+}
+.acct-foot-meta {
+  flex: 1;
+  min-width: 0;
+}
+.acct-foot-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-foot-addr {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* ---- Main ---- */
 .main {
   flex: 1;
   min-width: 0;
   height: 100%;
-  overflow: auto;
-}
-
-.placeholder {
-  padding: 40px;
-  color: var(--ink-3);
-}
-.placeholder h1 {
-  margin: 0 0 8px;
-  font-size: 22px;
-  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
 }

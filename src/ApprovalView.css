@@ -1,137 +1,223 @@
+/* ===================== APPROVAL WINDOW (Aurora) =====================
+   This IS its own OS window (index.html?view=approval, ~420×600), so it fills
+   the window rather than floating over a backdrop. Structured, trustworthy
+   display of the real pending request. */
+
 .approval {
-  display: flex;
-  flex-direction: column;
   height: 100vh;
   width: 100vw;
-  padding: 18px;
-  gap: 14px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  color: var(--ink);
+  overflow: hidden;
+}
+
+.approval.idle {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: var(--ink-3);
+}
+.approval.idle .idle-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+  margin: 0 auto 12px;
+}
+.approval.idle p {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .approval-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.approval-kind {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-.approval-queue {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.approval-origin {
-  display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text);
-  padding: 9px 12px;
-  background: var(--bg-soft);
-  border: 1px solid var(--border-mid);
-  border-radius: 8px;
-  font-family: var(--font-mono);
-  word-break: break-all;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  min-height: 40px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-3);
+  position: relative;
 }
-
-.approval-origin .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--success);
-  flex: none;
+.approval-queue {
+  position: absolute;
+  right: 14px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-3);
+  background: var(--surface-3);
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
 }
 
 .approval-body {
   flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-height: 0;
+  gap: 14px;
 }
 
-.field-label {
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
+.apv-kind {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+}
+.apv-kind .kic {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+.apv-kind .kic.coral {
+  background: var(--coral-soft);
+  color: var(--coral-2);
+}
+.apv-kind h2 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 6px 0 0;
+}
+.apv-kind .sub {
+  font-size: 12.5px;
+  color: var(--ink-3);
 }
 
-.approval-message {
+.apv-origin {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.apv-origin .of {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--ink-2);
+}
+.apv-origin .od {
   flex: 1;
-  margin: 0;
-  padding: 12px;
-  background: var(--bg-soft);
-  border: 1px solid var(--border-mid);
-  border-radius: 8px;
+  min-width: 0;
+}
+.apv-origin .oh {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apv-origin .os {
+  font-size: 11.5px;
+  color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apv-msg {
+  margin: 0;
+  padding: 13px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink);
   white-space: pre-wrap;
   word-break: break-word;
+  max-height: 220px;
   overflow: auto;
 }
 
-.approval-note {
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.4;
-}
-
-.approval-actions {
+.apv-signer {
   display: flex;
-  gap: 10px;
-}
-
-.btn {
-  flex: 1;
-  height: 42px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.btn.reject {
-  background: transparent;
-  color: var(--text);
-}
-
-.btn.reject:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.btn.approve {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.btn.approve:hover:not(:disabled) {
-  filter: brightness(1.08);
-}
-
-/* Idle state */
-.approval.idle {
   align-items: center;
-  justify-content: center;
   gap: 10px;
-  color: var(--muted);
+  padding: 10px 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.apv-signer .sl {
+  font-size: 11px;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+.apv-signer .sn {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  font-family: var(--font-mono);
 }
 
-.approval.idle .idle-mark {
-  font-size: 28px;
-  color: var(--border);
+.apv-warn {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+.apv-warn svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+.ledger-confirm {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  justify-content: center;
+  padding: 11px;
+  background: var(--brand-soft);
+  border-radius: var(--r-md);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--brand-ink);
+}
+.ledger-confirm svg {
+  animation: pulseGlow 1.4s ease-in-out infinite;
+}
+
+.approval-foot {
+  display: flex;
+  gap: 11px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.approval-foot .btn {
+  flex: 1;
+}
+.approval-foot .btn.grow {
+  flex: 1.4;
 }

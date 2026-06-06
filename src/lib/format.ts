@@ -25,3 +25,25 @@ export function formatUnits(value: string, decimals = 18, maxFrac = 4): string {
 export function isAddress(s: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(s.trim());
 }
+
+/** USD amount, e.g. `$1,234.56` (or `+$12.30` / `−$4.00` with sign). */
+export function fmtUsd(n: number, opts: { sign?: boolean; dp?: number } = {}): string {
+  const { sign = false, dp = 2 } = opts;
+  const abs = Math.abs(n);
+  const s = abs.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  const pre = (sign && n > 0 ? "+" : n < 0 ? "−" : "") + "$";
+  return pre + s;
+}
+
+/** Signed percent, e.g. `+2.40%` / `−1.10%`. */
+export function fmtPct(n: number): string {
+  return `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toFixed(2)}%`;
+}
+
+/** wei (hex/decimal string) -> USD number, using a price per whole token. */
+export function weiToUsd(value: string, decimals: number, priceUsd: number): number {
+  const wei = value.startsWith("0x") ? BigInt(value) : BigInt(value || "0");
+  // Keep 6 fractional digits of token amount before multiplying by price.
+  const scaled = (wei * 1_000_000n) / 10n ** BigInt(decimals);
+  return (Number(scaled) / 1_000_000) * priceUsd;
+}

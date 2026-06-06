@@ -1,6 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "./theme.css";
+import "./components.css";
+import "./lib/theme"; // applies the saved light/dark/system theme before first paint
 import App from "./App";
 import ApprovalView from "./ApprovalView";
 

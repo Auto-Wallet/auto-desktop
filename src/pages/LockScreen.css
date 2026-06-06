@@ -1,22 +1,32 @@
-/* The wallet lock / setup / backup screen — full-window, on-brand. */
+/* ===================== LOCK / ONBOARDING (Aurora) ===================== */
 .lock {
   position: fixed;
   inset: 0;
+  z-index: 50;
   display: grid;
   place-items: center;
   padding: 24px;
-  background: radial-gradient(120% 120% at 50% 0%, #eef0ff 0%, var(--bg) 55%);
-  z-index: 50;
+  overflow: auto;
+  background: radial-gradient(120% 90% at 15% 0%, var(--wallpaper-a) 0%, transparent 52%),
+    radial-gradient(120% 100% at 100% 100%, var(--wallpaper-b) 0%, transparent 48%), var(--bg);
 }
-
+.lock-aura {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background: radial-gradient(40% 30% at 50% 22%, var(--brand-soft-2), transparent 70%);
+}
 .lock-card {
+  position: relative;
   width: 100%;
-  max-width: 380px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-lg);
-  padding: 28px 26px 24px;
+  max-width: 392px;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-xl);
+  padding: 30px 28px 26px;
+  animation: fadeUp 0.3s ease;
 }
 
 .lock-brand {
@@ -24,120 +34,343 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 4px;
+  gap: 3px;
   margin-bottom: 22px;
 }
+.lock-mark-wrap {
+  position: relative;
+}
+.lock-mark-wrap .ring {
+  position: absolute;
+  inset: -7px;
+  border-radius: 24px;
+  background: var(--aurora);
+  opacity: 0.22;
+  filter: blur(8px);
+}
+.lock-mark {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  box-shadow: var(--sh-md);
+}
 .lock-brand h1 {
-  font-size: 20px;
+  font-family: var(--font-display);
+  font-size: 22px;
   font-weight: 700;
-  margin: 6px 0 0;
+  margin: 12px 0 0;
   color: var(--ink);
+  letter-spacing: -0.02em;
 }
 .lock-tag {
-  font-size: 13px;
-  color: var(--muted);
+  font-size: 13.5px;
+  color: var(--ink-3);
   margin: 0;
 }
 
-.lock-choose,
-.lock-form {
+.lock-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 13px;
 }
-
-/* First-run chooser */
-.lock-choose-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
-  text-align: center;
-  margin-bottom: 2px;
-}
-.lock-option {
-  appearance: none;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  text-align: left;
-  border: 1px solid var(--border-mid);
-  border-radius: var(--r-md);
-  background: var(--bg);
-  padding: 13px 15px;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-.lock-option:hover {
-  border-color: var(--indigo);
-  background: var(--indigo-soft, #eef0ff);
-}
-.lock-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
-}
-.lock-option-title {
-  font-size: 14.5px;
-  font-weight: 600;
-  color: var(--ink);
-}
-.lock-option-desc {
-  font-size: 12px;
-  color: var(--muted);
-}
-.lock-option-chevron {
-  font-size: 20px;
-  color: var(--muted);
-  flex: none;
-}
-
-/* Import: phrase ↔ private key toggle */
-.lock-tabs {
-  display: inline-flex;
-  align-self: center;
-  padding: 3px;
-  gap: 3px;
-  background: var(--bg-soft);
-  border: 1px solid var(--border-mid);
-  border-radius: var(--r-pill);
-}
-.lock-tab {
-  appearance: none;
-  border: none;
-  background: transparent;
-  border-radius: var(--r-pill);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-2, var(--muted));
-  padding: 6px 16px;
-  cursor: pointer;
-}
-.lock-tab.active {
-  background: var(--bg-elevated);
-  color: var(--indigo);
-  box-shadow: var(--shadow-sm);
-}
-
-/* Info panel (Ledger placeholder / reset title) */
-.lock-info-title {
-  font-size: 15px;
+.lock-h {
+  font-family: var(--font-display);
+  font-size: 17px;
   font-weight: 700;
   color: var(--ink);
   text-align: center;
 }
-.lock-info {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--muted);
-  background: var(--bg-soft);
-  border: 1px solid var(--border-mid);
+
+/* chooser options */
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  width: 100%;
+  border: 1px solid var(--line-2);
   border-radius: var(--r-md);
-  padding: 12px 14px;
+  background: var(--surface);
+  padding: 15px 16px;
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.14s, background 0.14s, transform 0.1s;
+}
+.opt:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  transform: translateY(-1px);
+}
+.opt-ic {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+.opt.coral .opt-ic {
+  background: var(--coral-soft);
+  color: var(--coral-2);
+}
+.opt-tx {
+  flex: 1;
+  min-width: 0;
+}
+.opt-t {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.opt-d {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+.opt-ch {
+  color: var(--ink-4);
+  flex: none;
 }
 
-/* Ledger account picker */
+/* password field with reveal */
+.lock-input-wrap {
+  position: relative;
+}
+.lock-input-wrap .reveal {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+}
+.lock-input-wrap .reveal:hover {
+  background: var(--surface-2);
+}
+
+.lock-err {
+  font-size: 13px;
+  color: var(--down);
+  background: var(--down-soft);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lock-info {
+  font-size: 13px;
+  color: var(--ink-3);
+  text-align: center;
+  line-height: 1.55;
+  padding: 0 6px;
+}
+.lock-link {
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: center;
+  padding: 2px;
+  white-space: nowrap;
+}
+.lock-link:hover {
+  color: var(--brand-ink);
+}
+.lock-link.brand {
+  color: var(--brand-ink);
+}
+.lock-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.lock-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 2px 0;
+}
+
+/* password strength */
+.pw-strength {
+  display: flex;
+  gap: 5px;
+  margin-top: -3px;
+}
+.pw-strength i {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-2);
+  transition: background 0.2s;
+}
+.pw-strength.s1 i:nth-child(1) {
+  background: var(--down);
+}
+.pw-strength.s2 i:nth-child(-n + 2) {
+  background: var(--warn);
+}
+.pw-strength.s3 i:nth-child(-n + 3) {
+  background: var(--brand);
+}
+.pw-strength.s4 i {
+  background: var(--up);
+}
+.pw-hint {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  margin-top: 1px;
+}
+
+/* import seg tabs */
+.lock-seg {
+  align-self: center;
+}
+
+/* backup mnemonic */
+.mnemonic {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  position: relative;
+}
+.mnemonic li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 9px;
+}
+.mnemonic li .n {
+  font-size: 10px;
+  color: var(--ink-4);
+  min-width: 13px;
+  text-align: right;
+}
+.mnemonic.blurred li {
+  filter: blur(5px);
+  user-select: none;
+}
+.reveal-mnemonic {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.reveal-mnemonic .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--ink);
+  color: var(--bg);
+  padding: 9px 15px;
+  border-radius: var(--r-pill);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: var(--sh-md);
+}
+.warn-box {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-soft);
+  border-radius: var(--r-md);
+  padding: 11px 13px;
+  display: flex;
+  gap: 9px;
+}
+.warn-box.danger {
+  color: var(--down);
+  background: var(--down-soft);
+  border-color: var(--down-soft);
+}
+.warn-box svg {
+  flex: none;
+  margin-top: 1px;
+}
+.lock-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.45;
+  cursor: pointer;
+}
+.lock-check input {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand);
+}
+
+/* ledger device */
+.ledger-art {
+  display: grid;
+  place-items: center;
+  padding: 8px 0 4px;
+}
+.ledger-dev {
+  width: 150px;
+  height: 52px;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #2b2b33, #17171c);
+  position: relative;
+  box-shadow: var(--sh-md);
+  display: flex;
+  align-items: center;
+}
+.ledger-dev .scr {
+  position: absolute;
+  left: 16px;
+  width: 56px;
+  height: 26px;
+  border-radius: 4px;
+  background: #0a0a0d;
+  box-shadow: inset 0 0 0 1px #34343d;
+  display: grid;
+  place-items: center;
+}
+.ledger-dev .scr i {
+  width: 26px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--brand);
+  animation: pulseGlow 1.4s ease-in-out infinite;
+}
+.ledger-dev .btn1 {
+  position: absolute;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #3a3a44;
+}
 .ledger-list {
   list-style: none;
   margin: 0;
@@ -147,199 +380,32 @@
   gap: 8px;
 }
 .ledger-acct {
-  appearance: none;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   width: 100%;
-  border: 1px solid var(--border-mid);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-md);
-  background: var(--bg);
-  padding: 11px 13px;
+  background: var(--surface);
+  padding: 12px 14px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  font: inherit;
+  transition: border-color 0.14s, background 0.14s;
 }
 .ledger-acct:hover {
-  border-color: var(--indigo);
-  background: var(--indigo-soft, #eef0ff);
+  border-color: var(--brand);
+  background: var(--brand-soft);
 }
 .ledger-idx {
+  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 700;
-  color: var(--muted);
-  min-width: 28px;
+  color: var(--ink-3);
+  min-width: 26px;
 }
 .ledger-addr {
   flex: 1;
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--ink);
-}
-
-/* Danger button (reset wallet) */
-.lock-danger {
-  appearance: none;
-  border: none;
-  border-radius: var(--r-md);
-  background: var(--danger, #dc2626);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  padding: 12px 16px;
-  cursor: pointer;
-  transition: filter 0.15s, opacity 0.15s;
-}
-.lock-danger:hover {
-  filter: brightness(1.06);
-}
-.lock-danger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.lock-warn-danger {
-  color: #991b1b;
-  background: var(--danger-bg, #fee2e2);
-  border-color: #fecaca;
-}
-
-.lock-primary {
-  appearance: none;
-  border: none;
-  border-radius: var(--r-md);
-  background: var(--indigo);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  padding: 12px 16px;
-  cursor: pointer;
-  transition: filter 0.15s, opacity 0.15s;
-}
-.lock-primary:hover {
-  filter: brightness(1.06);
-}
-.lock-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.lock-ghost {
-  appearance: none;
-  border: 1px solid var(--border-mid);
-  border-radius: var(--r-md);
-  background: transparent;
-  color: var(--ink);
-  font-size: 15px;
-  font-weight: 600;
-  padding: 12px 16px;
-  cursor: pointer;
-}
-.lock-ghost:hover {
-  background: var(--bg-soft);
-}
-
-.lock-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: -4px;
-}
-
-.lock-input,
-.lock-textarea {
-  width: 100%;
-  box-sizing: border-box;
-  border: 1px solid var(--border-mid);
-  border-radius: var(--r-md);
-  background: var(--bg);
-  color: var(--ink);
-  font-size: 15px;
-  padding: 11px 13px;
-  outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.lock-textarea {
-  font-family: var(--font-mono);
-  font-size: 14px;
-  resize: vertical;
-  line-height: 1.5;
-}
-.lock-input:focus,
-.lock-textarea:focus {
-  border-color: var(--indigo);
-  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.14);
-}
-
-.lock-error {
-  font-size: 13px;
-  color: var(--danger);
-  background: var(--danger-bg);
-  border-radius: var(--r-md);
-  padding: 8px 11px;
-}
-
-.lock-link {
-  appearance: none;
-  border: none;
-  background: none;
-  color: var(--muted);
-  font-size: 13px;
-  cursor: pointer;
-  padding: 2px;
-  align-self: center;
-}
-.lock-link:hover {
-  color: var(--ink);
-}
-
-/* Backup screen */
-.lock-warn {
-  font-size: 13px;
-  line-height: 1.45;
-  color: #92400e;
-  background: #fef3c7;
-  border: 1px solid #fde68a;
-  border-radius: var(--r-md);
-  padding: 10px 12px;
-}
-
-.mnemonic-grid {
-  list-style: none;
-  margin: 4px 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-.mnemonic-word {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--ink);
-  background: var(--bg-soft);
-  border: 1px solid var(--border-mid);
-  border-radius: 8px;
-  padding: 7px 8px;
-}
-.mnemonic-idx {
-  font-size: 10px;
-  color: var(--muted);
-  min-width: 12px;
-  text-align: right;
-}
-
-.lock-check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--ink);
-  line-height: 1.4;
-  cursor: pointer;
-}
-.lock-check input {
-  margin-top: 2px;
 }

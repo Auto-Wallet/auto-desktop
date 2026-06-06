@@ -1,54 +1,162 @@
-/* Brand theme tokens — one source of truth for the shell and the approval
- * window. On-brand with the Auto Wallet landing page (indigo + coral, light).
- * Native system font (SF on macOS) keeps the bundle tiny — no web fonts. */
+/* ============================================================
+   AutoDesktop — "Aurora" design system (evolved from the indigo+coral DNA).
+   One source of truth for the shell AND the separate approval window.
+   Light + dark via [data-theme]. Fonts are bundled locally (woff2 variable
+   fonts, latin subset) — no CDN, offline-safe, per the lightweight ethos.
+   Back-compat aliases for the pre-redesign token names are kept at the bottom
+   of each block so nothing depends on edit order during the migration.
+   ============================================================ */
+
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("./assets/fonts/space-grotesk.woff2") format("woff2");
+  font-weight: 300 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  src: url("./assets/fonts/hanken-grotesk.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/jetbrains-mono.woff2") format("woff2");
+  font-weight: 100 800;
+  font-display: swap;
+}
 
 :root {
+  /* ---- LIGHT (default) ---- */
+  --bg: #f1f0f6;
+  --bg-2: #e9e8f1;
+  --surface: #ffffff;
+  --surface-2: #f7f6fb;
+  --surface-3: #f1f0f7;
+  --sidebar: #fbfafe;
+  --wallpaper-a: #e7e6f4;
+  --wallpaper-b: #f3e9ec;
+
+  --line: #ecebf3;
+  --line-2: #e3e1ec;
+  --line-3: #d4d1e0;
+
+  --ink: #18151f;
+  --ink-2: #4c4858;
+  --ink-3: #837e92;
+  --ink-4: #aaa6b8;
+
+  --brand: #5b4bf0;
+  --brand-2: #4a3ad9;
+  --brand-ink: #5b4bf0;
+  --brand-soft: rgba(91, 75, 240, 0.09);
+  --brand-soft-2: rgba(91, 75, 240, 0.14);
+  --brand-ring: rgba(91, 75, 240, 0.22);
+
+  --coral: #ff6d4d;
+  --coral-2: #f0552f;
+  --coral-soft: rgba(255, 109, 77, 0.12);
+
+  --up: #12a566;
+  --up-soft: rgba(18, 165, 102, 0.12);
+  --down: #e5484d;
+  --down-soft: rgba(229, 72, 77, 0.1);
+  --warn: #d98a00;
+  --warn-soft: rgba(217, 138, 0, 0.12);
+
+  /* signature aurora gradient (the indigo+coral brand DNA) */
+  --aurora: linear-gradient(125deg, #6b5bff 0%, #8b5cf6 44%, #ff7a5c 100%);
+  --aurora-soft: linear-gradient(125deg, #6b5bff 0%, #9b6cf6 50%, #ff8a6c 100%);
+
+  --r-xs: 8px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --r-pill: 999px;
+
+  --sh-sm: 0 1px 2px rgba(24, 21, 31, 0.06), 0 1px 3px rgba(24, 21, 31, 0.04);
+  --sh-md: 0 4px 14px rgba(24, 21, 31, 0.08), 0 1px 4px rgba(24, 21, 31, 0.05);
+  --sh-lg: 0 18px 44px rgba(24, 21, 31, 0.13), 0 4px 12px rgba(24, 21, 31, 0.07);
+  --sh-xl: 0 32px 80px rgba(24, 21, 31, 0.2), 0 8px 24px rgba(24, 21, 31, 0.1);
+  --sh-brand: 0 10px 30px rgba(91, 75, 240, 0.32);
+
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
   color-scheme: light;
 
-  --bg: #f8f9fb;
-  --bg-elevated: #ffffff;
-  --bg-soft: #f1f3f7;
-  --bg-ink: #0f1119;
-
-  --border: #eef0f4;
-  --border-mid: #dfe2e8;
-  --border-strong: #c8cdd6;
-
-  --ink: #1a1d26;
-  --ink-2: #4b5160;
-  --ink-3: #7a8190;
-  --ink-4: #aab0bd;
-
-  --indigo: #4f46e5;
-  --indigo-2: #4338ca;
-  --indigo-soft: rgba(79, 70, 229, 0.08);
-  --indigo-ring: rgba(79, 70, 229, 0.2);
-
-  --coral: #f06449;
-  --coral-soft: rgba(240, 100, 73, 0.1);
-
-  --success: #16a34a;
-  --success-bg: rgba(22, 163, 74, 0.1);
-  --danger: #dc2626;
-  --danger-bg: rgba(220, 38, 38, 0.08);
-
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 16px;
-  --r-pill: 100px;
-
-  --shadow-sm: 0 1px 3px rgba(15, 17, 25, 0.06), 0 1px 2px rgba(15, 17, 25, 0.04);
-  --shadow-md: 0 6px 18px rgba(15, 17, 25, 0.08), 0 1px 3px rgba(15, 17, 25, 0.04);
-  --shadow-lg: 0 24px 60px rgba(15, 17, 25, 0.1), 0 4px 12px rgba(15, 17, 25, 0.06);
-
-  /* Aliases kept for ApprovalView.css. */
+  /* ---- back-compat aliases (pre-redesign token names) ---- */
+  --bg-elevated: var(--surface);
+  --bg-soft: var(--surface-2);
+  --bg-ink: var(--ink);
+  --border: var(--line);
+  --border-mid: var(--line-2);
+  --border-strong: var(--line-3);
+  --indigo: var(--brand);
+  --indigo-2: var(--brand-2);
+  --indigo-soft: var(--brand-soft);
+  --indigo-ring: var(--brand-ring);
+  --success: var(--up);
+  --success-bg: var(--up-soft);
+  --danger: var(--down);
+  --danger-bg: var(--down-soft);
+  --shadow-sm: var(--sh-sm);
+  --shadow-md: var(--sh-md);
+  --shadow-lg: var(--sh-lg);
   --text: var(--ink);
   --muted: var(--ink-3);
-  --accent: var(--indigo);
+  --accent: var(--brand);
+}
 
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
-    "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", monospace;
+[data-theme="dark"] {
+  --bg: #0e0d15;
+  --bg-2: #0a0910;
+  --surface: #181621;
+  --surface-2: #211e2c;
+  --surface-3: #272433;
+  --sidebar: #121019;
+  --wallpaper-a: #1a1830;
+  --wallpaper-b: #2a1c26;
+
+  --line: #262333;
+  --line-2: #312d40;
+  --line-3: #3c3850;
+
+  --ink: #f4f2fa;
+  --ink-2: #bdb8cc;
+  --ink-3: #837e94;
+  --ink-4: #585369;
+
+  --brand: #8475ff;
+  --brand-2: #9a8dff;
+  --brand-ink: #a99dff;
+  --brand-soft: rgba(132, 117, 255, 0.16);
+  --brand-soft-2: rgba(132, 117, 255, 0.22);
+  --brand-ring: rgba(132, 117, 255, 0.3);
+
+  --coral: #ff7d5e;
+  --coral-2: #ff8e72;
+  --coral-soft: rgba(255, 125, 94, 0.16);
+
+  --up: #2bd07f;
+  --up-soft: rgba(43, 208, 127, 0.16);
+  --down: #ff5c61;
+  --down-soft: rgba(255, 92, 97, 0.16);
+  --warn: #f0a830;
+  --warn-soft: rgba(240, 168, 48, 0.16);
+
+  --aurora: linear-gradient(125deg, #6b5bff 0%, #8b5cf6 44%, #ff7a5c 100%);
+  --aurora-soft: linear-gradient(125deg, #7d6dff 0%, #a07cf6 50%, #ff8f70 100%);
+
+  --sh-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --sh-md: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --sh-lg: 0 18px 44px rgba(0, 0, 0, 0.55);
+  --sh-xl: 0 32px 80px rgba(0, 0, 0, 0.6);
+  --sh-brand: 0 10px 30px rgba(91, 75, 240, 0.45);
+
+  color-scheme: dark;
 }
 
 * {
@@ -64,8 +172,101 @@ body,
 }
 
 body {
+  font-family: var(--font);
   background: var(--bg);
   color: var(--ink);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--brand-soft-2);
+}
+
+/* numerals: tabular for money/amounts */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+.mono {
+  font-family: var(--font-mono);
+}
+.disp {
+  font-family: var(--font-display);
+}
+
+/* custom scrollbars */
+.scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-3) transparent;
+}
+.scroll::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--line-3);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-4);
+}
+.scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes fadeUp {
+  from {
+    transform: translateY(10px);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0.6;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pop {
+  0% {
+    transform: scale(0.97) translateY(6px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pulseGlow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
