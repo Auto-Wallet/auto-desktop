@@ -13,6 +13,9 @@ import { isTauri } from "./platform";
 
 export type VaultPhase = "loading" | "absent" | "locked" | "unlocked";
 
+/** Secret kind of the on-disk wallet. A Ledger wallet has no password. */
+export type VaultKind = "hd" | "privkey" | "ledger";
+
 export type VaultState = {
   phase: VaultPhase;
   /** Active address when unlocked, or the stored address (for display) when locked. */
@@ -21,7 +24,12 @@ export type VaultState = {
   accounts: string[];
   /** Index of the active account within `accounts`. */
   active: number;
+  /** Kind of the existing wallet, or null when absent. */
+  kind: VaultKind | null;
 };
+
+/** One Ledger account candidate returned by the device for the picker. */
+export type LedgerAccount = { index: number; path: string; address: string };
 
 type RustStatus = {
   exists: boolean;
@@ -29,6 +37,7 @@ type RustStatus = {
   address: string | null;
   accounts: string[];
   active: number;
+  kind: VaultKind | null;
 };
 type NewVault = { address: string; mnemonic: string };
 
@@ -43,8 +52,9 @@ const DEMO_ADDRESSES = [
 ];
 const DEMO_MNEMONIC = "test test test test test test test test test test test junk";
 
-let state: VaultState = { phase: "loading", address: null, accounts: [], active: 0 };
+let state: VaultState = { phase: "loading", address: null, accounts: [], active: 0, kind: null };
 let demoCreated = false;
+let demoKind: VaultKind | null = null;
 
 const listeners = new Set<() => void>();
 function set(patch: Partial<VaultState>) {
@@ -70,8 +80,8 @@ export async function refreshVaultStatus(): Promise<void> {
   if (!isTauri()) {
     set(
       demoCreated
-        ? { phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0 }
-        : { phase: "absent", address: null, accounts: [], active: 0 },
+        ? { phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: demoKind }
+        : { phase: "absent", address: null, accounts: [], active: 0, kind: null },
     );
     return;
   }
@@ -81,6 +91,7 @@ export async function refreshVaultStatus(): Promise<void> {
     address: s.address,
     accounts: s.accounts,
     active: s.active,
+    kind: s.kind,
   });
 }
 
@@ -88,11 +99,12 @@ export async function refreshVaultStatus(): Promise<void> {
 export async function createVault(password: string): Promise<string> {
   if (!isTauri()) {
     demoCreated = true;
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0 });
+    demoKind = "hd";
+    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: "hd" });
     return DEMO_MNEMONIC;
   }
   const nv = await invoke<NewVault>("create_vault", { password });
-  set({ phase: "unlocked", address: nv.address, accounts: [nv.address], active: 0 });
+  set({ phase: "unlocked", address: nv.address, accounts: [nv.address], active: 0, kind: "hd" });
   return nv.mnemonic;
 }
 
@@ -100,32 +112,60 @@ export async function createVault(password: string): Promise<string> {
 export async function importVault(password: string, mnemonic: string): Promise<void> {
   if (!isTauri()) {
     demoCreated = true;
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0 });
+    demoKind = "hd";
+    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: "hd" });
     return;
   }
   const address = await invoke<string>("import_vault", { password, mnemonic: mnemonic.trim() });
-  set({ phase: "unlocked", address, accounts: [address], active: 0 });
+  set({ phase: "unlocked", address, accounts: [address], active: 0, kind: "hd" });
 }
 
 /** Import a wallet from a single raw private key. Single-account (no HD derivation). */
 export async function importPrivateKey(password: string, privateKey: string): Promise<void> {
   if (!isTauri()) {
     demoCreated = true;
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0 });
+    demoKind = "privkey";
+    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: "privkey" });
     return;
   }
   const address = await invoke<string>("import_private_key", {
     password,
     privateKey: privateKey.trim(),
   });
-  set({ phase: "unlocked", address, accounts: [address], active: 0 });
+  set({ phase: "unlocked", address, accounts: [address], active: 0, kind: "privkey" });
+}
+
+/** List addresses from a connected Ledger (for the onboarding picker). Requires the
+ *  device unlocked with the Ethereum app open. */
+export async function listLedgerAddresses(start: number, count: number): Promise<LedgerAccount[]> {
+  if (!isTauri()) {
+    // Browser preview: synthesize a picker from the demo addresses.
+    return DEMO_ADDRESSES.slice(start, start + count).map((address, i) => ({
+      index: start + i,
+      path: `m/44'/60'/${start + i}'/0/0`,
+      address,
+    }));
+  }
+  return invoke<LedgerAccount[]>("ledger_addresses", { start, count });
+}
+
+/** Connect a Ledger account at `path` as THE wallet (no password). */
+export async function connectLedger(path: string): Promise<void> {
+  if (!isTauri()) {
+    demoCreated = true;
+    demoKind = "ledger";
+    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: "ledger" });
+    return;
+  }
+  const address = await invoke<string>("connect_ledger", { path });
+  set({ phase: "unlocked", address, accounts: [address], active: 0, kind: "ledger" });
 }
 
 /** Unlock the on-disk vault. Throws "incorrect password" on a bad password. */
 export async function unlockVault(password: string): Promise<void> {
   if (!isTauri()) {
     demoCreated = true;
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0 });
+    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: demoKind });
     return;
   }
   await invoke<string>("unlock_vault", { password });
@@ -152,7 +192,8 @@ export async function resetVault(): Promise<void> {
     return;
   }
   demoCreated = false;
-  set({ phase: "absent", address: null, accounts: [], active: 0 });
+  demoKind = null;
+  set({ phase: "absent", address: null, accounts: [], active: 0, kind: null });
 }
 
 /** Switch the active HD account (pushes accountsChanged to dApps backend-side). */

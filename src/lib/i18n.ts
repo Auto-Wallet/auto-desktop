@@ -61,10 +61,16 @@ const DICT: Record<Lang, Record<string, string>> = {
     "lock.privkeyPlaceholder": "0x… (64 hex characters)",
     "lock.errPrivkey": "Enter a 32-byte (64 hex character) private key.",
     "lock.importPrivkey": "Import private key",
-    // Ledger (not wired yet — honest placeholder)
+    // Ledger
     "lock.ledgerTitle": "Connect a Ledger",
-    "lock.ledgerSoon":
-      "Ledger hardware support is coming soon. It needs the native USB/HID backend, which isn't wired up yet. When it lands, you'll unlock with the device PIN — no app password required.",
+    "lock.ledgerIntro":
+      "Plug in your Ledger, unlock it, and open the Ethereum app. Then scan for your accounts — no app password is needed.",
+    "lock.ledgerScan": "Scan for accounts",
+    "lock.ledgerScanning": "Looking for your Ledger…",
+    "lock.ledgerPick": "Choose an account",
+    "lock.ledgerConnect": "Connect",
+    "lock.ledgerConnecting": "Confirm on your device…",
+    "lock.retry": "Try again",
     // Unlock + forgot-password reset
     "lock.forgot": "Forgot password?",
     "lock.resetTitle": "Reset wallet",
@@ -159,10 +165,16 @@ const DICT: Record<Lang, Record<string, string>> = {
     "lock.privkeyPlaceholder": "0x…（64 位十六进制）",
     "lock.errPrivkey": "请输入 32 字节（64 位十六进制）的私钥。",
     "lock.importPrivkey": "导入私钥",
-    // Ledger（尚未接入 —— 如实占位）
+    // Ledger
     "lock.ledgerTitle": "连接 Ledger",
-    "lock.ledgerSoon":
-      "Ledger 硬件钱包支持即将推出。它需要原生 USB/HID 后端，目前尚未接入。上线后你将用设备 PIN 解锁，无需设置应用密码。",
+    "lock.ledgerIntro":
+      "插入并解锁你的 Ledger，打开以太坊（Ethereum）App，然后扫描账户 —— 无需设置应用密码。",
+    "lock.ledgerScan": "扫描账户",
+    "lock.ledgerScanning": "正在查找你的 Ledger…",
+    "lock.ledgerPick": "选择一个账户",
+    "lock.ledgerConnect": "连接",
+    "lock.ledgerConnecting": "请在设备上确认…",
+    "lock.retry": "重试",
     // 解锁 + 忘记密码重置
     "lock.forgot": "忘记密码？",
     "lock.resetTitle": "重置钱包",

@@ -8,7 +8,7 @@ import {
   useAccounts,
   useActiveAccount,
 } from "../lib/accounts";
-import { addVaultAccount, lockVault } from "../lib/vault";
+import { addVaultAccount, lockVault, useVault } from "../lib/vault";
 import { useBalances, type BalanceState } from "../lib/useBalances";
 import { useT } from "../lib/i18n";
 
@@ -17,6 +17,7 @@ export default function WalletPage() {
   const chains = useChains();
   const accounts = useAccounts();
   const active = useActiveAccount();
+  const vault = useVault();
   const { balances, refresh } = useBalances(active?.address);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -42,8 +43,13 @@ export default function WalletPage() {
             <div className="acct-label">
               {active.label}
               {/* Only watch-only accounts get a badge; the signer account is the
-                  default and needs none (feedback: "签名" was confusing). */}
-              {!active.signer && <span className="badge watch">{t("wallet.watch")}</span>}
+                  default and needs none (feedback: "签名" was confusing). A Ledger
+                  wallet is badged so the user knows signing happens on the device. */}
+              {!active.signer ? (
+                <span className="badge watch">{t("wallet.watch")}</span>
+              ) : (
+                vault.kind === "ledger" && <span className="badge ledger">Ledger</span>
+              )}
             </div>
             <div className="acct-addr">{shortAddress(active.address, 10, 8)}</div>
           </div>
@@ -147,6 +153,7 @@ function AccountMenu({
   onClose: () => void;
 }) {
   const { t } = useT();
+  const isLedger = useVault().kind === "ledger";
   const [adding, setAdding] = useState(false);
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -199,31 +206,39 @@ function AccountMenu({
           </div>
         ) : (
           <>
-            <button
-              className="acct-menu-add"
-              onClick={async () => {
-                const addr = await addVaultAccount();
-                setActive(addr);
-                onClose();
-              }}
-            >
-              + {t("wallet.addAccount")}
-            </button>
+            {/* HD "add account" only applies to a mnemonic wallet — a Ledger derives
+                accounts by reconnecting the device, not from a local seed. */}
+            {!isLedger && (
+              <button
+                className="acct-menu-add"
+                onClick={async () => {
+                  const addr = await addVaultAccount();
+                  setActive(addr);
+                  onClose();
+                }}
+              >
+                + {t("wallet.addAccount")}
+              </button>
+            )}
             <button className="acct-menu-add" onClick={() => setAdding(true)}>
               + {t("wallet.addWatch")}
             </button>
           </>
         )}
 
-        <button
-          className="acct-menu-lock"
-          onClick={async () => {
-            await lockVault();
-            onClose();
-          }}
-        >
-          🔒 {t("wallet.lock")}
-        </button>
+        {/* A Ledger wallet has no in-process secret to lock (and locking would force
+            a reconnect), so the lock action is only for software wallets. */}
+        {!isLedger && (
+          <button
+            className="acct-menu-lock"
+            onClick={async () => {
+              await lockVault();
+              onClose();
+            }}
+          >
+            🔒 {t("wallet.lock")}
+          </button>
+        )}
       </div>
     </>
   );

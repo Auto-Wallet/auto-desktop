@@ -25,6 +25,8 @@ mod vault;
 mod eth_tx;
 // EIP-712 typed-data hashing (pure) for eth_signTypedData_v4.
 mod eip712;
+// Ledger hardware wallet over USB-HID (framing + Ethereum APDUs + hidapi I/O).
+mod ledger;
 
 #[derive(Serialize)]
 struct Wallet {
@@ -67,11 +69,19 @@ fn generate_wallet() -> Wallet {
 // wallet refuses to sign (密钥安全: fail loud, never fall back to a default key).
 // ---------------------------------------------------------------------------
 
-/// One unlocked, ready-to-sign account (derived at `m/44'/60'/0'/0/index`).
+/// How an account signs. A software account holds the secp256k1 key in process; a
+/// Ledger account holds no key — it signs on the device over USB-HID at its path.
+enum Signer {
+    Local(SigningKey),
+    Ledger { path: String },
+}
+
+/// One unlocked account. Software accounts are derived at `m/44'/60'/0'/0/index`;
+/// Ledger accounts carry their own derivation path inside `Signer::Ledger`.
 struct UnlockedAccount {
     index: u32,
     address: String,
-    key: SigningKey,
+    signer: Signer,
 }
 
 /// What kind of secret backs this vault — decides whether more accounts can be
@@ -83,6 +93,16 @@ enum VaultSecret {
     /// A single imported private key — the key lives in its `UnlockedAccount`;
     /// there is nothing to derive from, so `add_account` is refused.
     PrivateKey,
+    /// A Ledger device — no in-process secret at all; signing goes to the device.
+    Ledger,
+}
+
+/// The active account's signing capability, snapshotted out of the vault lock.
+enum ActiveKind {
+    /// Software key — sign in-process via `with_active_key`.
+    Local,
+    /// Ledger account at this derivation path — sign on the device (no lock held).
+    Ledger(String),
 }
 
 /// The decrypted vault for this session.
@@ -104,13 +124,31 @@ fn active_account_address() -> Option<String> {
     v.accounts.get(v.active).map(|a| a.address.clone())
 }
 
-/// Run `f` with the active account's signing key. Errors clearly when locked,
-/// instead of silently falling back to any default key.
+/// Run `f` with the active account's *software* signing key. Errors clearly when
+/// locked or when the active account is a Ledger (use the device path instead),
+/// rather than silently falling back to any default key.
 fn with_active_key<T>(f: impl FnOnce(&SigningKey) -> T) -> Result<T, String> {
     let guard = vault_state().lock().unwrap();
     let v = guard.as_ref().ok_or("wallet is locked")?;
     let acct = v.accounts.get(v.active).ok_or("no active account")?;
-    Ok(f(&acct.key))
+    match &acct.signer {
+        Signer::Local(key) => Ok(f(key)),
+        Signer::Ledger { .. } => {
+            Err("active account is a Ledger — sign on the device".to_string())
+        }
+    }
+}
+
+/// Snapshot the active account's signing kind (and Ledger path) without holding the
+/// vault lock during the (slow) device round-trip.
+fn active_signer_kind() -> Result<ActiveKind, String> {
+    let guard = vault_state().lock().unwrap();
+    let v = guard.as_ref().ok_or("wallet is locked")?;
+    let acct = v.accounts.get(v.active).ok_or("no active account")?;
+    Ok(match &acct.signer {
+        Signer::Local(_) => ActiveKind::Local,
+        Signer::Ledger { path } => ActiveKind::Ledger(path.clone()),
+    })
 }
 
 /// Derive `count` (≥1) accounts from `mnemonic` and install them as THE unlocked
@@ -123,7 +161,7 @@ fn install_unlocked_vault(mnemonic: &str, count: u32) -> Result<Vec<vault::Accou
     for index in 0..count {
         let (key, address) = vault::derive_account(mnemonic, index)?;
         metas.push(vault::AccountMeta { index, address: address.clone() });
-        accounts.push(UnlockedAccount { index, address, key });
+        accounts.push(UnlockedAccount { index, address, signer: Signer::Local(key) });
     }
     *vault_state().lock().unwrap() = Some(UnlockedVault {
         secret: VaultSecret::Mnemonic(Zeroizing::new(mnemonic.to_string())),
@@ -142,7 +180,39 @@ fn install_privkey_vault(privkey_hex: &str) -> Result<Vec<vault::AccountMeta>, S
     let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
     *vault_state().lock().unwrap() = Some(UnlockedVault {
         secret: VaultSecret::PrivateKey,
-        accounts: vec![UnlockedAccount { index: 0, address, key }],
+        accounts: vec![UnlockedAccount { index: 0, address, signer: Signer::Local(key) }],
+        active: 0,
+    });
+    Ok(metas)
+}
+
+/// Restore a Ledger vault from its on-disk keystore (no password / no device). The
+/// path + address are public, so this just records the active account. Returns the
+/// active address.
+fn install_ledger_vault_from_keystore(ks: &vault::Keystore) -> Result<String, String> {
+    let path = ks.path.as_deref().ok_or("ledger keystore missing derivation path")?;
+    let address = ks
+        .accounts
+        .first()
+        .map(|a| a.address.clone())
+        .ok_or("ledger keystore has no account")?;
+    install_ledger_vault(path, &address)?;
+    Ok(address)
+}
+
+/// Install a Ledger account (derivation path + its address) as THE unlocked vault.
+/// No in-process key: signing goes to the device. The address is public, so this
+/// needs neither a password nor the device to be present — it just records that the
+/// active wallet is the Ledger at `path`.
+fn install_ledger_vault(path: &str, address: &str) -> Result<Vec<vault::AccountMeta>, String> {
+    let metas = vec![vault::AccountMeta { index: 0, address: address.to_string() }];
+    *vault_state().lock().unwrap() = Some(UnlockedVault {
+        secret: VaultSecret::Ledger,
+        accounts: vec![UnlockedAccount {
+            index: 0,
+            address: address.to_string(),
+            signer: Signer::Ledger { path: path.to_string() },
+        }],
         active: 0,
     });
     Ok(metas)
@@ -159,18 +229,25 @@ fn decode_message_param(param: &Value) -> Result<Vec<u8>, String> {
     }
 }
 
-/// EIP-191 `personal_sign`: sign keccak256("\x19Ethereum Signed Message:\n" ||
-/// len(msg) || msg) with the active key. Returns 65-byte r‖s‖v hex (v = 27/28).
+/// EIP-191 `personal_sign`. A software account signs keccak256("\x19Ethereum
+/// Signed Message:\n" || len || msg) locally; a Ledger applies the EIP-191 prefix
+/// itself, so it gets the raw message. Returns 65-byte r‖s‖v hex (v = 27/28).
 fn personal_sign(message: &[u8]) -> Result<Value, String> {
-    let mut preimage = format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
-    preimage.extend_from_slice(message);
-    let digest = Keccak256::digest(&preimage);
-
-    let (signature, recovery_id) = with_active_key(|k| k.sign_prehash_recoverable(&digest))?
-        .map_err(|e| format!("personal_sign: signing failed: {e}"))?;
-
-    let mut sig = signature.to_bytes().to_vec(); // 64 bytes: r ‖ s
-    sig.push(27 + recovery_id.to_byte()); // v
+    let sig = match active_signer_kind()? {
+        ActiveKind::Local => {
+            let mut preimage =
+                format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
+            preimage.extend_from_slice(message);
+            let digest = Keccak256::digest(&preimage);
+            let (signature, recovery_id) =
+                with_active_key(|k| k.sign_prehash_recoverable(&digest))?
+                    .map_err(|e| format!("personal_sign: signing failed: {e}"))?;
+            let mut sig = signature.to_bytes().to_vec(); // 64 bytes: r ‖ s
+            sig.push(27 + recovery_id.to_byte()); // v
+            sig
+        }
+        ActiveKind::Ledger(path) => ledger::sign_personal_message(&path, message)?.to_vec(),
+    };
     Ok(json!(format!("0x{}", hex::encode(sig))))
 }
 
@@ -548,13 +625,25 @@ async fn handle_signing<R: Runtime>(
     }
 }
 
-/// Sign an EIP-712 typed-data digest with the active vault key → 65-byte r‖s‖v hex.
+/// Sign EIP-712 typed data → 65-byte r‖s‖v hex. A software account signs the
+/// 0x1901 digest locally; a Ledger is sent the domain separator + message hash and
+/// signs on the device.
 fn sign_typed_data(typed: &Value) -> Result<Value, String> {
-    let digest = eip712::signing_hash(typed)?;
-    let (signature, recovery_id) = with_active_key(|k| k.sign_prehash_recoverable(&digest))?
-        .map_err(|e| format!("eth_signTypedData_v4: signing failed: {e}"))?;
-    let mut sig = signature.to_bytes().to_vec(); // 64 bytes: r ‖ s
-    sig.push(27 + recovery_id.to_byte()); // v
+    let sig = match active_signer_kind()? {
+        ActiveKind::Local => {
+            let digest = eip712::signing_hash(typed)?;
+            let (signature, recovery_id) =
+                with_active_key(|k| k.sign_prehash_recoverable(&digest))?
+                    .map_err(|e| format!("eth_signTypedData_v4: signing failed: {e}"))?;
+            let mut sig = signature.to_bytes().to_vec(); // 64 bytes: r ‖ s
+            sig.push(27 + recovery_id.to_byte()); // v
+            sig
+        }
+        ActiveKind::Ledger(path) => {
+            let (domain_separator, message_hash) = eip712::domain_and_message_hash(typed)?;
+            ledger::sign_eip712(&path, &domain_separator, &message_hash)?.to_vec()
+        }
+    };
     Ok(json!(format!("0x{}", hex::encode(sig))))
 }
 
@@ -677,8 +766,14 @@ async fn build_send_transaction(tx: &Value) -> Result<Value, String> {
         data: parse_data(data_hex)?,
     };
 
-    // Sign with the active vault key (Rust-side; never in a webview).
-    let (raw_tx, _local_hash) = with_active_key(|k| tx1559.sign(k))??;
+    // Sign Rust-side (software) or on the device (Ledger) — never in a webview.
+    let (raw_tx, _local_hash) = match active_signer_kind()? {
+        ActiveKind::Local => with_active_key(|k| tx1559.sign(k))??,
+        ActiveKind::Ledger(path) => {
+            let (r, s, y_parity) = ledger::sign_transaction(&path, &tx1559.unsigned_payload())?;
+            tx1559.into_signed(&r, &s, y_parity)
+        }
+    };
     // Broadcast; the node echoes the canonical transaction hash.
     forward_to_node("eth_sendRawTransaction", &[json!(raw_tx)]).await
 }
@@ -1149,6 +1244,9 @@ struct VaultStatus {
     accounts: Vec<String>,
     /// Index of the active account among `accounts`.
     active: usize,
+    /// Secret kind of the on-disk wallet: "hd" | "privkey" | "ledger" (None if absent).
+    /// The shell uses this to skip the password unlock for a Ledger wallet.
+    kind: Option<String>,
 }
 
 /// Newly created wallet — returns the mnemonic ONCE so the trusted shell can show
@@ -1183,6 +1281,7 @@ fn vault_status<R: Runtime>(app: AppHandle<R>) -> Result<VaultStatus, String> {
             .map(|v| v.accounts.iter().map(|a| a.address.clone()).collect())
             .unwrap_or_default(),
         active: unlocked.map(|v| v.active).unwrap_or(0),
+        kind: on_disk.as_ref().map(|k| k.kind.clone()),
     })
 }
 
@@ -1256,10 +1355,15 @@ fn import_private_key<R: Runtime>(
 }
 
 /// Unlock the on-disk vault with `password`. A wrong password fails the AEAD tag
-/// check and surfaces as "incorrect password". Returns the active address.
+/// check and surfaces as "incorrect password". Returns the active address. A Ledger
+/// keystore has no secret, so it "unlocks" with no password — its addresses are
+/// public; signing still requires the device.
 #[tauri::command]
 fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<String, String> {
     let ks = read_keystore(&keystore_path(&app)?)?.ok_or("no wallet to unlock")?;
+    if ks.kind == "ledger" {
+        return install_ledger_vault_from_keystore(&ks);
+    }
     let secret = vault::open(&password, &ks)?;
     // "privkey" vaults install the single imported key; everything else (incl.
     // legacy keystores with no `kind`, defaulted to "hd") walks the HD path.
@@ -1300,6 +1404,45 @@ fn reset_vault<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     }
 }
 
+/// One Ledger account candidate for the onboarding picker.
+#[derive(Serialize)]
+struct LedgerAccount {
+    index: u32,
+    path: String,
+    address: String,
+}
+
+/// List addresses from a connected Ledger (Ledger Live path `m/44'/60'/index'/0/0`)
+/// for `count` accounts starting at `start`. Requires the device unlocked with the
+/// Ethereum app open. No on-device confirmation (read-only address query).
+#[tauri::command]
+fn ledger_addresses(start: u32, count: u32) -> Result<Vec<LedgerAccount>, String> {
+    let count = count.clamp(1, 10);
+    let indices: Vec<u32> = (start..start.saturating_add(count)).collect();
+    let rows = ledger::get_addresses(&indices)?;
+    Ok(rows
+        .into_iter()
+        .map(|(index, path, address)| LedgerAccount { index, path, address })
+        .collect())
+}
+
+/// Connect a Ledger account at `path` as THE wallet: re-read its address from the
+/// device, install it as the (no-password) unlocked vault, and persist a Ledger
+/// keystore (path + address; no secret at rest). Refuses to overwrite an existing
+/// wallet. Returns the address.
+#[tauri::command]
+fn connect_ledger<R: Runtime>(app: AppHandle<R>, path: String) -> Result<String, String> {
+    let kpath = keystore_path(&app)?;
+    if read_keystore(&kpath)?.is_some() {
+        return Err("a wallet already exists".to_string());
+    }
+    let address = ledger::get_address(&path)?;
+    let metas = install_ledger_vault(&path, &address)?;
+    let ks = vault::ledger_keystore(&path, metas);
+    write_keystore(&kpath, &ks)?;
+    Ok(address)
+}
+
 /// Switch the active account (feature ①: 切换钱包地址). Pushes EIP-1193
 /// `accountsChanged` to open dApps. Returns the new active address.
 #[tauri::command]
@@ -1330,10 +1473,17 @@ fn add_account<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
             VaultSecret::PrivateKey => {
                 return Err("imported private-key wallets can't derive more accounts".to_string())
             }
+            VaultSecret::Ledger => {
+                return Err("Ledger accounts are added by connecting the device".to_string())
+            }
         };
         let next_index = v.accounts.iter().map(|a| a.index).max().map_or(0, |m| m + 1);
         let (key, address) = vault::derive_account(&mnemonic, next_index)?;
-        v.accounts.push(UnlockedAccount { index: next_index, address: address.clone(), key });
+        v.accounts.push(UnlockedAccount {
+            index: next_index,
+            address: address.clone(),
+            signer: Signer::Local(key),
+        });
         let metas = v
             .accounts
             .iter()
@@ -1427,12 +1577,23 @@ pub fn run() {
             unlock_vault,
             lock_vault,
             reset_vault,
+            ledger_addresses,
+            connect_ledger,
             select_account,
             add_account
         ])
         .setup(|app| {
             // Load any persisted custom networks / RPC overrides before the UI asks.
             load_chains(app.handle());
+            // A Ledger wallet has no secret at rest, so unlock it on boot (path +
+            // address are public) — it boots straight to the wallet, no password.
+            if let Ok(Some(ks)) = keystore_path(app.handle()).and_then(|p| read_keystore(&p)) {
+                if ks.kind == "ledger" {
+                    if let Err(e) = install_ledger_vault_from_keystore(&ks) {
+                        println!("[AutoDesktop] warn: could not restore Ledger vault: {e}");
+                    }
+                }
+            }
             // Container window (no webview of its own).
             let window = WindowBuilder::new(app, "main")
                 .title("AutoDesktop")
@@ -1698,6 +1859,8 @@ mod e2e {
                 unlock_vault,
                 lock_vault,
                 reset_vault,
+                ledger_addresses,
+                connect_ledger,
                 select_account,
                 add_account
             ])
@@ -1876,6 +2039,35 @@ mod e2e {
             err.contains("can't derive"),
             "expected a 'can't derive more accounts' refusal, got: {err}"
         );
+    }
+
+    /// A Ledger account exposes its address to dApps WITHOUT any in-process key, and
+    /// the software-signing path refuses it (signing must go to the device). Pure
+    /// in-memory: no device, no disk. Asserts the account is wired but unsignable
+    /// locally — proving the dispatch, not faking a hardware signature.
+    #[test]
+    fn e2e_ledger_vault_exposes_address_but_has_no_local_key() {
+        let _guard = wallet_guard();
+        let ledger_addr = "0x1111111111111111111111111111111111111111";
+        super::install_ledger_vault("m/44'/60'/0'/0/0", ledger_addr).expect("install ledger vault");
+
+        let wv = dapp_webview(build_app());
+        // The device address is exposed to dApps exactly like a software account.
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([ledger_addr]));
+
+        // There is NO in-process key: the software-signing path must refuse loudly
+        // (the real signing path routes to the device, which needs hardware).
+        let err = super::with_active_key(|_| ()).unwrap_err();
+        assert!(
+            err.contains("Ledger"),
+            "expected a 'sign on the device' refusal, got: {err}"
+        );
+
+        // And the active-signer snapshot reports the Ledger path for the device path.
+        match super::active_signer_kind().unwrap() {
+            super::ActiveKind::Ledger(path) => assert_eq!(path, "m/44'/60'/0'/0/0"),
+            super::ActiveKind::Local => panic!("expected a Ledger active signer"),
+        }
     }
 
     #[test]

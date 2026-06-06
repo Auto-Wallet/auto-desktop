@@ -28,6 +28,16 @@ description = "Allow the shell to reset the wallet (delete the keystore) for the
 commands.allow = ["reset_vault"]
 
 [[permission]]
+identifier = "allow-ledger-addresses"
+description = "Allow the shell to list addresses from a connected Ledger device for the onboarding picker."
+commands.allow = ["ledger_addresses"]
+
+[[permission]]
+identifier = "allow-connect-ledger"
+description = "Allow the shell to connect a Ledger account as the (no-password) wallet."
+commands.allow = ["connect_ledger"]
+
+[[permission]]
 identifier = "allow-unlock-vault"
 description = "Allow the shell to unlock the on-disk vault with the user's password."
 commands.allow = ["unlock_vault"]

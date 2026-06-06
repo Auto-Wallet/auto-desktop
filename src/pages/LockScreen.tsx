@@ -3,12 +3,15 @@ import "./LockScreen.css";
 import mascot from "../assets/mascot.png";
 import { useT } from "../lib/i18n";
 import {
+  connectLedger,
   createVault,
   importPrivateKey,
   importVault,
+  listLedgerAddresses,
   resetVault,
   unlockVault,
   useVault,
+  type LedgerAccount,
 } from "../lib/vault";
 
 // The wallet's front door (VISION ④⑤ — real key ownership). Shown by App whenever
@@ -69,7 +72,7 @@ export default function LockScreen({ onDone }: { onDone: () => void }) {
 
         {mode === "import" && <ImportForm onBack={() => setMode("choose")} onDone={onDone} />}
 
-        {mode === "ledger" && <LedgerPanel onBack={() => setMode("choose")} />}
+        {mode === "ledger" && <LedgerPanel onBack={() => setMode("choose")} onDone={onDone} />}
 
         {mode === "backup" && <BackupScreen mnemonic={mnemonic} onDone={onDone} />}
 
@@ -266,20 +269,85 @@ function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
   );
 }
 
-// Ledger isn't wired yet (needs the native USB/HID backend — Phase C). Be honest:
-// present the option, but don't fake a connection. When it lands, the device PIN
-// replaces the app password (the user won't set one here).
-function LedgerPanel({ onBack }: { onBack: () => void }) {
+// Connect a Ledger hardware wallet (no app password — the device PIN protects it).
+// Scans the device over USB-HID for accounts, the user picks one, and it becomes
+// the wallet. Signing later happens on the device itself.
+function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
   const { t } = useT();
+  type Step = "intro" | "scanning" | "pick" | "connecting";
+  const [step, setStep] = useState<Step>("intro");
+  const [accounts, setAccounts] = useState<LedgerAccount[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  async function scan() {
+    setStep("scanning");
+    setError(null);
+    try {
+      const list = await listLedgerAddresses(0, 5);
+      if (list.length === 0) throw new Error("No accounts returned by the device.");
+      setAccounts(list);
+      setStep("pick");
+    } catch (e) {
+      setError(errText(e));
+      setStep("intro");
+    }
+  }
+
+  async function pick(acct: LedgerAccount) {
+    setStep("connecting");
+    setError(null);
+    try {
+      await connectLedger(acct.path);
+      onDone();
+    } catch (e) {
+      setError(errText(e));
+      setStep("pick");
+    }
+  }
+
   return (
     <div className="lock-form">
       <div className="lock-info-title">{t("lock.ledgerTitle")}</div>
-      <div className="lock-info">{t("lock.ledgerSoon")}</div>
-      <button className="lock-ghost" onClick={onBack}>
+
+      {step === "pick" ? (
+        <ul className="ledger-list">
+          {accounts.map((a) => (
+            <li key={a.path}>
+              <button className="ledger-acct" onClick={() => pick(a)}>
+                <span className="ledger-idx">#{a.index}</span>
+                <span className="ledger-addr">{shortAddr(a.address)}</span>
+                <span className="lock-option-chevron">›</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="lock-info">
+          {step === "scanning"
+            ? t("lock.ledgerScanning")
+            : step === "connecting"
+              ? t("lock.ledgerConnecting")
+              : t("lock.ledgerIntro")}
+        </div>
+      )}
+
+      {error && <div className="lock-error">{error}</div>}
+
+      {(step === "intro" || step === "scanning") && (
+        <button className="lock-primary" disabled={step === "scanning"} onClick={scan}>
+          {step === "scanning" ? "…" : error ? t("lock.retry") : t("lock.ledgerScan")}
+        </button>
+      )}
+
+      <button className="lock-link" onClick={onBack}>
         ‹ {t("lock.back")}
       </button>
     </div>
   );
+}
+
+function shortAddr(a: string): string {
+  return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
 }
 
 function BackupScreen({ mnemonic, onDone }: { mnemonic: string; onDone: () => void }) {

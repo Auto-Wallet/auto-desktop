@@ -89,6 +89,10 @@
   background: var(--bg-soft);
   color: var(--ink-3);
 }
+.badge.ledger {
+  background: #e8f0fe;
+  color: #1a56db;
+}
 
 .acct-addr {
   font-family: var(--font-mono);

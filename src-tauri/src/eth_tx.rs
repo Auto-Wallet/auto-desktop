@@ -120,15 +120,45 @@ impl Eip1559Tx {
         ]
     }
 
-    /// keccak256(0x02 || rlp([...9 fields])) — the EIP-1559 signing hash.
-    pub fn signing_hash(&self) -> [u8; 32] {
+    /// `0x02 || rlp([...9 unsigned fields])` — the exact bytes that are hashed to
+    /// produce the signing hash. A Ledger signs *these bytes* (it hashes them on the
+    /// device); a local key signs `signing_hash()`. Sharing this keeps both paths on
+    /// identical encoding.
+    pub fn unsigned_payload(&self) -> Vec<u8> {
         let mut msg = vec![0x02u8];
         msg.extend_from_slice(&rlp_list(&self.base_fields()));
-        Keccak256::digest(&msg).into()
+        msg
     }
 
-    /// Sign with `key` and return (raw_tx_hex, tx_hash_hex). The raw tx is
-    /// `0x02 || rlp([...9 fields, yParity, r, s])`, ready for eth_sendRawTransaction.
+    /// keccak256(0x02 || rlp([...9 fields])) — the EIP-1559 signing hash.
+    pub fn signing_hash(&self) -> [u8; 32] {
+        Keccak256::digest(self.unsigned_payload()).into()
+    }
+
+    /// Assemble the signed raw tx from a 64-byte signature (r‖s) + y-parity. Shared
+    /// by the local-key and Ledger signing paths. Returns (raw_tx_hex, tx_hash_hex);
+    /// the raw tx is `0x02 || rlp([...9 fields, yParity, r, s])`.
+    pub fn into_signed(&self, r: &[u8; 32], s: &[u8; 32], y_parity: u8) -> (String, String) {
+        let r = strip_leading_zeros(r);
+        let s = strip_leading_zeros(s);
+        let y = strip_leading_zeros(&[y_parity]); // 0 → empty, 1 → [0x01]
+
+        let mut fields = self.base_fields();
+        fields.push(rlp_bytes(&y));
+        fields.push(rlp_bytes(&r));
+        fields.push(rlp_bytes(&s));
+
+        let mut raw = vec![0x02u8];
+        raw.extend_from_slice(&rlp_list(&fields));
+        let tx_hash = Keccak256::digest(&raw);
+        (
+            format!("0x{}", hex::encode(&raw)),
+            format!("0x{}", hex::encode(tx_hash)),
+        )
+    }
+
+    /// Sign with a local `key` and return (raw_tx_hex, tx_hash_hex), ready for
+    /// eth_sendRawTransaction.
     pub fn sign(&self, key: &SigningKey) -> Result<(String, String), String> {
         let hash = self.signing_hash();
         // k256 returns a low-S (EIP-2) signature; recid is the y-parity (0/1).
@@ -136,22 +166,11 @@ impl Eip1559Tx {
             .sign_prehash_recoverable(&hash)
             .map_err(|e| format!("tx signing failed: {e}"))?;
         let sig_bytes = sig.to_bytes(); // 64 bytes: r ‖ s
-        let r = strip_leading_zeros(&sig_bytes[..32]);
-        let s = strip_leading_zeros(&sig_bytes[32..]);
-        let y_parity = strip_leading_zeros(&[recid.to_byte()]); // 0 → empty, 1 → [0x01]
-
-        let mut fields = self.base_fields();
-        fields.push(rlp_bytes(&y_parity));
-        fields.push(rlp_bytes(&r));
-        fields.push(rlp_bytes(&s));
-
-        let mut raw = vec![0x02u8];
-        raw.extend_from_slice(&rlp_list(&fields));
-        let tx_hash = Keccak256::digest(&raw);
-        Ok((
-            format!("0x{}", hex::encode(&raw)),
-            format!("0x{}", hex::encode(tx_hash)),
-        ))
+        let mut r = [0u8; 32];
+        let mut s = [0u8; 32];
+        r.copy_from_slice(&sig_bytes[..32]);
+        s.copy_from_slice(&sig_bytes[32..]);
+        Ok(self.into_signed(&r, &s, recid.to_byte()))
     }
 }
 

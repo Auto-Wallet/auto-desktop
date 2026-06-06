@@ -137,6 +137,45 @@
   padding: 12px 14px;
 }
 
+/* Ledger account picker */
+.ledger-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ledger-acct {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--border-mid);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  padding: 11px 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ledger-acct:hover {
+  border-color: var(--indigo);
+  background: var(--indigo-soft, #eef0ff);
+}
+.ledger-idx {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  min-width: 28px;
+}
+.ledger-addr {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+
 /* Danger button (reset wallet) */
 .lock-danger {
   appearance: none;

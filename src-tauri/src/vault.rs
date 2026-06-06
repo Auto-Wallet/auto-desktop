@@ -165,28 +165,66 @@ pub struct AccountMeta {
     pub address: String,
 }
 
-/// The on-disk keystore. Everything here is safe to write to a file: the secret
-/// (the mnemonic) is only present inside `ciphertext`, which requires the password.
+/// The on-disk keystore. Everything here is safe to write to a file: any secret
+/// (mnemonic / private key) lives only inside `ciphertext`, which requires the
+/// password. A `kind == "ledger"` keystore has NO secret — it records only the
+/// device derivation `path` + the public address, so the crypto fields are absent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Keystore {
     pub version: u32,
-    /// Secret kind: "hd" (BIP-39 mnemonic) or "privkey" (a single raw key).
+    /// Secret kind: "hd" (BIP-39 mnemonic), "privkey" (a single raw key), or
+    /// "ledger" (a hardware account — no stored secret).
     /// Defaults to "hd" so keystores written before this field stay readable.
     #[serde(default = "default_kind")]
     pub kind: String,
+    /// Ledger derivation path — present only for `kind == "ledger"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default = "default_kdf")]
     pub kdf: String,
+    #[serde(default)]
     pub m_cost: u32,
+    #[serde(default)]
     pub t_cost: u32,
+    #[serde(default)]
     pub p_cost: u32,
-    pub salt: String,       // base64
-    pub cipher: String,     // "aes-256-gcm"
-    pub nonce: String,      // base64 (96-bit GCM nonce)
-    pub ciphertext: String, // base64 (mnemonic sealed with AES-256-GCM)
+    // Crypto fields — present for "hd"/"privkey", absent for "ledger".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub salt: Option<String>, // base64
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cipher: Option<String>, // "aes-256-gcm"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>, // base64 (96-bit GCM nonce)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ciphertext: Option<String>, // base64 (secret sealed with AES-256-GCM)
     pub accounts: Vec<AccountMeta>,
 }
 
 fn default_kind() -> String {
     "hd".to_string()
+}
+
+fn default_kdf() -> String {
+    "argon2id".to_string()
+}
+
+/// Build a Ledger keystore (no secret at rest — just the derivation path + the
+/// public address metadata).
+pub fn ledger_keystore(path: &str, accounts: Vec<AccountMeta>) -> Keystore {
+    Keystore {
+        version: 1,
+        kind: "ledger".to_string(),
+        path: Some(path.to_string()),
+        kdf: "none".to_string(),
+        m_cost: 0,
+        t_cost: 0,
+        p_cost: 0,
+        salt: None,
+        cipher: None,
+        nonce: None,
+        ciphertext: None,
+        accounts,
+    }
 }
 
 /// Stretch a password into a 256-bit key-encryption key with Argon2id.
@@ -233,25 +271,34 @@ pub fn seal(
     Ok(Keystore {
         version: 1,
         kind: kind.to_string(),
+        path: None,
         kdf: "argon2id".to_string(),
         m_cost: ARGON_M_COST,
         t_cost: ARGON_T_COST,
         p_cost: ARGON_P_COST,
-        salt: B64.encode(salt),
-        cipher: "aes-256-gcm".to_string(),
-        nonce: B64.encode(nonce),
-        ciphertext: B64.encode(ciphertext),
+        salt: Some(B64.encode(salt)),
+        cipher: Some("aes-256-gcm".to_string()),
+        nonce: Some(B64.encode(nonce)),
+        ciphertext: Some(B64.encode(ciphertext)),
         accounts,
     })
 }
 
-/// Decrypt the mnemonic from a keystore. A wrong password fails the GCM tag check
-/// and surfaces as a clear "incorrect password" (no silent fallback).
+/// Decrypt the secret from a keystore. A wrong password fails the GCM tag check
+/// and surfaces as a clear "incorrect password" (no silent fallback). Errors loudly
+/// if called on a keystore with no encrypted secret (e.g. a Ledger keystore).
 #[allow(deprecated)] // see `seal`: aes-gcm 0.10 Nonce::from_slice via generic-array 0.14
 pub fn open(password: &str, ks: &Keystore) -> Result<Zeroizing<String>, String> {
-    let salt = B64.decode(&ks.salt).map_err(|e| e.to_string())?;
-    let nonce = B64.decode(&ks.nonce).map_err(|e| e.to_string())?;
-    let ciphertext = B64.decode(&ks.ciphertext).map_err(|e| e.to_string())?;
+    let no = |name: &str| format!("keystore has no {name} (not an encrypted vault)");
+    let salt = B64
+        .decode(ks.salt.as_ref().ok_or_else(|| no("salt"))?)
+        .map_err(|e| e.to_string())?;
+    let nonce = B64
+        .decode(ks.nonce.as_ref().ok_or_else(|| no("nonce"))?)
+        .map_err(|e| e.to_string())?;
+    let ciphertext = B64
+        .decode(ks.ciphertext.as_ref().ok_or_else(|| no("ciphertext"))?)
+        .map_err(|e| e.to_string())?;
 
     let kek = derive_kek(password, &salt, ks.m_cost, ks.t_cost, ks.p_cost)?;
     let cipher = Aes256Gcm::new_from_slice(kek.as_slice()).map_err(|e| e.to_string())?;
@@ -335,9 +382,30 @@ mod tests {
         let ks = seal("pw-pw-pw-pw", key_hex, "privkey", accounts.clone()).unwrap();
         assert_eq!(ks.kind, "privkey");
         // The raw key must NOT leak into any plaintext field.
-        assert!(!ks.ciphertext.contains("ac0974"));
+        assert!(!ks.ciphertext.as_deref().unwrap().contains("ac0974"));
         let recovered = open("pw-pw-pw-pw", &ks).unwrap();
         assert_eq!(recovered.as_str(), key_hex);
+    }
+
+    #[test]
+    fn ledger_keystore_has_no_secret_and_round_trips() {
+        let accounts = vec![AccountMeta {
+            index: 0,
+            address: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266".to_string(),
+        }];
+        let ks = ledger_keystore("m/44'/60'/0'/0/0", accounts.clone());
+        assert_eq!(ks.kind, "ledger");
+        assert_eq!(ks.path.as_deref(), Some("m/44'/60'/0'/0/0"));
+        // No encrypted secret at rest, and the crypto fields are omitted from JSON.
+        assert!(ks.ciphertext.is_none() && ks.salt.is_none());
+        let json = serde_json::to_string(&ks).unwrap();
+        assert!(!json.contains("ciphertext"), "ledger keystore must not serialize a ciphertext");
+        let back: Keystore = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, "ledger");
+        assert_eq!(back.path.as_deref(), Some("m/44'/60'/0'/0/0"));
+        assert_eq!(back.accounts, accounts);
+        // open() must refuse loudly — there is nothing to decrypt.
+        assert!(open("whatever", &ks).unwrap_err().contains("no"));
     }
 
     #[test]
@@ -355,7 +423,7 @@ mod tests {
         }];
         let ks = seal("correct horse battery staple", TEST_MNEMONIC, "hd", accounts.clone()).unwrap();
         // The mnemonic must NOT appear in any plaintext field.
-        assert!(!ks.ciphertext.contains("test"));
+        assert!(!ks.ciphertext.as_deref().unwrap().contains("test"));
         assert_eq!(ks.kind, "hd");
         assert_eq!(ks.accounts, accounts);
 

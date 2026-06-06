@@ -23,6 +23,8 @@
     "allow-unlock-vault",
     "allow-lock-vault",
     "allow-reset-vault",
+    "allow-ledger-addresses",
+    "allow-connect-ledger",
     "allow-select-account",
     "allow-add-account"
   ]

@@ -44,6 +44,11 @@ zeroize = { version = "1.8.2", features = ["derive"] }
 sha2 = "0.10"
 hmac = "0.12"
 
+# Ledger hardware wallet over USB-HID. WKWebView has no WebHID, so we talk to the
+# device from Rust. Default features build the bundled C hidapi against IOKit on
+# macOS — no system library needed; the C core is tiny (installer-size safe).
+hidapi = "2"
+
 [dev-dependencies]
 # The `test` feature exposes tauri::test's in-process mock runtime. That is the
 # only automatable E2E path on macOS: tauri-driver/WebdriverIO need a WKWebView

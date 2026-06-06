@@ -232,8 +232,11 @@ fn decimal_to_be32(s: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
-/// The EIP-712 digest to sign: keccak256(0x1901 ‖ domainSeparator ‖ hashStruct(primary, message)).
-pub fn signing_hash(typed: &Value) -> Result<[u8; 32], String> {
+/// The two 32-byte halves a Ledger's `eth_signTypedData_v4` consumes:
+/// (domainSeparator, hashStruct(primaryType, message)). A local key combines them
+/// into `signing_hash`; the device is sent the pair and hashes the 0x1901 envelope
+/// itself. Sharing this keeps both paths on identical encoding.
+pub fn domain_and_message_hash(typed: &Value) -> Result<([u8; 32], [u8; 32]), String> {
     let types = typed.get("types").ok_or("typed data missing 'types'")?;
     let domain = typed.get("domain").ok_or("typed data missing 'domain'")?;
     let primary = typed
@@ -244,7 +247,12 @@ pub fn signing_hash(typed: &Value) -> Result<[u8; 32], String> {
 
     let domain_separator = hash_struct("EIP712Domain", domain, types)?;
     let message_hash = hash_struct(primary, message, types)?;
+    Ok((domain_separator, message_hash))
+}
 
+/// The EIP-712 digest to sign: keccak256(0x1901 ‖ domainSeparator ‖ hashStruct(primary, message)).
+pub fn signing_hash(typed: &Value) -> Result<[u8; 32], String> {
+    let (domain_separator, message_hash) = domain_and_message_hash(typed)?;
     let mut buf = Vec::with_capacity(2 + 32 + 32);
     buf.push(0x19);
     buf.push(0x01);
