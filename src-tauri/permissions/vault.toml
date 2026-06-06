@@ -1,0 +1,38 @@
+# Permissions for the key-vault commands. Granted ONLY to the trusted "shell"
+# webview (capabilities/default.json) — NEVER to the dapp webview. The user's
+# password is typed into the shell UI; a dApp must never be able to create,
+# unlock, read, or switch the wallet. Private keys never leave the Rust backend.
+[[permission]]
+identifier = "allow-vault-status"
+description = "Allow the shell to query whether a vault exists / is unlocked and the visible address."
+commands.allow = ["vault_status"]
+
+[[permission]]
+identifier = "allow-create-vault"
+description = "Allow the shell to create a new encrypted wallet (generate + seal a mnemonic)."
+commands.allow = ["create_vault"]
+
+[[permission]]
+identifier = "allow-import-vault"
+description = "Allow the shell to import a wallet from a recovery phrase and seal it."
+commands.allow = ["import_vault"]
+
+[[permission]]
+identifier = "allow-unlock-vault"
+description = "Allow the shell to unlock the on-disk vault with the user's password."
+commands.allow = ["unlock_vault"]
+
+[[permission]]
+identifier = "allow-lock-vault"
+description = "Allow the shell to lock the wallet (drop decrypted keys from memory)."
+commands.allow = ["lock_vault"]
+
+[[permission]]
+identifier = "allow-select-account"
+description = "Allow the shell to switch the active HD account and push accountsChanged."
+commands.allow = ["select_account"]
+
+[[permission]]
+identifier = "allow-add-account"
+description = "Allow the shell to derive and persist the next HD account."
+commands.allow = ["add_account"]

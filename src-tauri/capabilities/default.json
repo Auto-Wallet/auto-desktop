@@ -11,6 +11,13 @@
     "allow-hide-dapp",
     "allow-close-dapp",
     "allow-set-active-chain",
-    "allow-get-active-chain"
+    "allow-get-active-chain",
+    "allow-vault-status",
+    "allow-create-vault",
+    "allow-import-vault",
+    "allow-unlock-vault",
+    "allow-lock-vault",
+    "allow-select-account",
+    "allow-add-account"
   ]
 }

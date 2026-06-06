@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -14,6 +15,11 @@ use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUr
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use sha3::{Digest, Keccak256};
+use zeroize::Zeroizing;
+
+// Encrypted HD key vault (BIP-39/44 + Argon2id/AES-GCM). Pure crypto core; the
+// in-memory unlocked state + file I/O + Tauri commands live below in this file.
+mod vault;
 
 #[derive(Serialize)]
 struct Wallet {
@@ -47,22 +53,69 @@ fn generate_wallet() -> Wallet {
 }
 
 // ---------------------------------------------------------------------------
-// Active signing key.
+// Key vault (in-memory unlocked state).
 //
-// ⚠️ DEV ONLY: this is the *publicly known* Anvil/Hardhat account #0 private key
-// (it is in every Foundry/Hardhat install and already used in our test vectors),
-// matching SPIKE_ACCOUNT. It is a deliberate scaffold so the approval+signing
-// vertical works and is E2E-testable now. The NEXT slice replaces this with an
-// encrypted, password-unlocked key vault — no real key is ever hardcoded.
+// Private keys live ONLY in Rust and ONLY while the wallet is unlocked. The
+// encrypted mnemonic at rest is handled by `mod vault` (Argon2id + AES-256-GCM);
+// here we hold the decrypted, HD-derived accounts for the session. No key material
+// ever crosses into any webview. There is NO hardcoded dev key anymore — a locked
+// wallet refuses to sign (密钥安全: fail loud, never fall back to a default key).
 // ---------------------------------------------------------------------------
-const DEV_PRIVKEY_HEX: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-fn active_signing_key() -> &'static SigningKey {
-    static KEY: OnceLock<SigningKey> = OnceLock::new();
-    KEY.get_or_init(|| {
-        let bytes = hex::decode(DEV_PRIVKEY_HEX).expect("DEV_PRIVKEY_HEX is valid hex");
-        SigningKey::from_bytes(bytes.as_slice().into()).expect("DEV_PRIVKEY_HEX is a valid key")
-    })
+/// One unlocked, ready-to-sign account (derived at `m/44'/60'/0'/0/index`).
+struct UnlockedAccount {
+    index: u32,
+    address: String,
+    key: SigningKey,
+}
+
+/// The decrypted vault for this session.
+struct UnlockedVault {
+    /// The root secret, kept to derive further accounts on demand; zeroized on drop.
+    mnemonic: Zeroizing<String>,
+    accounts: Vec<UnlockedAccount>,
+    active: usize,
+}
+
+fn vault_state() -> &'static Mutex<Option<UnlockedVault>> {
+    static V: OnceLock<Mutex<Option<UnlockedVault>>> = OnceLock::new();
+    V.get_or_init(|| Mutex::new(None))
+}
+
+/// The active account's address, or `None` when the wallet is locked / empty.
+fn active_account_address() -> Option<String> {
+    let guard = vault_state().lock().unwrap();
+    let v = guard.as_ref()?;
+    v.accounts.get(v.active).map(|a| a.address.clone())
+}
+
+/// Run `f` with the active account's signing key. Errors clearly when locked,
+/// instead of silently falling back to any default key.
+fn with_active_key<T>(f: impl FnOnce(&SigningKey) -> T) -> Result<T, String> {
+    let guard = vault_state().lock().unwrap();
+    let v = guard.as_ref().ok_or("wallet is locked")?;
+    let acct = v.accounts.get(v.active).ok_or("no active account")?;
+    Ok(f(&acct.key))
+}
+
+/// Derive `count` (≥1) accounts from `mnemonic` and install them as THE unlocked
+/// vault, active = account 0. Shared by create/import/unlock and the e2e tests.
+/// Returns the public account metadata (for sealing into the keystore).
+fn install_unlocked_vault(mnemonic: &str, count: u32) -> Result<Vec<vault::AccountMeta>, String> {
+    let count = count.max(1);
+    let mut accounts = Vec::with_capacity(count as usize);
+    let mut metas = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let (key, address) = vault::derive_account(mnemonic, index)?;
+        metas.push(vault::AccountMeta { index, address: address.clone() });
+        accounts.push(UnlockedAccount { index, address, key });
+    }
+    *vault_state().lock().unwrap() = Some(UnlockedVault {
+        mnemonic: Zeroizing::new(mnemonic.to_string()),
+        accounts,
+        active: 0,
+    });
+    Ok(metas)
 }
 
 /// Decode a `personal_sign` message param. dApps usually send 0x-hex; some send a
@@ -83,8 +136,7 @@ fn personal_sign(message: &[u8]) -> Result<Value, String> {
     preimage.extend_from_slice(message);
     let digest = Keccak256::digest(&preimage);
 
-    let (signature, recovery_id) = active_signing_key()
-        .sign_prehash_recoverable(&digest)
+    let (signature, recovery_id) = with_active_key(|k| k.sign_prehash_recoverable(&digest))?
         .map_err(|e| format!("personal_sign: signing failed: {e}"))?;
 
     let mut sig = signature.to_bytes().to_vec(); // 64 bytes: r ‖ s
@@ -104,8 +156,10 @@ fn personal_sign(message: &[u8]) -> Result<Value, String> {
 // real chain state through the wallet and switch between built-in chains.
 // ---------------------------------------------------------------------------
 
-/// A throwaway demo account so dApps see a stable address until the real key
-/// vault lands. (Anvil/Hardhat account #0.)
+/// Anvil/Hardhat account #0 — the address the well-known test mnemonic derives at
+/// `m/44'/60'/0'/0/0`. Test-only fixture (the unlocked test vault uses that
+/// mnemonic), so production builds don't reference it.
+#[cfg(test)]
 const SPIKE_ACCOUNT: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
 
 /// A supported EVM chain. `rpc` is the default public node we forward read-only
@@ -181,9 +235,15 @@ enum WalletOutcome {
     SwitchChain(String),
 }
 
-/// Handle a wallet-namespaced method against the given `current` chain id.
-/// Pure: reads no globals, performs no I/O.
-fn handle_wallet_method(method: &str, params: &[Value], current: &str) -> Result<WalletOutcome, String> {
+/// Handle a wallet-namespaced method against the given `current` chain id and the
+/// active account (`None` when the wallet is locked). Pure: reads no globals, does
+/// no I/O — the caller supplies chain + account so this stays unit-testable.
+fn handle_wallet_method(
+    method: &str,
+    params: &[Value],
+    current: &str,
+    account: Option<&str>,
+) -> Result<WalletOutcome, String> {
     let chain_id_param = || -> Result<&str, String> {
         params
             .first()
@@ -193,8 +253,15 @@ fn handle_wallet_method(method: &str, params: &[Value], current: &str) -> Result
     };
 
     match method {
-        "eth_accounts" | "eth_requestAccounts" => Ok(WalletOutcome::Reply(json!([SPIKE_ACCOUNT]))),
-        "eth_coinbase" => Ok(WalletOutcome::Reply(json!(SPIKE_ACCOUNT))),
+        // EIP-1193: an unlocked wallet reports its active account; a locked one
+        // reports none (the dApp shows a "connect" prompt). We never expose a key
+        // here — only the public address.
+        "eth_accounts" | "eth_requestAccounts" => Ok(WalletOutcome::Reply(
+            account.map(|a| json!([a])).unwrap_or_else(|| json!([])),
+        )),
+        "eth_coinbase" => Ok(WalletOutcome::Reply(
+            account.map(|a| json!(a)).unwrap_or(Value::Null),
+        )),
         "eth_chainId" => Ok(WalletOutcome::Reply(json!(current))),
         "net_version" => {
             // current is always a registry id (valid hex) — surface a real error
@@ -362,6 +429,11 @@ async fn handle_signing<R: Runtime>(
     params: &[Value],
     origin: &str,
 ) -> Result<Value, String> {
+    // Refuse before opening an approval window if there's no key to sign with —
+    // otherwise the user would approve a request we can't fulfill.
+    if active_account_address().is_none() {
+        return Err("wallet is locked".to_string());
+    }
     if method != "personal_sign" {
         return Err(format!(
             "{method} not implemented yet (signing lands incrementally; personal_sign first)"
@@ -396,7 +468,8 @@ async fn handle_rpc<R: Runtime>(
     match route_method(method) {
         Route::Wallet => {
             let current = current_chain().lock().unwrap().clone();
-            match handle_wallet_method(method, params, &current)? {
+            let account = active_account_address();
+            match handle_wallet_method(method, params, &current, account.as_deref())? {
                 WalletOutcome::Reply(v) => Ok(v),
                 WalletOutcome::SwitchChain(new_id) => {
                     *current_chain().lock().unwrap() = new_id.clone();
@@ -654,6 +727,215 @@ fn get_active_chain() -> String {
     current_chain().lock().unwrap().clone()
 }
 
+// ---------------------------------------------------------------------------
+// Vault commands (shell-only).
+//
+// These take the user's password (typed into the TRUSTED shell UI) and manage the
+// encrypted keystore. They are granted ONLY to the shell webview (default.json +
+// permissions/vault.toml) — a dApp can never reach them, so a page can't create,
+// unlock, or read the wallet. The keystore file lives in the OS app-data dir,
+// NEVER in the repo (密钥安全).
+// ---------------------------------------------------------------------------
+
+const KEYSTORE_FILE: &str = "vault.json";
+
+fn keystore_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(dir.join(KEYSTORE_FILE))
+}
+
+fn read_keystore(path: &Path) -> Result<Option<vault::Keystore>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(
+            serde_json::from_slice(&bytes).map_err(|e| format!("corrupt keystore: {e}"))?,
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("reading keystore: {e}")),
+    }
+}
+
+fn write_keystore(path: &Path, ks: &vault::Keystore) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("creating app dir: {e}"))?;
+    }
+    let json = serde_json::to_vec_pretty(ks).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| format!("writing keystore: {e}"))
+}
+
+#[derive(Serialize)]
+struct VaultStatus {
+    /// A keystore file exists on disk.
+    exists: bool,
+    /// The wallet is unlocked in memory this session.
+    unlocked: bool,
+    /// The active address (when unlocked) or the first stored address (when locked,
+    /// for display), if any.
+    address: Option<String>,
+    /// All unlocked account addresses (empty when locked).
+    accounts: Vec<String>,
+    /// Index of the active account among `accounts`.
+    active: usize,
+}
+
+/// Newly created wallet — returns the mnemonic ONCE so the trusted shell can show
+/// the backup screen. (The dApp boundary never sees this; vault commands are
+/// shell-only.)
+#[derive(Serialize)]
+struct NewVault {
+    address: String,
+    mnemonic: String,
+}
+
+/// Whether a vault exists / is unlocked, plus the visible address(es).
+#[tauri::command]
+fn vault_status<R: Runtime>(app: AppHandle<R>) -> Result<VaultStatus, String> {
+    let on_disk = read_keystore(&keystore_path(&app)?)?;
+    let guard = vault_state().lock().unwrap();
+    let unlocked = guard.as_ref();
+    let address = unlocked
+        .and_then(|v| v.accounts.get(v.active))
+        .map(|a| a.address.clone())
+        .or_else(|| {
+            on_disk
+                .as_ref()
+                .and_then(|k| k.accounts.first())
+                .map(|a| a.address.clone())
+        });
+    Ok(VaultStatus {
+        exists: on_disk.is_some(),
+        unlocked: unlocked.is_some(),
+        address,
+        accounts: unlocked
+            .map(|v| v.accounts.iter().map(|a| a.address.clone()).collect())
+            .unwrap_or_default(),
+        active: unlocked.map(|v| v.active).unwrap_or(0),
+    })
+}
+
+/// Create a brand-new wallet: generate a mnemonic, seal it under `password`, write
+/// the keystore, and unlock it in memory. Refuses to overwrite an existing vault.
+/// Returns the mnemonic for the one-time backup screen.
+#[tauri::command]
+fn create_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<NewVault, String> {
+    if password.len() < 8 {
+        return Err("password must be at least 8 characters".to_string());
+    }
+    let path = keystore_path(&app)?;
+    if read_keystore(&path)?.is_some() {
+        return Err("a wallet already exists".to_string());
+    }
+    let mnemonic = vault::generate_mnemonic()?;
+    let metas = install_unlocked_vault(&mnemonic, 1)?;
+    let ks = vault::seal(&password, &mnemonic, metas)?;
+    write_keystore(&path, &ks)?;
+    let address = active_account_address().ok_or("vault install failed")?;
+    Ok(NewVault { address, mnemonic })
+}
+
+/// Import an existing wallet from a recovery phrase, seal it under `password`, and
+/// unlock it. Refuses to overwrite an existing vault. Returns the active address.
+#[tauri::command]
+fn import_vault<R: Runtime>(
+    app: AppHandle<R>,
+    password: String,
+    mnemonic: String,
+) -> Result<String, String> {
+    if password.len() < 8 {
+        return Err("password must be at least 8 characters".to_string());
+    }
+    vault::validate_mnemonic(&mnemonic)?;
+    let path = keystore_path(&app)?;
+    if read_keystore(&path)?.is_some() {
+        return Err("a wallet already exists".to_string());
+    }
+    let metas = install_unlocked_vault(&mnemonic, 1)?;
+    let ks = vault::seal(&password, &mnemonic, metas)?;
+    write_keystore(&path, &ks)?;
+    active_account_address().ok_or_else(|| "vault install failed".to_string())
+}
+
+/// Unlock the on-disk vault with `password`. A wrong password fails the AEAD tag
+/// check and surfaces as "incorrect password". Returns the active address.
+#[tauri::command]
+fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<String, String> {
+    let ks = read_keystore(&keystore_path(&app)?)?.ok_or("no wallet to unlock")?;
+    let mnemonic = vault::open(&password, &ks)?;
+    let count = ks.accounts.len().max(1) as u32;
+    let metas = install_unlocked_vault(&mnemonic, count)?;
+    // Integrity: the addresses we just derived must match what the keystore recorded.
+    for (got, want) in metas.iter().zip(ks.accounts.iter()) {
+        if got.address != want.address {
+            *vault_state().lock().unwrap() = None;
+            return Err("keystore integrity check failed".to_string());
+        }
+    }
+    active_account_address().ok_or_else(|| "unlock failed".to_string())
+}
+
+/// Lock the wallet: drop all decrypted key material from memory.
+#[tauri::command]
+fn lock_vault() {
+    *vault_state().lock().unwrap() = None;
+}
+
+/// Switch the active account (feature ①: 切换钱包地址). Pushes EIP-1193
+/// `accountsChanged` to open dApps. Returns the new active address.
+#[tauri::command]
+fn select_account<R: Runtime>(app: AppHandle<R>, index: usize) -> Result<String, String> {
+    let address = {
+        let mut guard = vault_state().lock().unwrap();
+        let v = guard.as_mut().ok_or("wallet is locked")?;
+        if index >= v.accounts.len() {
+            return Err(format!("account index {index} out of range"));
+        }
+        v.active = index;
+        v.accounts[index].address.clone()
+    };
+    push_accounts_changed(&app, Some(&address));
+    Ok(address)
+}
+
+/// Derive the next HD account, persist it to the keystore's (plaintext) account
+/// list, and return its address. The encrypted mnemonic is unchanged, so no
+/// password is needed to add an account.
+#[tauri::command]
+fn add_account<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    let (address, metas) = {
+        let mut guard = vault_state().lock().unwrap();
+        let v = guard.as_mut().ok_or("wallet is locked")?;
+        let next_index = v.accounts.iter().map(|a| a.index).max().map_or(0, |m| m + 1);
+        let mnemonic = v.mnemonic.clone();
+        let (key, address) = vault::derive_account(&mnemonic, next_index)?;
+        v.accounts.push(UnlockedAccount { index: next_index, address: address.clone(), key });
+        let metas = v
+            .accounts
+            .iter()
+            .map(|a| vault::AccountMeta { index: a.index, address: a.address.clone() })
+            .collect::<Vec<_>>();
+        (address, metas)
+    };
+    // Persist the grown account list (public metadata only — ciphertext untouched).
+    let path = keystore_path(&app)?;
+    if let Some(mut ks) = read_keystore(&path)? {
+        ks.accounts = metas;
+        write_keystore(&path, &ks)?;
+    }
+    Ok(address)
+}
+
+/// Push an EIP-1193 `accountsChanged` to every open dApp tab (same eval-push
+/// mechanism as `chainChanged`, so dApps keep ONLY allow-wallet-request).
+fn push_accounts_changed<R: Runtime>(app: &AppHandle<R>, address: Option<&str>) {
+    let accounts = address.map(|a| vec![a]).unwrap_or_default();
+    let payload = serde_json::to_string(&accounts).unwrap_or_else(|_| "[]".into());
+    let js = format!("window.__autoWalletPush && window.__autoWalletPush('accountsChanged', {payload});");
+    for (label, webview) in app.webviews() {
+        if label.starts_with("dapp-") {
+            let _ = webview.eval(js.clone());
+        }
+    }
+}
+
 /// The app context (config, assets, baked-in ACL from capabilities/ + permissions/).
 /// `generate_context!` defines a one-per-crate `_EMBED_INFO_PLIST` static, so it must
 /// be expanded at exactly one call site. Keeping it in this single generic fn lets both
@@ -706,7 +988,14 @@ pub fn run() {
             hide_dapp,
             close_dapp,
             set_active_chain,
-            get_active_chain
+            get_active_chain,
+            vault_status,
+            create_vault,
+            import_vault,
+            unlock_vault,
+            lock_vault,
+            select_account,
+            add_account
         ])
         .setup(|app| {
             // Container window (no webview of its own).
@@ -812,26 +1101,40 @@ mod tests {
     }
 
     #[test]
-    fn wallet_accounts_and_chain_id() {
+    fn wallet_accounts_reflect_unlock_state() {
+        // Unlocked: report the active account.
         assert_eq!(
-            handle_wallet_method("eth_accounts", &[], "0x1").unwrap(),
+            handle_wallet_method("eth_accounts", &[], "0x1", Some(SPIKE_ACCOUNT)).unwrap(),
             WalletOutcome::Reply(json!([SPIKE_ACCOUNT]))
         );
         assert_eq!(
-            handle_wallet_method("eth_coinbase", &[], "0x1").unwrap(),
+            handle_wallet_method("eth_coinbase", &[], "0x1", Some(SPIKE_ACCOUNT)).unwrap(),
             WalletOutcome::Reply(json!(SPIKE_ACCOUNT))
         );
-        // eth_chainId / net_version reflect the passed-in current chain
+        // Locked: no account is exposed (dApp shows a connect prompt).
         assert_eq!(
-            handle_wallet_method("eth_chainId", &[], "0x2105").unwrap(),
+            handle_wallet_method("eth_accounts", &[], "0x1", None).unwrap(),
+            WalletOutcome::Reply(json!([]))
+        );
+        assert_eq!(
+            handle_wallet_method("eth_coinbase", &[], "0x1", None).unwrap(),
+            WalletOutcome::Reply(Value::Null)
+        );
+    }
+
+    #[test]
+    fn wallet_chain_id_reflects_current() {
+        // eth_chainId / net_version reflect the passed-in current chain (account irrelevant).
+        assert_eq!(
+            handle_wallet_method("eth_chainId", &[], "0x2105", None).unwrap(),
             WalletOutcome::Reply(json!("0x2105"))
         );
         assert_eq!(
-            handle_wallet_method("net_version", &[], "0x2105").unwrap(),
+            handle_wallet_method("net_version", &[], "0x2105", None).unwrap(),
             WalletOutcome::Reply(json!("8453")) // 0x2105 == 8453
         );
         assert_eq!(
-            handle_wallet_method("net_version", &[], "0x89").unwrap(),
+            handle_wallet_method("net_version", &[], "0x89", None).unwrap(),
             WalletOutcome::Reply(json!("137")) // 0x89 == 137
         );
     }
@@ -842,6 +1145,7 @@ mod tests {
             "wallet_switchEthereumChain",
             &[json!({ "chainId": "0xa4b1" })],
             "0x1",
+            None,
         )
         .unwrap();
         assert_eq!(out, WalletOutcome::SwitchChain("0xa4b1".to_string()));
@@ -851,11 +1155,12 @@ mod tests {
             "wallet_switchEthereumChain",
             &[json!({ "chainId": "0xdead" })],
             "0x1",
+            None,
         )
         .is_err());
 
         // missing chainId param is a hard error, not a silent default
-        assert!(handle_wallet_method("wallet_switchEthereumChain", &[], "0x1").is_err());
+        assert!(handle_wallet_method("wallet_switchEthereumChain", &[], "0x1", None).is_err());
     }
 }
 
@@ -883,6 +1188,12 @@ mod e2e {
     use tauri::webview::InvokeRequest;
     use tauri::{WebviewWindow, WebviewWindowBuilder};
 
+    /// Anvil/Hardhat's well-known dev mnemonic — its m/44'/60'/0'/0/0 account is
+    /// SPIKE_ACCOUNT (the publicly-known Anvil #0). NOT a real secret. The
+    /// `wallet_guard` unlocks the test vault with it so account/signing tests sign
+    /// with a deterministic, recoverable key.
+    const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
+
     /// Build + leak one mock app with all commands registered. Uses the REAL app
     /// context (generate_context!) so the baked-in capabilities/permissions apply.
     /// A plain `cargo test` is a debug build, so Tauri treats it as dev (devUrl, no
@@ -900,7 +1211,14 @@ mod e2e {
                 hide_dapp,
                 close_dapp,
                 set_active_chain,
-                get_active_chain
+                get_active_chain,
+                vault_status,
+                create_vault,
+                import_vault,
+                unlock_vault,
+                lock_vault,
+                select_account,
+                add_account
             ])
             .build(build_context())
             .expect("failed to build mock app");
@@ -960,12 +1278,16 @@ mod e2e {
         invoke(wv, "wallet_request", json!({ "method": method, "params": params }))
     }
 
-    /// Serialize tests that touch the shared `pending()` registry, and clear it so
-    /// each starts clean (the registry is a process-global static).
-    fn approval_guard() -> std::sync::MutexGuard<'static, ()> {
+    /// Serialize every test that touches process-global wallet state and reset to a
+    /// known baseline: pending registry cleared, chain = Ethereum, and the vault
+    /// unlocked with the Anvil dev mnemonic (2 derived accounts). Returning the guard
+    /// keeps these tests from racing on the shared statics.
+    fn wallet_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: Mutex<()> = Mutex::new(());
         let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         pending().lock().unwrap().clear();
+        *current_chain().lock().unwrap() = "0x1".into();
+        super::install_unlocked_vault(TEST_MNEMONIC, 2).expect("unlock test vault");
         g
     }
 
@@ -994,10 +1316,11 @@ mod e2e {
 
     #[test]
     fn e2e_pipeline_offline() {
+        let _guard = wallet_guard(); // unlocked vault + chain=0x1, serialized
         let wv = dapp_webview(build_app());
-        *current_chain().lock().unwrap() = "0x1".into();
 
         // Wallet-routed reads come back through the full invoke→command→handler path.
+        // eth_accounts now returns the UNLOCKED vault's active account (Anvil #0).
         assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([SPIKE_ACCOUNT]));
         assert_eq!(call(&wv, "eth_chainId", json!([])).unwrap(), json!("0x1"));
         assert_eq!(call(&wv, "net_version", json!([])).unwrap(), json!("1"));
@@ -1023,8 +1346,28 @@ mod e2e {
         // Unknown chain is rejected, current chain unchanged.
         assert!(call(&wv, "wallet_switchEthereumChain", json!([{ "chainId": "0xbadbad" }])).is_err());
         assert_eq!(call(&wv, "eth_chainId", json!([])).unwrap(), json!("0x2105"));
+    }
 
-        *current_chain().lock().unwrap() = "0x1".into();
+    /// A LOCKED wallet exposes no account and refuses to sign UP-FRONT — no approval
+    /// window opens, so the call returns immediately. Guarded so it can lock the
+    /// shared vault without racing other state-touching tests.
+    #[test]
+    fn e2e_locked_wallet_has_no_account_and_refuses_signing() {
+        let _guard = wallet_guard();
+        super::lock_vault(); // drop all decrypted keys from memory
+        let wv = dapp_webview(build_app());
+
+        // No account is exposed to dApps when locked.
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([]));
+        assert_eq!(call(&wv, "eth_coinbase", json!([])).unwrap(), Value::Null);
+
+        // personal_sign is rejected immediately with a "locked" error — BEFORE any
+        // approval, so no worker thread / approval webview is needed here.
+        let err = call(&wv, "personal_sign", json!(["0x48656c6c6f", SPIKE_ACCOUNT])).unwrap_err();
+        assert!(
+            err.as_str().unwrap_or_default().contains("locked"),
+            "expected a locked error, got: {err}"
+        );
     }
 
     #[test]
@@ -1065,7 +1408,7 @@ mod e2e {
     /// signing account — proving the whole approve→sign path end-to-end.
     #[test]
     fn e2e_personal_sign_approve() {
-        let _guard = approval_guard();
+        let _guard = wallet_guard();
         let app = build_app();
         let dapp = dapp_webview(app);
         let approval = approval_webview(app); // exists → request_approval reuses it
@@ -1104,7 +1447,7 @@ mod e2e {
     /// Rejecting yields the EIP-1193 user-rejected (4001) error to the dApp.
     #[test]
     fn e2e_personal_sign_reject() {
-        let _guard = approval_guard();
+        let _guard = wallet_guard();
         let app = build_app();
         let dapp = dapp_webview(app);
         let approval = approval_webview(app);
@@ -1129,7 +1472,7 @@ mod e2e {
     /// (e.g. to self-approve) is denied by Tauri before reaching our handler.
     #[test]
     fn e2e_dapp_cannot_approve() {
-        let _guard = approval_guard();
+        let _guard = wallet_guard();
         let app = build_app();
         let dapp = dapp_webview(app);
 
