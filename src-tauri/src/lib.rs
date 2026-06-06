@@ -20,6 +20,9 @@ use zeroize::Zeroizing;
 // Encrypted HD key vault (BIP-39/44 + Argon2id/AES-GCM). Pure crypto core; the
 // in-memory unlocked state + file I/O + Tauri commands live below in this file.
 mod vault;
+// EIP-1559 transaction encoding + signing (pure). eth_sendTransaction fills the
+// fields from the node in lib.rs, then builds + signs here.
+mod eth_tx;
 
 #[derive(Serialize)]
 struct Wallet {
@@ -420,9 +423,9 @@ fn resolve_request<R: Runtime>(app: &AppHandle<R>, id: &str, approved: bool) -> 
     Ok(())
 }
 
-/// Drive a signing method through the approval flow. Only `personal_sign` is
-/// wired for now; other signing methods are rejected up-front (no point opening
-/// an approval window for something we can't yet fulfill).
+/// Drive a signing method through the approval flow. `personal_sign` and
+/// `eth_sendTransaction` are wired; other signing methods are rejected up-front
+/// (no point opening an approval window for something we can't yet fulfill).
 async fn handle_signing<R: Runtime>(
     app: &AppHandle<R>,
     method: &str,
@@ -434,26 +437,154 @@ async fn handle_signing<R: Runtime>(
     if active_account_address().is_none() {
         return Err("wallet is locked".to_string());
     }
-    if method != "personal_sign" {
-        return Err(format!(
-            "{method} not implemented yet (signing lands incrementally; personal_sign first)"
-        ));
+
+    match method {
+        "personal_sign" => {
+            let message =
+                decode_message_param(params.first().ok_or("personal_sign: missing message param")?)?;
+            let req = PendingRequest {
+                id: next_request_id(),
+                method: method.to_string(),
+                origin: origin.to_string(),
+                summary: preview_message(&message),
+            };
+            if request_approval(app, req).await {
+                personal_sign(&message)
+            } else {
+                Err("User rejected the request (4001)".to_string())
+            }
+        }
+        "eth_sendTransaction" => {
+            let tx = params
+                .first()
+                .ok_or("eth_sendTransaction: missing transaction param")?
+                .clone();
+            let req = PendingRequest {
+                id: next_request_id(),
+                method: method.to_string(),
+                origin: origin.to_string(),
+                summary: preview_tx(&tx),
+            };
+            if request_approval(app, req).await {
+                build_send_transaction(&tx).await
+            } else {
+                Err("User rejected the request (4001)".to_string())
+            }
+        }
+        other => Err(format!(
+            "{other} not implemented yet (signing lands incrementally)"
+        )),
     }
-    let message = decode_message_param(
-        params.first().ok_or("personal_sign: missing message param")?,
-    )?;
-    let req = PendingRequest {
-        id: next_request_id(),
-        method: method.to_string(),
-        origin: origin.to_string(),
-        summary: preview_message(&message),
-    };
-    if request_approval(app, req).await {
-        personal_sign(&message)
+}
+
+/// Pull a string field from the dApp's transaction object.
+fn tx_field<'a>(tx: &'a Value, key: &str) -> Option<&'a str> {
+    tx.get(key).and_then(|v| v.as_str())
+}
+
+/// Parse a 0x-hex quantity to u128 (used only for the fee arithmetic + summary).
+fn hex_to_u128(hex: &str) -> Result<u128, String> {
+    let s = hex.strip_prefix("0x").unwrap_or(hex);
+    u128::from_str_radix(if s.is_empty() { "0" } else { s }, 16)
+        .map_err(|e| format!("bad quantity {hex}: {e}"))
+}
+
+/// A human-readable summary of a transaction for the approval window. Display
+/// only — `build_send_transaction` re-parses and validates the real fields.
+fn preview_tx(tx: &Value) -> String {
+    let to = tx_field(tx, "to").unwrap_or("new contract");
+    let short_to = if to.len() > 12 { format!("{}…{}", &to[..6], &to[to.len() - 4..]) } else { to.to_string() };
+    let eth = hex_to_u128(tx_field(tx, "value").unwrap_or("0x0")).unwrap_or(0) as f64 / 1e18;
+    let has_data = tx_field(tx, "data").or_else(|| tx_field(tx, "input")).map_or(false, |d| d.len() > 2);
+    if has_data {
+        format!("Contract interaction → {short_to} ({eth:.4} ETH)")
     } else {
-        // EIP-1193 userRejectedRequest.
-        Err("User rejected the request (4001)".to_string())
+        format!("Send {eth:.4} ETH → {short_to}")
     }
+}
+
+/// Resolve the EIP-1559 fee fields: use the dApp's if both are given, else suggest
+/// `maxPriorityFeePerGas` from the node (1 gwei fallback) and
+/// `maxFeePerGas = 2*baseFee + priority` from the pending block's base fee.
+async fn resolve_fees(tx: &Value) -> Result<(String, String), String> {
+    if let (Some(prio), Some(max)) =
+        (tx_field(tx, "maxPriorityFeePerGas"), tx_field(tx, "maxFeePerGas"))
+    {
+        return Ok((prio.to_string(), max.to_string()));
+    }
+    let priority = match forward_to_node("eth_maxPriorityFeePerGas", &[]).await {
+        Ok(v) => v.as_str().map(str::to_string).unwrap_or_else(|| "0x3b9aca00".into()),
+        Err(_) => "0x3b9aca00".to_string(), // 1 gwei
+    };
+    let priority_wei = hex_to_u128(&priority)?;
+    let block = forward_to_node("eth_getBlockByNumber", &[json!("pending"), json!(false)]).await?;
+    let base_wei = block
+        .get("baseFeePerGas")
+        .and_then(|v| v.as_str())
+        .ok_or("chain has no baseFeePerGas (pre-EIP-1559 chain not supported)")?;
+    let base_wei = hex_to_u128(base_wei)?;
+    let max_fee = base_wei.saturating_mul(2).saturating_add(priority_wei);
+    Ok((format!("0x{priority_wei:x}"), format!("0x{max_fee:x}")))
+}
+
+/// Build, sign (Rust-side, with the active vault key), and broadcast an EIP-1559
+/// transaction. Missing fields (nonce/gas/fees) are filled from the chain node.
+/// Returns the broadcast tx hash from `eth_sendRawTransaction`.
+async fn build_send_transaction(tx: &Value) -> Result<Value, String> {
+    use eth_tx::{parse_address, parse_data, parse_quantity, Eip1559Tx};
+
+    let from = active_account_address().ok_or("wallet is locked")?;
+    if let Some(req_from) = tx_field(tx, "from") {
+        if !req_from.eq_ignore_ascii_case(&from) {
+            return Err(format!(
+                "transaction 'from' {req_from} is not the active account {from}"
+            ));
+        }
+    }
+
+    let chain_id_hex = current_chain().lock().unwrap().clone();
+    let to_hex = tx_field(tx, "to").unwrap_or("");
+    let value_hex = tx_field(tx, "value").unwrap_or("0x0");
+    let data_hex = tx_field(tx, "data").or_else(|| tx_field(tx, "input")).unwrap_or("0x");
+
+    let nonce_hex = match tx_field(tx, "nonce") {
+        Some(n) => n.to_string(),
+        None => forward_to_node("eth_getTransactionCount", &[json!(from), json!("pending")])
+            .await?
+            .as_str()
+            .ok_or("node returned a non-string nonce")?
+            .to_string(),
+    };
+
+    let gas_hex = match tx_field(tx, "gas") {
+        Some(g) => g.to_string(),
+        None => {
+            let call = json!({ "from": from, "to": to_hex, "value": value_hex, "data": data_hex });
+            forward_to_node("eth_estimateGas", &[call])
+                .await?
+                .as_str()
+                .ok_or("node returned a non-string gas estimate")?
+                .to_string()
+        }
+    };
+
+    let (priority_hex, max_fee_hex) = resolve_fees(tx).await?;
+
+    let tx1559 = Eip1559Tx {
+        chain_id: parse_quantity(&chain_id_hex)?,
+        nonce: parse_quantity(&nonce_hex)?,
+        max_priority_fee_per_gas: parse_quantity(&priority_hex)?,
+        max_fee_per_gas: parse_quantity(&max_fee_hex)?,
+        gas_limit: parse_quantity(&gas_hex)?,
+        to: parse_address(to_hex)?,
+        value: parse_quantity(value_hex)?,
+        data: parse_data(data_hex)?,
+    };
+
+    // Sign with the active vault key (Rust-side; never in a webview).
+    let (raw_tx, _local_hash) = with_active_key(|k| tx1559.sign(k))??;
+    // Broadcast; the node echoes the canonical transaction hash.
+    forward_to_node("eth_sendRawTransaction", &[json!(raw_tx)]).await
 }
 
 /// The single wallet backend entry point. `origin` is the trustworthy caller
@@ -1140,6 +1271,26 @@ mod tests {
     }
 
     #[test]
+    fn preview_tx_summarizes() {
+        // A value transfer reads as "Send N ETH → 0x…", shortening the address.
+        let send = json!({
+            "to": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            "value": "0xde0b6b3a7640000" // 1e18 wei = 1 ETH
+        });
+        let s = preview_tx(&send);
+        assert!(s.contains("Send"), "got: {s}");
+        assert!(s.contains("1.0000 ETH"), "got: {s}");
+        assert!(s.contains("0x7099…79c8"), "got: {s}");
+
+        // A call with data reads as a contract interaction.
+        let call = json!({
+            "to": "0x1111111111111111111111111111111111111111",
+            "data": "0xa9059cbb"
+        });
+        assert!(preview_tx(&call).contains("Contract interaction"));
+    }
+
+    #[test]
     fn switch_known_chain_yields_directive_unknown_errors() {
         let out = handle_wallet_method(
             "wallet_switchEthereumChain",
@@ -1325,10 +1476,10 @@ mod e2e {
         assert_eq!(call(&wv, "eth_chainId", json!([])).unwrap(), json!("0x1"));
         assert_eq!(call(&wv, "net_version", json!([])).unwrap(), json!("1"));
 
-        // A not-yet-implemented signing method is rejected up-front (no approval
-        // window, returns immediately). personal_sign (which DOES wait for approval)
-        // is covered by the dedicated approval tests below.
-        let err = call(&wv, "eth_sendTransaction", json!([{ "to": SPIKE_ACCOUNT }])).unwrap_err();
+        // A not-yet-implemented signing method (eth_signTypedData_v4) is rejected
+        // up-front (no approval window, returns immediately). personal_sign and
+        // eth_sendTransaction (which DO wait for approval) are covered separately.
+        let err = call(&wv, "eth_signTypedData_v4", json!([SPIKE_ACCOUNT, "{}"])).unwrap_err();
         assert!(
             err.as_str().unwrap_or_default().contains("not implemented"),
             "expected not-implemented error, got: {err}"
@@ -1465,6 +1616,63 @@ mod e2e {
             err.as_str().unwrap_or_default().contains("4001"),
             "expected user-rejected (4001), got: {err}"
         );
+    }
+
+    /// eth_sendTransaction end-to-end against a LIVE node. All fields are supplied
+    /// (with a deliberately low nonce so the node rejects WITHOUT broadcasting), so
+    /// only eth_sendRawTransaction hits the node — exactly the path that proves our
+    /// RLP + signature are valid on-chain. A "nonce too low" / "insufficient funds"
+    /// rejection happens only AFTER the node decoded the tx and recovered the
+    /// sender from the signature, so it proves correctness; a decode/RLP/sender
+    /// error never gets that far.
+    #[test]
+    #[ignore = "broadcasts to a live public RPC node; run with `cargo test -- --ignored`"]
+    fn e2e_send_transaction_live() {
+        let _guard = wallet_guard(); // unlocked Anvil vault, chain 0x1
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        let approval = approval_webview(app);
+
+        let tx = json!([{
+            "from": SPIKE_ACCOUNT,
+            "to": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            "value": "0x0",
+            "gas": "0x5208",
+            "maxPriorityFeePerGas": "0x3b9aca00", // 1 gwei
+            "maxFeePerGas": "0x77359400",         // 2 gwei
+            "nonce": "0x0"
+        }]);
+
+        let dapp_for_thread = dapp.clone();
+        let sender = std::thread::spawn(move || call(&dapp_for_thread, "eth_sendTransaction", tx));
+
+        let id = wait_for_pending_id();
+        invoke(&approval, "approve_request", json!({ "id": id })).expect("approve ok");
+
+        match sender.join().unwrap() {
+            // A funded sender at the right nonce would actually broadcast → tx hash.
+            Ok(hash) => assert!(hash.as_str().unwrap_or("").starts_with("0x")),
+            Err(e) => {
+                let msg = e.as_str().unwrap_or("").to_lowercase();
+                // These all occur AFTER the node decoded the tx and recovered the
+                // sender (nonce / funds / fee checks) — they prove valid encoding.
+                let post_decode = msg.contains("nonce")
+                    || msg.contains("insufficient funds")
+                    || msg.contains("balance")
+                    || msg.contains("fee")
+                    || msg.contains("underpriced");
+                // A decode/signature failure would surface as one of these instead.
+                let encoding_error = msg.contains("rlp")
+                    || msg.contains("decode")
+                    || msg.contains("invalid sender")
+                    || msg.contains("typed transaction")
+                    || msg.contains("malformed");
+                assert!(
+                    post_decode && !encoding_error,
+                    "node rejected for an ENCODING reason, not a post-decode check: {msg}"
+                );
+            }
+        }
     }
 
     /// SECURITY: the dapp webview must NOT be able to approve requests — the ACL
