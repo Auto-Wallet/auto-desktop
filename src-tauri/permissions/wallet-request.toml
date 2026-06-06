@@ -1,0 +1,6 @@
+# Permission for the app-defined `wallet_request` command so it can be granted
+# to remote dApp webviews via a capability (bare identifier, no plugin prefix).
+[[permission]]
+identifier = "allow-wallet-request"
+description = "Allow remote dApp webviews to call the wallet_request bridge command."
+commands.allow = ["wallet_request"]

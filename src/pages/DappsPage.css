@@ -1,0 +1,193 @@
+.dapps {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 28px 32px 40px;
+}
+
+.dapps-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+.dapps-head h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.search-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-sm);
+}
+.search-wrap:focus-within {
+  border-color: var(--indigo);
+  box-shadow: 0 0 0 3px var(--indigo-ring);
+}
+.search-icon {
+  color: var(--ink-3);
+  font-size: 17px;
+}
+.search {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  outline: none;
+}
+.search-add {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--indigo);
+  color: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.search-add:hover {
+  background: var(--indigo-2);
+}
+
+.dapps-error {
+  margin: -8px 0 16px;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dapps-empty {
+  padding: 48px 0;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 14px;
+}
+
+/* ----- Card grid ----- */
+.dapp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 14px;
+}
+
+.dapp-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+.dapp-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-mid);
+}
+
+.card-top {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  justify-content: space-between;
+}
+.pin,
+.remove {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ink-4);
+}
+.pin:hover,
+.remove:hover {
+  background: var(--bg-soft);
+  color: var(--ink-2);
+}
+.pin.on {
+  color: var(--coral);
+}
+.remove {
+  font-size: 18px;
+  opacity: 0;
+}
+.dapp-card:hover .remove {
+  opacity: 1;
+}
+
+.dapp-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--bg-soft);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+  margin-top: 6px;
+}
+.dapp-logo.fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--indigo);
+  background: var(--indigo-soft);
+}
+
+.dapp-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name-edit {
+  width: 100%;
+  text-align: center;
+  border: 1px solid var(--indigo);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  outline: none;
+  padding: 1px 4px;
+}
+.dapp-host {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

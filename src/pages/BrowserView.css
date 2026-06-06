@@ -1,0 +1,124 @@
+.browser {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  min-height: 52px;
+  padding: 0 14px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.back {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-mid);
+  background: var(--bg-elevated);
+  border-radius: var(--r-sm);
+  font-size: 20px;
+  line-height: 1;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.back:hover {
+  background: var(--bg-soft);
+}
+
+.url-bar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.url-favicon {
+  border-radius: 4px;
+  flex: none;
+}
+.url-text {
+  font-size: 13px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chips {
+  display: flex;
+  gap: 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  font-size: 12.5px;
+  font-weight: 500;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-mid);
+  color: var(--ink);
+}
+.chip.account {
+  font-family: var(--font-mono);
+}
+.chip.chain select {
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  outline: none;
+}
+.chain-dot-sm {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot, var(--indigo));
+  flex: none;
+}
+
+.browser-content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+.dapp-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+}
+.frame-note {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: 520px;
+  padding: 9px 14px;
+  background: rgba(26, 29, 38, 0.86);
+  color: #eef0f4;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+.frame-note code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}

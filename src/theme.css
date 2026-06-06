@@ -1,0 +1,71 @@
+/* Brand theme tokens — one source of truth for the shell and the approval
+ * window. On-brand with the Auto Wallet landing page (indigo + coral, light).
+ * Native system font (SF on macOS) keeps the bundle tiny — no web fonts. */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f8f9fb;
+  --bg-elevated: #ffffff;
+  --bg-soft: #f1f3f7;
+  --bg-ink: #0f1119;
+
+  --border: #eef0f4;
+  --border-mid: #dfe2e8;
+  --border-strong: #c8cdd6;
+
+  --ink: #1a1d26;
+  --ink-2: #4b5160;
+  --ink-3: #7a8190;
+  --ink-4: #aab0bd;
+
+  --indigo: #4f46e5;
+  --indigo-2: #4338ca;
+  --indigo-soft: rgba(79, 70, 229, 0.08);
+  --indigo-ring: rgba(79, 70, 229, 0.2);
+
+  --coral: #f06449;
+  --coral-soft: rgba(240, 100, 73, 0.1);
+
+  --success: #16a34a;
+  --success-bg: rgba(22, 163, 74, 0.1);
+  --danger: #dc2626;
+  --danger-bg: rgba(220, 38, 38, 0.08);
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-pill: 100px;
+
+  --shadow-sm: 0 1px 3px rgba(15, 17, 25, 0.06), 0 1px 2px rgba(15, 17, 25, 0.04);
+  --shadow-md: 0 6px 18px rgba(15, 17, 25, 0.08), 0 1px 3px rgba(15, 17, 25, 0.04);
+  --shadow-lg: 0 24px 60px rgba(15, 17, 25, 0.1), 0 4px 12px rgba(15, 17, 25, 0.06);
+
+  /* Aliases kept for ApprovalView.css. */
+  --text: var(--ink);
+  --muted: var(--ink-3);
+  --accent: var(--indigo);
+
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+    "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}

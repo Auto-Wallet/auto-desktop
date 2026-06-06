@@ -1,0 +1,32 @@
+# Permissions for the embedded-dApp-browser controls. Granted ONLY to the
+# trusted "shell" webview (capabilities/default.json) — never to the dapp webview,
+# so an untrusted page can never navigate or reposition any webview itself.
+[[permission]]
+identifier = "allow-open-dapp"
+description = "Allow the shell to navigate + show the dapp webview at a content rect."
+commands.allow = ["open_dapp"]
+
+[[permission]]
+identifier = "allow-set-dapp-bounds"
+description = "Allow the shell to reposition/resize a dapp tab webview on layout changes."
+commands.allow = ["set_dapp_bounds"]
+
+[[permission]]
+identifier = "allow-hide-dapp"
+description = "Allow the shell to hide a dapp tab webview when switching tabs/pages."
+commands.allow = ["hide_dapp"]
+
+[[permission]]
+identifier = "allow-close-dapp"
+description = "Allow the shell to close (destroy) a dapp tab webview when its tab is closed."
+commands.allow = ["close_dapp"]
+
+[[permission]]
+identifier = "allow-set-active-chain"
+description = "Allow the shell to set the active wallet network and push chainChanged to dApps."
+commands.allow = ["set_active_chain"]
+
+[[permission]]
+identifier = "allow-get-active-chain"
+description = "Allow the shell to read the active wallet network for the chain selector."
+commands.allow = ["get_active_chain"]

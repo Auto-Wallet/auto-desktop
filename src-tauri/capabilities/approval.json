@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "approval",
+  "description": "Trusted local approval window: core UI + the approve/reject/list commands for pending signing requests. Deliberately NOT granted wallet_request, and the dapp webview is deliberately NOT granted these — that separation is the anti-self-approval boundary.",
+  "webviews": ["approval"],
+  "permissions": [
+    "core:default",
+    "allow-approve-request",
+    "allow-reject-request",
+    "allow-get-pending-requests"
+  ]
+}

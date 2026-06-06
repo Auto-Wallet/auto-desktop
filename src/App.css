@@ -1,0 +1,148 @@
+.app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg);
+}
+
+/* ----- Sidebar ----- */
+.sidebar {
+  width: 232px;
+  min-width: 232px;
+  height: 100%;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 12px;
+  gap: 4px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 16px;
+}
+
+.brand-mark {
+  display: block;
+  border-radius: 8px;
+}
+
+.brand-name {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 10px 11px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.nav-item:hover {
+  background: var(--bg-soft);
+  color: var(--ink);
+}
+
+.nav-item.active {
+  background: var(--indigo-soft);
+  color: var(--indigo);
+  font-weight: 600;
+}
+
+.nav-icon {
+  width: 18px;
+  text-align: center;
+  font-size: 15px;
+}
+
+/* ----- Opened dApps section ----- */
+.nav-section {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  font-weight: 700;
+  color: var(--ink-4);
+  padding: 16px 10px 6px;
+}
+
+.nav-item.tab {
+  gap: 9px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+}
+.tab-favicon {
+  border-radius: 4px;
+  flex: none;
+  background: var(--bg-soft);
+}
+.tab-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-close {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  color: var(--ink-4);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.nav-item.tab:hover .tab-close {
+  opacity: 1;
+}
+.tab-close:hover {
+  background: var(--border-mid);
+  color: var(--ink);
+}
+
+.settings {
+  margin-top: auto;
+}
+
+/* ----- Main ----- */
+.main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: auto;
+}
+
+.placeholder {
+  padding: 40px;
+  color: var(--ink-3);
+}
+.placeholder h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  color: var(--ink);
+}

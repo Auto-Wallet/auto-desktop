@@ -1,0 +1,43 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Key safety — NEVER commit real key material (密钥安全).
+# The vault keystore lives in the OS app-data dir, not the repo, but guard against
+# any stray secrets and only ever commit *.example placeholders.
+.env
+.env.*
+!.env.example
+*.key
+*.keystore
+keystore*.json
+vault*.json
+!vault*.example.json
+secrets*.json
+mnemonic*.txt
+*.seed
+
+# Local-only artifacts
+/tmp-shots
+ad-shots/

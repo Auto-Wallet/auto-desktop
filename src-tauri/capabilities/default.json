@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Trusted local UI (shell webview): full core + the embedded-browser controls.",
+  "webviews": ["shell"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "allow-open-dapp",
+    "allow-set-dapp-bounds",
+    "allow-hide-dapp",
+    "allow-close-dapp",
+    "allow-set-active-chain",
+    "allow-get-active-chain"
+  ]
+}

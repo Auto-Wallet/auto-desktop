@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dapp",
+  "description": "Untrusted remote dApp tab webviews (one per open tab, labeled dapp-<id>). Granted ONLY the app-defined wallet_request bridge command (via allow-wallet-request) and nothing else — no core:*/fs:*/shell:*. This is the wallet's security boundary.",
+  "webviews": ["dapp-*"],
+  "remote": {
+    "urls": ["http://*", "https://*"]
+  },
+  "permissions": ["allow-wallet-request"]
+}

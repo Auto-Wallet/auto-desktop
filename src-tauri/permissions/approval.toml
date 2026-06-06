@@ -1,0 +1,17 @@
+# Permissions for the approval-window commands. Granted ONLY to the trusted
+# "approval" webview (capabilities/approval.json) — never to the dapp webview,
+# so a page can never approve/reject its own signing request.
+[[permission]]
+identifier = "allow-approve-request"
+description = "Allow the approval window to approve a pending signing request."
+commands.allow = ["approve_request"]
+
+[[permission]]
+identifier = "allow-reject-request"
+description = "Allow the approval window to reject a pending signing request."
+commands.allow = ["reject_request"]
+
+[[permission]]
+identifier = "allow-get-pending-requests"
+description = "Allow the approval window to list pending signing requests."
+commands.allow = ["get_pending_requests"]
