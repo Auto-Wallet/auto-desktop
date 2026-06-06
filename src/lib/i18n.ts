@@ -46,6 +46,32 @@ const DICT: Record<Lang, Record<string, string>> = {
     "lock.errShort": "Password must be at least 8 characters.",
     "lock.errMatch": "Passwords don't match.",
     "lock.errPhrase": "Enter a 12- or 24-word recovery phrase.",
+    // First-run chooser
+    "lock.chooseTitle": "How do you want to get started?",
+    "lock.optCreate": "Create a new wallet",
+    "lock.optCreateDesc": "Generate a new 12-word recovery phrase",
+    "lock.optImport": "Import an existing wallet",
+    "lock.optImportDesc": "Use a recovery phrase or private key",
+    "lock.optLedger": "Connect a Ledger",
+    "lock.optLedgerDesc": "Hardware wallet — no password needed",
+    // Import: phrase ↔ private key
+    "lock.importTab.phrase": "Recovery phrase",
+    "lock.importTab.privkey": "Private key",
+    "lock.privateKey": "Private key",
+    "lock.privkeyPlaceholder": "0x… (64 hex characters)",
+    "lock.errPrivkey": "Enter a 32-byte (64 hex character) private key.",
+    "lock.importPrivkey": "Import private key",
+    // Ledger (not wired yet — honest placeholder)
+    "lock.ledgerTitle": "Connect a Ledger",
+    "lock.ledgerSoon":
+      "Ledger hardware support is coming soon. It needs the native USB/HID backend, which isn't wired up yet. When it lands, you'll unlock with the device PIN — no app password required.",
+    // Unlock + forgot-password reset
+    "lock.forgot": "Forgot password?",
+    "lock.resetTitle": "Reset wallet",
+    "lock.resetWarn":
+      "This permanently deletes this wallet from AutoDesktop. The only way back in is your recovery phrase or private key. If you haven't backed it up, your funds are lost forever.",
+    "lock.resetAck": "I have my recovery phrase / private key backed up.",
+    "lock.resetConfirm": "Delete wallet",
 
     "dapps.title": "dApps",
     "dapps.search": "Search or paste a dApp URL…",
@@ -118,6 +144,32 @@ const DICT: Record<Lang, Record<string, string>> = {
     "lock.errShort": "密码至少 8 个字符。",
     "lock.errMatch": "两次输入的密码不一致。",
     "lock.errPhrase": "请输入 12 或 24 个助记词。",
+    // 首次使用选择
+    "lock.chooseTitle": "你想如何开始？",
+    "lock.optCreate": "创建新钱包",
+    "lock.optCreateDesc": "生成全新的 12 词助记词",
+    "lock.optImport": "导入已有钱包",
+    "lock.optImportDesc": "使用助记词或私钥",
+    "lock.optLedger": "连接 Ledger",
+    "lock.optLedgerDesc": "硬件钱包 —— 无需设置密码",
+    // 导入：助记词 ↔ 私钥
+    "lock.importTab.phrase": "助记词",
+    "lock.importTab.privkey": "私钥",
+    "lock.privateKey": "私钥",
+    "lock.privkeyPlaceholder": "0x…（64 位十六进制）",
+    "lock.errPrivkey": "请输入 32 字节（64 位十六进制）的私钥。",
+    "lock.importPrivkey": "导入私钥",
+    // Ledger（尚未接入 —— 如实占位）
+    "lock.ledgerTitle": "连接 Ledger",
+    "lock.ledgerSoon":
+      "Ledger 硬件钱包支持即将推出。它需要原生 USB/HID 后端，目前尚未接入。上线后你将用设备 PIN 解锁，无需设置应用密码。",
+    // 解锁 + 忘记密码重置
+    "lock.forgot": "忘记密码？",
+    "lock.resetTitle": "重置钱包",
+    "lock.resetWarn":
+      "此操作将从 AutoDesktop 永久删除该钱包。唯一的恢复途径是你的助记词或私钥。如果你没有备份，资产将永久丢失。",
+    "lock.resetAck": "我已备份助记词 / 私钥。",
+    "lock.resetConfirm": "删除钱包",
 
     "dapps.title": "应用",
     "dapps.search": "搜索或粘贴 dApp 网址…",

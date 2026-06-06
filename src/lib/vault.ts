@@ -107,6 +107,20 @@ export async function importVault(password: string, mnemonic: string): Promise<v
   set({ phase: "unlocked", address, accounts: [address], active: 0 });
 }
 
+/** Import a wallet from a single raw private key. Single-account (no HD derivation). */
+export async function importPrivateKey(password: string, privateKey: string): Promise<void> {
+  if (!isTauri()) {
+    demoCreated = true;
+    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0 });
+    return;
+  }
+  const address = await invoke<string>("import_private_key", {
+    password,
+    privateKey: privateKey.trim(),
+  });
+  set({ phase: "unlocked", address, accounts: [address], active: 0 });
+}
+
 /** Unlock the on-disk vault. Throws "incorrect password" on a bad password. */
 export async function unlockVault(password: string): Promise<void> {
   if (!isTauri()) {
@@ -127,6 +141,18 @@ export async function lockVault(): Promise<void> {
   }
   demoCreated = false;
   set({ phase: "absent", accounts: [], active: 0 });
+}
+
+/** Reset the wallet: delete the on-disk keystore and return to onboarding. The
+ *  "forgot password" escape hatch — IRREVERSIBLE; the caller must confirm first. */
+export async function resetVault(): Promise<void> {
+  if (isTauri()) {
+    await invoke("reset_vault");
+    await refreshVaultStatus();
+    return;
+  }
+  demoCreated = false;
+  set({ phase: "absent", address: null, accounts: [], active: 0 });
 }
 
 /** Switch the active HD account (pushes accountsChanged to dApps backend-side). */

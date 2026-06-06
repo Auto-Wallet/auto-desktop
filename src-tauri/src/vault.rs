@@ -83,6 +83,21 @@ pub fn derive_account(mnemonic: &str, index: u32) -> Result<(SigningKey, String)
     Ok((sk, address))
 }
 
+/// Parse a raw secp256k1 private key from `0x`-prefixed (or bare) 32-byte hex.
+/// Used by the "import private key" onboarding path. Rejects wrong-length input
+/// and out-of-range/zero scalars (fail loud — no silent fallback).
+pub fn parse_private_key(input: &str) -> Result<SigningKey, String> {
+    let body = input.trim().strip_prefix("0x").unwrap_or_else(|| input.trim());
+    if body.len() != 64 {
+        return Err("private key must be 32 bytes (64 hex characters)".to_string());
+    }
+    let bytes = Zeroizing::new(
+        hex::decode(body).map_err(|e| format!("private key is not valid hex: {e}"))?,
+    );
+    SigningKey::from_slice(&bytes)
+        .map_err(|_| "invalid private key (out of range or zero)".to_string())
+}
+
 /// BIP-32 master key: HMAC-SHA512("Bitcoin seed", seed) → (key, chain_code).
 fn master_key(seed: &[u8]) -> Result<([u8; 32], [u8; 32]), String> {
     let mut mac =
@@ -155,6 +170,10 @@ pub struct AccountMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Keystore {
     pub version: u32,
+    /// Secret kind: "hd" (BIP-39 mnemonic) or "privkey" (a single raw key).
+    /// Defaults to "hd" so keystores written before this field stay readable.
+    #[serde(default = "default_kind")]
+    pub kind: String,
     pub kdf: String,
     pub m_cost: u32,
     pub t_cost: u32,
@@ -164,6 +183,10 @@ pub struct Keystore {
     pub nonce: String,      // base64 (96-bit GCM nonce)
     pub ciphertext: String, // base64 (mnemonic sealed with AES-256-GCM)
     pub accounts: Vec<AccountMeta>,
+}
+
+fn default_kind() -> String {
+    "hd".to_string()
 }
 
 /// Stretch a password into a 256-bit key-encryption key with Argon2id.
@@ -184,14 +207,16 @@ fn derive_kek(
     Ok(kek)
 }
 
-/// Encrypt `mnemonic` under `password`, producing a keystore for the given accounts.
+/// Encrypt `secret` (a mnemonic when `kind == "hd"`, or a 0x-hex private key when
+/// `kind == "privkey"`) under `password`, producing a keystore for the given accounts.
 // `Nonce::from_slice` is aes-gcm 0.10's documented constructor; its deprecation
 // leaks from generic-array 0.14 (pinned transitively by k256 0.13 — 1.x isn't an
 // option), so suppress it locally rather than mask it across the module.
 #[allow(deprecated)]
 pub fn seal(
     password: &str,
-    mnemonic: &str,
+    secret: &str,
+    kind: &str,
     accounts: Vec<AccountMeta>,
 ) -> Result<Keystore, String> {
     let mut salt = [0u8; 16];
@@ -202,11 +227,12 @@ pub fn seal(
     let kek = derive_kek(password, &salt, ARGON_M_COST, ARGON_T_COST, ARGON_P_COST)?;
     let cipher = Aes256Gcm::new_from_slice(kek.as_slice()).map_err(|e| e.to_string())?;
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), mnemonic.as_bytes())
+        .encrypt(Nonce::from_slice(&nonce), secret.as_bytes())
         .map_err(|e| format!("encryption failed: {e}"))?;
 
     Ok(Keystore {
         version: 1,
+        kind: kind.to_string(),
         kdf: "argon2id".to_string(),
         m_cost: ARGON_M_COST,
         t_cost: ARGON_T_COST,
@@ -276,6 +302,45 @@ mod tests {
     }
 
     #[test]
+    fn parse_private_key_matches_anvil_account_0() {
+        // Anvil #0's well-known key must yield Anvil #0's address (oracle).
+        let key = parse_private_key(
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .unwrap();
+        let addr = crate::address_from_verifying_key(key.verifying_key());
+        assert_eq!(addr, "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
+        // The same key without the 0x prefix must parse identically.
+        let key2 = parse_private_key(
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .unwrap();
+        assert_eq!(key2.to_bytes(), key.to_bytes());
+    }
+
+    #[test]
+    fn parse_private_key_rejects_bad_input() {
+        assert!(parse_private_key("0x1234").is_err()); // too short
+        assert!(parse_private_key(&format!("0x{}", "zz".repeat(32))).is_err()); // not hex
+        assert!(parse_private_key(&format!("0x{}", "00".repeat(32))).is_err()); // zero key
+    }
+
+    #[test]
+    fn privkey_keystore_roundtrips_and_is_tagged() {
+        let key_hex = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        let accounts = vec![AccountMeta {
+            index: 0,
+            address: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266".to_string(),
+        }];
+        let ks = seal("pw-pw-pw-pw", key_hex, "privkey", accounts.clone()).unwrap();
+        assert_eq!(ks.kind, "privkey");
+        // The raw key must NOT leak into any plaintext field.
+        assert!(!ks.ciphertext.contains("ac0974"));
+        let recovered = open("pw-pw-pw-pw", &ks).unwrap();
+        assert_eq!(recovered.as_str(), key_hex);
+    }
+
+    #[test]
     fn invalid_mnemonic_is_rejected() {
         // Wrong checksum / not in wordlist.
         assert!(validate_mnemonic("not a real mnemonic phrase at all zzz").is_err());
@@ -288,9 +353,10 @@ mod tests {
             index: 0,
             address: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266".to_string(),
         }];
-        let ks = seal("correct horse battery staple", TEST_MNEMONIC, accounts.clone()).unwrap();
+        let ks = seal("correct horse battery staple", TEST_MNEMONIC, "hd", accounts.clone()).unwrap();
         // The mnemonic must NOT appear in any plaintext field.
         assert!(!ks.ciphertext.contains("test"));
+        assert_eq!(ks.kind, "hd");
         assert_eq!(ks.accounts, accounts);
 
         let recovered = open("correct horse battery staple", &ks).unwrap();
@@ -299,15 +365,15 @@ mod tests {
 
     #[test]
     fn open_with_wrong_password_fails() {
-        let ks = seal("right-password", TEST_MNEMONIC, vec![]).unwrap();
+        let ks = seal("right-password", TEST_MNEMONIC, "hd", vec![]).unwrap();
         let err = open("wrong-password", &ks).unwrap_err();
         assert!(err.contains("incorrect password"), "got: {err}");
     }
 
     #[test]
     fn each_seal_uses_a_fresh_salt_and_nonce() {
-        let a = seal("pw", TEST_MNEMONIC, vec![]).unwrap();
-        let b = seal("pw", TEST_MNEMONIC, vec![]).unwrap();
+        let a = seal("pw", TEST_MNEMONIC, "hd", vec![]).unwrap();
+        let b = seal("pw", TEST_MNEMONIC, "hd", vec![]).unwrap();
         // Same password + mnemonic must still produce different salt/nonce/ciphertext.
         assert_ne!(a.salt, b.salt);
         assert_ne!(a.nonce, b.nonce);

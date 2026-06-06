@@ -19,8 +19,10 @@
     "allow-vault-status",
     "allow-create-vault",
     "allow-import-vault",
+    "allow-import-private-key",
     "allow-unlock-vault",
     "allow-lock-vault",
+    "allow-reset-vault",
     "allow-select-account",
     "allow-add-account"
   ]

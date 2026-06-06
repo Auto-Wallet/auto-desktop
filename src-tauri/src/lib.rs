@@ -74,10 +74,20 @@ struct UnlockedAccount {
     key: SigningKey,
 }
 
+/// What kind of secret backs this vault — decides whether more accounts can be
+/// derived. An imported single private key has no mnemonic to walk.
+enum VaultSecret {
+    /// BIP-39 root mnemonic — kept to derive further HD accounts on demand;
+    /// zeroized on drop.
+    Mnemonic(Zeroizing<String>),
+    /// A single imported private key — the key lives in its `UnlockedAccount`;
+    /// there is nothing to derive from, so `add_account` is refused.
+    PrivateKey,
+}
+
 /// The decrypted vault for this session.
 struct UnlockedVault {
-    /// The root secret, kept to derive further accounts on demand; zeroized on drop.
-    mnemonic: Zeroizing<String>,
+    secret: VaultSecret,
     accounts: Vec<UnlockedAccount>,
     active: usize,
 }
@@ -116,8 +126,23 @@ fn install_unlocked_vault(mnemonic: &str, count: u32) -> Result<Vec<vault::Accou
         accounts.push(UnlockedAccount { index, address, key });
     }
     *vault_state().lock().unwrap() = Some(UnlockedVault {
-        mnemonic: Zeroizing::new(mnemonic.to_string()),
+        secret: VaultSecret::Mnemonic(Zeroizing::new(mnemonic.to_string())),
         accounts,
+        active: 0,
+    });
+    Ok(metas)
+}
+
+/// Install a single imported private key as THE unlocked vault. There is no
+/// mnemonic, so no further accounts can be derived (`add_account` refuses).
+/// Returns the single account's public metadata (for sealing into the keystore).
+fn install_privkey_vault(privkey_hex: &str) -> Result<Vec<vault::AccountMeta>, String> {
+    let key = vault::parse_private_key(privkey_hex)?;
+    let address = address_from_verifying_key(key.verifying_key());
+    let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
+    *vault_state().lock().unwrap() = Some(UnlockedVault {
+        secret: VaultSecret::PrivateKey,
+        accounts: vec![UnlockedAccount { index: 0, address, key }],
         active: 0,
     });
     Ok(metas)
@@ -1175,7 +1200,7 @@ fn create_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<NewVa
     }
     let mnemonic = vault::generate_mnemonic()?;
     let metas = install_unlocked_vault(&mnemonic, 1)?;
-    let ks = vault::seal(&password, &mnemonic, metas)?;
+    let ks = vault::seal(&password, &mnemonic, "hd", metas)?;
     write_keystore(&path, &ks)?;
     let address = active_account_address().ok_or("vault install failed")?;
     Ok(NewVault { address, mnemonic })
@@ -1198,7 +1223,34 @@ fn import_vault<R: Runtime>(
         return Err("a wallet already exists".to_string());
     }
     let metas = install_unlocked_vault(&mnemonic, 1)?;
-    let ks = vault::seal(&password, &mnemonic, metas)?;
+    let ks = vault::seal(&password, &mnemonic, "hd", metas)?;
+    write_keystore(&path, &ks)?;
+    active_account_address().ok_or_else(|| "vault install failed".to_string())
+}
+
+/// Import an existing wallet from a single raw private key (the "导入私钥"
+/// onboarding path), seal it under `password`, and unlock it. Refuses to overwrite
+/// an existing vault. Returns the active address. The resulting vault is single-
+/// account (no mnemonic to derive from).
+#[tauri::command]
+fn import_private_key<R: Runtime>(
+    app: AppHandle<R>,
+    password: String,
+    private_key: String,
+) -> Result<String, String> {
+    if password.len() < 8 {
+        return Err("password must be at least 8 characters".to_string());
+    }
+    // Validate + canonicalize to 0x-lowercase-hex before sealing, so unlock
+    // re-derives the same address deterministically.
+    let key = vault::parse_private_key(&private_key)?;
+    let key_hex = Zeroizing::new(format!("0x{}", hex::encode(key.to_bytes())));
+    let path = keystore_path(&app)?;
+    if read_keystore(&path)?.is_some() {
+        return Err("a wallet already exists".to_string());
+    }
+    let metas = install_privkey_vault(&key_hex)?;
+    let ks = vault::seal(&password, &key_hex, "privkey", metas)?;
     write_keystore(&path, &ks)?;
     active_account_address().ok_or_else(|| "vault install failed".to_string())
 }
@@ -1208,9 +1260,14 @@ fn import_vault<R: Runtime>(
 #[tauri::command]
 fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<String, String> {
     let ks = read_keystore(&keystore_path(&app)?)?.ok_or("no wallet to unlock")?;
-    let mnemonic = vault::open(&password, &ks)?;
-    let count = ks.accounts.len().max(1) as u32;
-    let metas = install_unlocked_vault(&mnemonic, count)?;
+    let secret = vault::open(&password, &ks)?;
+    // "privkey" vaults install the single imported key; everything else (incl.
+    // legacy keystores with no `kind`, defaulted to "hd") walks the HD path.
+    let metas = if ks.kind == "privkey" {
+        install_privkey_vault(&secret)?
+    } else {
+        install_unlocked_vault(&secret, ks.accounts.len().max(1) as u32)?
+    };
     // Integrity: the addresses we just derived must match what the keystore recorded.
     for (got, want) in metas.iter().zip(ks.accounts.iter()) {
         if got.address != want.address {
@@ -1225,6 +1282,22 @@ fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<Strin
 #[tauri::command]
 fn lock_vault() {
     *vault_state().lock().unwrap() = None;
+}
+
+/// Reset the wallet: drop in-memory keys AND delete the on-disk keystore, so the
+/// app returns to first-run onboarding. This is the "忘记密码" escape hatch — it is
+/// IRREVERSIBLE and destroys the only copy of the encrypted secret, so the UI must
+/// gate it behind an explicit, clearly-worded confirmation (funds are unrecoverable
+/// without the user's own mnemonic/key backup).
+#[tauri::command]
+fn reset_vault<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    *vault_state().lock().unwrap() = None;
+    let path = keystore_path(&app)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("removing keystore: {e}")),
+    }
 }
 
 /// Switch the active account (feature ①: 切换钱包地址). Pushes EIP-1193
@@ -1252,8 +1325,13 @@ fn add_account<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     let (address, metas) = {
         let mut guard = vault_state().lock().unwrap();
         let v = guard.as_mut().ok_or("wallet is locked")?;
+        let mnemonic = match &v.secret {
+            VaultSecret::Mnemonic(m) => m.clone(),
+            VaultSecret::PrivateKey => {
+                return Err("imported private-key wallets can't derive more accounts".to_string())
+            }
+        };
         let next_index = v.accounts.iter().map(|a| a.index).max().map_or(0, |m| m + 1);
-        let mnemonic = v.mnemonic.clone();
         let (key, address) = vault::derive_account(&mnemonic, next_index)?;
         v.accounts.push(UnlockedAccount { index: next_index, address: address.clone(), key });
         let metas = v
@@ -1345,8 +1423,10 @@ pub fn run() {
             vault_status,
             create_vault,
             import_vault,
+            import_private_key,
             unlock_vault,
             lock_vault,
+            reset_vault,
             select_account,
             add_account
         ])
@@ -1614,8 +1694,10 @@ mod e2e {
                 vault_status,
                 create_vault,
                 import_vault,
+                import_private_key,
                 unlock_vault,
                 lock_vault,
+                reset_vault,
                 select_account,
                 add_account
             ])
@@ -1767,6 +1849,32 @@ mod e2e {
         assert!(
             err.as_str().unwrap_or_default().contains("locked"),
             "expected a locked error, got: {err}"
+        );
+    }
+
+    /// An imported single private key behaves as a one-account wallet that exposes
+    /// exactly that address — and refuses `add_account` loudly (no mnemonic to walk,
+    /// so deriving a "next" account would be meaningless). Pure in-memory: never
+    /// touches the on-disk keystore (which resolves to the real user dir).
+    #[test]
+    fn e2e_privkey_vault_is_single_account_and_refuses_add() {
+        let _guard = wallet_guard();
+        // Anvil #0's well-known key → Anvil #0's address (SPIKE_ACCOUNT). NOT a secret.
+        super::install_privkey_vault(
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .expect("install privkey vault");
+
+        let app = build_app();
+        let wv = dapp_webview(app);
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([SPIKE_ACCOUNT]));
+
+        // add_account returns its refusal BEFORE any keystore I/O, so this stays
+        // disk-free. The error must name the real cause, not a silent no-op.
+        let err = super::add_account(app.handle().clone()).unwrap_err();
+        assert!(
+            err.contains("can't derive"),
+            "expected a 'can't derive more accounts' refusal, got: {err}"
         );
     }
 
