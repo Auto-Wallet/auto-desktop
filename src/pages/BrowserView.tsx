@@ -1,6 +1,6 @@
 import "./BrowserView.css";
 import { useEffect, useRef } from "react";
-import { CHAINS } from "../lib/chains";
+import { useChains } from "../lib/chains";
 import { shortAddress } from "../lib/format";
 import { useActiveAccount } from "../lib/accounts";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
@@ -21,7 +21,8 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   const label = dappLabel(tab.id);
   const account = useActiveAccount();
   const chainId = useActiveChain();
-  const chain = CHAINS.find((c) => c.id === chainId) ?? CHAINS[0];
+  const chains = useChains();
+  const chain = chains.find((c) => c.id === chainId) ?? chains[0];
   const contentRef = useRef<HTMLDivElement>(null);
   const native = isTauri();
 
@@ -60,7 +61,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
           <label className="chip chain" style={{ ["--dot" as string]: chain.color }}>
             <span className="chain-dot-sm" />
             <select value={chainId} onChange={(e) => void setActiveChain(e.target.value)}>
-              {CHAINS.map((c) => (
+              {chains.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>

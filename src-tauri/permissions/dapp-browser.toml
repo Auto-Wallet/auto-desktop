@@ -30,3 +30,23 @@ commands.allow = ["set_active_chain"]
 identifier = "allow-get-active-chain"
 description = "Allow the shell to read the active wallet network for the chain selector."
 commands.allow = ["get_active_chain"]
+
+[[permission]]
+identifier = "allow-get-chains"
+description = "Allow the shell to read the full chain registry (Settings network list + selectors)."
+commands.allow = ["get_chains"]
+
+[[permission]]
+identifier = "allow-add-chain"
+description = "Allow the shell to add a custom network."
+commands.allow = ["add_chain"]
+
+[[permission]]
+identifier = "allow-update-chain"
+description = "Allow the shell to edit an existing network's parameters."
+commands.allow = ["update_chain"]
+
+[[permission]]
+identifier = "allow-remove-chain"
+description = "Allow the shell to remove a user-added network."
+commands.allow = ["remove_chain"]

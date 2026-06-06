@@ -1,6 +1,6 @@
 import { useState } from "react";
 import "./WalletPage.css";
-import { CHAINS } from "../lib/chains";
+import { useChains } from "../lib/chains";
 import { formatUnits, shortAddress } from "../lib/format";
 import {
   addWatchAccount,
@@ -14,6 +14,7 @@ import { useT } from "../lib/i18n";
 
 export default function WalletPage() {
   const { t } = useT();
+  const chains = useChains();
   const accounts = useAccounts();
   const active = useActiveAccount();
   const { balances, refresh } = useBalances(active?.address);
@@ -77,11 +78,11 @@ export default function WalletPage() {
       <section className="assets">
         <div className="assets-head">
           <span className="field-label">
-            {t("wallet.assets")} · {t("wallet.chains", { n: CHAINS.length })}
+            {t("wallet.assets")} · {t("wallet.chains", { n: chains.length })}
           </span>
         </div>
         <div className="asset-list">
-          {CHAINS.map((chain) => (
+          {chains.map((chain) => (
             <AssetRow
               key={chain.id}
               name={chain.name}

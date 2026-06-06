@@ -4,7 +4,7 @@
 // row, never a fake zero (VISION/CLAUDE: no fallback masking).
 
 import { useCallback, useEffect, useState } from "react";
-import { CHAINS } from "./chains";
+import { useChains, type Chain } from "./chains";
 import { getBalance } from "./rpc";
 
 export type BalanceState =
@@ -14,11 +14,12 @@ export type BalanceState =
 
 export type Balances = Record<string, BalanceState>;
 
-const allLoading = (): Balances =>
-  Object.fromEntries(CHAINS.map((c) => [c.id, { status: "loading" }])) as Balances;
+const allLoading = (chains: Chain[]): Balances =>
+  Object.fromEntries(chains.map((c) => [c.id, { status: "loading" }])) as Balances;
 
 export function useBalances(address: string | undefined) {
-  const [balances, setBalances] = useState<Balances>(allLoading);
+  const chains = useChains();
+  const [balances, setBalances] = useState<Balances>(() => allLoading(chains));
   const [nonce, setNonce] = useState(0);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
@@ -26,9 +27,9 @@ export function useBalances(address: string | undefined) {
   useEffect(() => {
     if (!address) return;
     let cancelled = false;
-    setBalances(allLoading());
+    setBalances(allLoading(chains));
 
-    for (const chain of CHAINS) {
+    for (const chain of chains) {
       getBalance(chain.id, address)
         .then((wei) => {
           if (cancelled) return;
@@ -44,7 +45,7 @@ export function useBalances(address: string | undefined) {
     return () => {
       cancelled = true;
     };
-  }, [address, nonce]);
+  }, [address, nonce, chains]);
 
   return { balances, refresh };
 }

@@ -9,6 +9,7 @@ import LockScreen from "./pages/LockScreen";
 import { faviconOf, type Dapp } from "./lib/dapps";
 import { closeDapp, dappLabel } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
+import { loadChains } from "./lib/chains";
 import { useT } from "./lib/i18n";
 
 type Page = "wallet" | "dapps" | "browser" | "settings";
@@ -30,6 +31,7 @@ function App() {
   const phaseRef = useRef(vault.phase);
   phaseRef.current = vault.phase;
   useEffect(() => {
+    void loadChains(); // pull the effective chain registry (built-ins + custom)
     void refreshVaultStatus().then(() => {
       if (phaseRef.current === "unlocked") setSessionUnlocked(true);
     });

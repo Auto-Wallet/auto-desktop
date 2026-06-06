@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::webview::WebviewBuilder;
 use tauri::window::WindowBuilder;
@@ -167,26 +167,45 @@ fn personal_sign(message: &[u8]) -> Result<Value, String> {
 #[cfg(test)]
 const SPIKE_ACCOUNT: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
 
-/// A supported EVM chain. `rpc` is the default public node we forward read-only
-/// JSON-RPC to. Users will be able to add/override these from Settings later;
-/// for now it is a built-in list.
-struct Chain {
+/// A supported EVM chain. `rpc` is the public node we forward read-only JSON-RPC
+/// to. Users can add custom chains and edit existing params from Settings; the
+/// effective list lives in `chains_state()` and is persisted to chains.json.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ChainCfg {
     /// EIP-155 chain id as a 0x-hex string (what dApps see via `eth_chainId`).
-    id: &'static str,
-    name: &'static str,
-    rpc: &'static str,
+    id: String,
+    name: String,
+    symbol: String,
+    rpc: String,
+    decimals: u32,
+    /// Brand color for the chain dot (frontend display).
+    color: String,
+    /// Built-in chains can be edited (rpc/name/symbol) but not removed.
+    builtin: bool,
 }
 
-const CHAINS: &[Chain] = &[
-    Chain { id: "0x1",    name: "Ethereum",     rpc: "https://ethereum-rpc.publicnode.com" },
-    Chain { id: "0x2105", name: "Base",         rpc: "https://base-rpc.publicnode.com" },
-    Chain { id: "0xa",    name: "OP Mainnet",   rpc: "https://optimism-rpc.publicnode.com" },
-    Chain { id: "0xa4b1", name: "Arbitrum One", rpc: "https://arbitrum-one-rpc.publicnode.com" },
-    Chain { id: "0x89",   name: "Polygon",      rpc: "https://polygon-bor-rpc.publicnode.com" },
-];
+fn builtin_chains() -> Vec<ChainCfg> {
+    fn c(id: &str, name: &str, symbol: &str, rpc: &str, color: &str) -> ChainCfg {
+        ChainCfg { id: id.into(), name: name.into(), symbol: symbol.into(), rpc: rpc.into(), decimals: 18, color: color.into(), builtin: true }
+    }
+    vec![
+        c("0x1",    "Ethereum",     "ETH", "https://ethereum-rpc.publicnode.com",    "#627EEA"),
+        c("0x2105", "Base",         "ETH", "https://base-rpc.publicnode.com",        "#0052FF"),
+        c("0xa",    "OP Mainnet",   "ETH", "https://optimism-rpc.publicnode.com",    "#FF0420"),
+        c("0xa4b1", "Arbitrum One", "ETH", "https://arbitrum-one-rpc.publicnode.com", "#28A0F0"),
+        c("0x89",   "Polygon",      "POL", "https://polygon-bor-rpc.publicnode.com", "#8247E5"),
+    ]
+}
 
-fn find_chain(id: &str) -> Option<&'static Chain> {
-    CHAINS.iter().find(|c| c.id.eq_ignore_ascii_case(id))
+/// The effective chain registry (built-ins + user edits/additions). Initialized to
+/// the built-ins; `load_chains` merges the persisted user file at startup.
+fn chains_state() -> &'static Mutex<Vec<ChainCfg>> {
+    static C: OnceLock<Mutex<Vec<ChainCfg>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(builtin_chains()))
+}
+
+fn find_chain(id: &str) -> Option<ChainCfg> {
+    chains_state().lock().unwrap().iter().find(|c| c.id.eq_ignore_ascii_case(id)).cloned()
 }
 
 /// The wallet's currently selected chain (EIP-155 hex). dApps read it via
@@ -310,7 +329,7 @@ async fn forward_to_node(method: &str, params: &[Value]) -> Result<Value, String
     let payload = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
 
     let resp = http()
-        .post(chain.rpc)
+        .post(chain.rpc.as_str())
         .json(&payload)
         .send()
         .await
@@ -899,8 +918,8 @@ fn push_chain_changed<R: Runtime>(app: &AppHandle<R>, chain_id: &str) {
 #[tauri::command]
 fn set_active_chain<R: Runtime>(app: AppHandle<R>, chain_id: String) -> Result<(), String> {
     let chain = find_chain(&chain_id).ok_or_else(|| format!("set_active_chain: unknown chain {chain_id}"))?;
-    *current_chain().lock().unwrap() = chain.id.to_string();
-    push_chain_changed(&app, chain.id);
+    *current_chain().lock().unwrap() = chain.id.clone();
+    push_chain_changed(&app, &chain.id);
     Ok(())
 }
 
@@ -908,6 +927,153 @@ fn set_active_chain<R: Runtime>(app: AppHandle<R>, chain_id: String) -> Result<(
 #[tauri::command]
 fn get_active_chain() -> String {
     current_chain().lock().unwrap().clone()
+}
+
+// ---------------------------------------------------------------------------
+// Chain registry CRUD (Settings → manage networks). Shell-only. Built-in chains
+// can be edited (rpc/name/symbol) but not removed; user chains are full CRUD. The
+// effective list is persisted (non-sensitive) to chains.json in the app-data dir.
+// ---------------------------------------------------------------------------
+
+const CHAINS_FILE: &str = "chains.json";
+
+fn chains_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(CHAINS_FILE))
+}
+
+/// Load the persisted chain list (built-ins + user edits) at startup, if present.
+fn load_chains<R: Runtime>(app: &AppHandle<R>) {
+    let Ok(path) = chains_path(app) else { return };
+    if let Ok(bytes) = std::fs::read(&path) {
+        if let Ok(list) = serde_json::from_slice::<Vec<ChainCfg>>(&bytes) {
+            if !list.is_empty() {
+                *chains_state().lock().unwrap() = list;
+            }
+        }
+    }
+}
+
+fn save_chains<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let path = chains_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let list = chains_state().lock().unwrap().clone();
+    let json = serde_json::to_vec_pretty(&list).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("writing chains: {e}"))
+}
+
+/// Normalize a chain id (accept "0x.." or decimal) to canonical lowercase 0x-hex.
+fn normalize_chain_id(id: &str) -> Result<String, String> {
+    let s = id.trim();
+    let value = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(h) => u64::from_str_radix(h, 16).map_err(|_| format!("invalid chain id '{id}'"))?,
+        None => s.parse::<u64>().map_err(|_| format!("invalid chain id '{id}'"))?,
+    };
+    if value == 0 {
+        return Err("chain id must be non-zero".to_string());
+    }
+    Ok(format!("0x{value:x}"))
+}
+
+fn validate_rpc(rpc: &str) -> Result<(), String> {
+    if rpc.starts_with("http://") || rpc.starts_with("https://") {
+        Ok(())
+    } else {
+        Err("RPC URL must start with http:// or https://".to_string())
+    }
+}
+
+/// The full effective chain registry (for the shell's network list + selectors).
+#[tauri::command]
+fn get_chains() -> Vec<ChainCfg> {
+    chains_state().lock().unwrap().clone()
+}
+
+/// Add a custom network. Validates id/RPC, rejects duplicates, persists.
+#[tauri::command]
+fn add_chain<R: Runtime>(app: AppHandle<R>, mut chain: ChainCfg) -> Result<Vec<ChainCfg>, String> {
+    chain.id = normalize_chain_id(&chain.id)?;
+    if chain.name.trim().is_empty() {
+        return Err("network name is required".to_string());
+    }
+    validate_rpc(&chain.rpc)?;
+    chain.builtin = false;
+    if chain.decimals == 0 {
+        chain.decimals = 18;
+    }
+    if chain.symbol.trim().is_empty() {
+        chain.symbol = "ETH".to_string();
+    }
+    if chain.color.trim().is_empty() {
+        chain.color = "#6b7280".to_string();
+    }
+    {
+        let mut chains = chains_state().lock().unwrap();
+        if chains.iter().any(|c| c.id.eq_ignore_ascii_case(&chain.id)) {
+            return Err(format!("network {} already exists", chain.id));
+        }
+        chains.push(chain);
+    }
+    save_chains(&app)?;
+    Ok(chains_state().lock().unwrap().clone())
+}
+
+/// Edit an existing network's params (id + builtin flag are preserved).
+#[tauri::command]
+fn update_chain<R: Runtime>(app: AppHandle<R>, chain: ChainCfg) -> Result<Vec<ChainCfg>, String> {
+    let id = normalize_chain_id(&chain.id)?;
+    if chain.name.trim().is_empty() {
+        return Err("network name is required".to_string());
+    }
+    validate_rpc(&chain.rpc)?;
+    {
+        let mut chains = chains_state().lock().unwrap();
+        let existing = chains
+            .iter_mut()
+            .find(|c| c.id.eq_ignore_ascii_case(&id))
+            .ok_or_else(|| format!("network {id} not found"))?;
+        existing.name = chain.name;
+        existing.rpc = chain.rpc;
+        existing.decimals = if chain.decimals == 0 { 18 } else { chain.decimals };
+        if !chain.symbol.trim().is_empty() {
+            existing.symbol = chain.symbol;
+        }
+        if !chain.color.trim().is_empty() {
+            existing.color = chain.color;
+        }
+    }
+    save_chains(&app)?;
+    Ok(chains_state().lock().unwrap().clone())
+}
+
+/// Remove a user-added network (built-ins can't be removed). Falls the active
+/// chain back to the first network if the removed one was active.
+#[tauri::command]
+fn remove_chain<R: Runtime>(app: AppHandle<R>, id: String) -> Result<Vec<ChainCfg>, String> {
+    let id = normalize_chain_id(&id)?;
+    {
+        let mut chains = chains_state().lock().unwrap();
+        let target = chains
+            .iter()
+            .find(|c| c.id.eq_ignore_ascii_case(&id))
+            .ok_or_else(|| format!("network {id} not found"))?;
+        if target.builtin {
+            return Err("built-in networks can't be removed".to_string());
+        }
+        chains.retain(|c| !c.id.eq_ignore_ascii_case(&id));
+    }
+    let fallback = chains_state().lock().unwrap().first().map(|c| c.id.clone());
+    {
+        let mut cur = current_chain().lock().unwrap();
+        if cur.eq_ignore_ascii_case(&id) {
+            if let Some(f) = fallback {
+                *cur = f;
+            }
+        }
+    }
+    save_chains(&app)?;
+    Ok(chains_state().lock().unwrap().clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,6 +1338,10 @@ pub fn run() {
             close_dapp,
             set_active_chain,
             get_active_chain,
+            get_chains,
+            add_chain,
+            update_chain,
+            remove_chain,
             vault_status,
             create_vault,
             import_vault,
@@ -1181,6 +1351,8 @@ pub fn run() {
             add_account
         ])
         .setup(|app| {
+            // Load any persisted custom networks / RPC overrides before the UI asks.
+            load_chains(app.handle());
             // Container window (no webview of its own).
             let window = WindowBuilder::new(app, "main")
                 .title("AutoDesktop")
@@ -1277,10 +1449,30 @@ mod tests {
         assert_eq!(find_chain("0xA4B1").unwrap().name, "Arbitrum One");
         assert!(find_chain("0xdead").is_none());
         // every built-in chain has a https RPC and a unique id
-        for c in CHAINS {
+        let chains = builtin_chains();
+        for c in &chains {
             assert!(c.rpc.starts_with("https://"), "{} has no https rpc", c.name);
-            assert_eq!(CHAINS.iter().filter(|x| x.id == c.id).count(), 1);
+            assert_eq!(chains.iter().filter(|x| x.id == c.id).count(), 1);
+            assert!(c.builtin);
         }
+    }
+
+    #[test]
+    fn normalize_chain_id_accepts_hex_and_decimal() {
+        assert_eq!(normalize_chain_id("0x1").unwrap(), "0x1");
+        assert_eq!(normalize_chain_id("0xA4B1").unwrap(), "0xa4b1"); // lowercased
+        assert_eq!(normalize_chain_id("137").unwrap(), "0x89"); // decimal → hex
+        assert_eq!(normalize_chain_id("  0x2105 ").unwrap(), "0x2105"); // trimmed
+        assert!(normalize_chain_id("0x0").is_err()); // zero rejected
+        assert!(normalize_chain_id("xyz").is_err());
+    }
+
+    #[test]
+    fn validate_rpc_requires_http_scheme() {
+        assert!(validate_rpc("https://rpc.example.com").is_ok());
+        assert!(validate_rpc("http://localhost:8545").is_ok());
+        assert!(validate_rpc("ftp://nope").is_err());
+        assert!(validate_rpc("rpc.example.com").is_err());
     }
 
     #[test]
@@ -1415,6 +1607,10 @@ mod e2e {
                 close_dapp,
                 set_active_chain,
                 get_active_chain,
+                get_chains,
+                add_chain,
+                update_chain,
+                remove_chain,
                 vault_status,
                 create_vault,
                 import_vault,

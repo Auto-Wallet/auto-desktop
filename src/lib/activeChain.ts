@@ -5,10 +5,10 @@
 
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CHAINS } from "./chains";
+import { BUILTIN_CHAINS } from "./chains";
 import { isTauri } from "./platform";
 
-let chainId = CHAINS[0].id; // "0x1" until the backend value loads
+let chainId = BUILTIN_CHAINS[0].id; // "0x1" until the backend value loads
 const listeners = new Set<() => void>();
 let loadStarted = false;
 

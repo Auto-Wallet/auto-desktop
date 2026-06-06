@@ -40,15 +40,7 @@
 .chain-row {
   display: flex;
   align-items: center;
-  gap: 13px;
-  width: 100%;
-  padding: 13px 16px;
-  border: none;
   border-bottom: 1px solid var(--border);
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 .chain-row:last-child {
   border-bottom: none;
@@ -59,7 +51,20 @@
 .chain-row.active {
   background: var(--indigo-soft);
 }
-.chain-row .chain-dot {
+.chain-pick {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  flex: 1;
+  min-width: 0;
+  padding: 13px 16px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chain-pick .chain-dot {
   width: 26px;
   height: 26px;
   border-radius: 50%;
@@ -94,6 +99,174 @@
   border: 1px solid var(--indigo-ring);
   padding: 3px 8px;
   border-radius: var(--r-pill);
+}
+
+.chain-builtin {
+  margin-left: 7px;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-3);
+  background: var(--bg-soft);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  vertical-align: middle;
+}
+
+.chain-actions {
+  display: flex;
+  gap: 2px;
+  padding-right: 10px;
+  flex: none;
+}
+.chain-icon {
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+}
+.chain-icon:hover {
+  background: var(--border-mid);
+  color: var(--ink);
+}
+.chain-icon.danger:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.add-network-btn {
+  margin-top: 10px;
+  width: 100%;
+  padding: 11px;
+  border: 1px dashed var(--border-mid);
+  background: transparent;
+  border-radius: var(--r-md);
+  color: var(--indigo);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.add-network-btn:hover {
+  background: var(--indigo-soft);
+  border-color: var(--indigo);
+}
+
+/* ---- Add / edit network form ---- */
+.net-form {
+  margin-top: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--r-lg);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.net-form-title {
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 12px;
+  color: var(--ink);
+}
+.net-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.net-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.net-wide {
+  grid-column: 1 / -1;
+}
+.net-field input {
+  border: 1px solid var(--border-mid);
+  border-radius: var(--r-sm);
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--bg);
+}
+.net-field input:focus {
+  outline: none;
+  border-color: var(--indigo);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.14);
+}
+.net-field input:disabled {
+  background: var(--bg-soft);
+  color: var(--ink-3);
+}
+.net-name-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.net-name-row input:not(.net-color) {
+  flex: 1;
+}
+.net-color {
+  width: 40px;
+  height: 38px;
+  padding: 2px;
+  border: 1px solid var(--border-mid);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  cursor: pointer;
+  flex: none;
+}
+.net-error {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--danger);
+  background: var(--danger-bg);
+  padding: 8px 11px;
+  border-radius: var(--r-sm);
+}
+.net-form-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.net-cancel,
+.net-save {
+  border-radius: var(--r-sm);
+  padding: 9px 16px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.net-cancel {
+  border: 1px solid var(--border-mid);
+  background: transparent;
+  color: var(--ink);
+}
+.net-cancel:hover {
+  background: var(--bg-soft);
+}
+.net-save {
+  border: none;
+  background: var(--indigo);
+  color: #fff;
+}
+.net-save:hover {
+  filter: brightness(1.06);
+}
+.net-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ---- Language ---- */
