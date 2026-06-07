@@ -1,8 +1,8 @@
 import "./BrowserView.css";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useChains, type Chain } from "../lib/chains";
 import { shortAddress } from "../lib/format";
-import { useActiveAccount } from "../lib/accounts";
+import { setActive, useAccounts, useActiveAccount } from "../lib/accounts";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
@@ -24,7 +24,6 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   const { dapp } = tab;
   const { t } = useT();
   const label = dappLabel(tab.id);
-  const account = useActiveAccount();
   const chainId = useActiveChain();
   const chains = useChains();
   const chain = chains.find((c) => c.id === chainId) ?? chains[0];
@@ -33,6 +32,18 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
 
   const [focus, setFocus] = useState(false);
   const [url, setUrl] = useState(dapp.url);
+
+  // A topbar dropdown (chain / account) is drawn by the SHELL, but the dApp's
+  // native child webview renders ON TOP of the shell within the content rect — so a
+  // menu hanging into that rect gets occluded by the page. While any menu is open we
+  // hide the dApp webview (it's not closed — the page is preserved) and re-show it on
+  // close. `openMenus` counts open menus so two toggles can't desync the visibility.
+  const [openMenus, setOpenMenus] = useState(0);
+  const reportMenu = useCallback(
+    (open: boolean) => setOpenMenus((n) => Math.max(0, n + (open ? 1 : -1))),
+    [],
+  );
+  const menuOpen = openMenus > 0;
 
   // Show this tab's native webview over the content rect, track resizes, and hide
   // it (NOT close — the tab persists) when this view unmounts/switches away.
@@ -54,6 +65,17 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
       void hideDapp(label);
     };
   }, [native, label, dapp.url]);
+
+  // Hide the dApp webview while a topbar menu is open so the menu isn't covered;
+  // restore it (page intact — open_dapp only navigates on first creation) on close.
+  useEffect(() => {
+    if (!native) return;
+    if (menuOpen) {
+      void hideDapp(label);
+    } else if (contentRef.current) {
+      void openDapp(label, dapp.url, rectOf(contentRef.current));
+    }
+  }, [menuOpen, native, label, dapp.url]);
 
   return (
     <div className="browser">
@@ -87,11 +109,8 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
         </div>
 
         <div className="browser-chips">
-          <ChainChip chain={chain} chains={chains} />
-          <div className="acct-chip" title={account.label}>
-            <Avatar address={account.address} size={24} />
-            <span className="mono">{shortAddress(account.address, 5, 4)}</span>
-          </div>
+          <ChainChip chain={chain} chains={chains} onMenu={reportMenu} />
+          <AcctChip onMenu={reportMenu} />
         </div>
       </header>
 
@@ -112,8 +131,68 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   );
 }
 
-function ChainChip({ chain, chains }: { chain: Chain; chains: Chain[] }) {
+// The account chip in the dApp top bar IS a wallet switcher: picking an account
+// runs setActive → selectAccount, which switches the backend's active signer and
+// pushes accountsChanged into this dApp, so the page follows the new address.
+function AcctChip({ onMenu }: { onMenu: (open: boolean) => void }) {
+  const { t } = useT();
+  const accounts = useAccounts();
+  const active = useActiveAccount();
   const [open, setOpen] = useState(false);
+  // Tell the parent when the menu is open so it can hide the dApp webview underneath.
+  useEffect(() => {
+    if (!open) return;
+    onMenu(true);
+    return () => onMenu(false);
+  }, [open, onMenu]);
+  const isActive = (addr: string) => addr.toLowerCase() === active.address.toLowerCase();
+  return (
+    <div className="chain-wrap">
+      <button className="acct-chip" onClick={() => setOpen((o) => !o)} title={t("wallet.switchAccount")}>
+        <Avatar address={active.address} size={24} />
+        <span className="mono">{shortAddress(active.address, 5, 4)}</span>
+        <Icon name="chevronD" size={14} />
+      </button>
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 30 }} onClick={() => setOpen(false)} />
+          <div className="chain-menu acct-pop scroll">
+            {accounts.map((a) => (
+              <button
+                key={a.address}
+                className={`acct-opt${isActive(a.address) ? " on" : ""}`}
+                onClick={() => {
+                  setActive(a.address);
+                  setOpen(false);
+                }}
+              >
+                <Avatar address={a.address} size={28} />
+                <span className="meta">
+                  <span className="l">{a.label}</span>
+                  <span className="a">{shortAddress(a.address, 8, 6)}</span>
+                </span>
+                {isActive(a.address) && (
+                  <span className="check">
+                    <Icon name="check" size={15} />
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ChainChip({ chain, chains, onMenu }: { chain: Chain; chains: Chain[]; onMenu: (open: boolean) => void }) {
+  const [open, setOpen] = useState(false);
+  // Hide the dApp webview underneath while this menu is open (see AcctChip).
+  useEffect(() => {
+    if (!open) return;
+    onMenu(true);
+    return () => onMenu(false);
+  }, [open, onMenu]);
   return (
     <div className="chain-wrap">
       <button className="chain-chip" onClick={() => setOpen((o) => !o)}>

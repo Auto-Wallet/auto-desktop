@@ -70,9 +70,12 @@ function ApprovalView() {
   const [requests, setRequests] = useState<PendingRequest[]>([]);
   const [signer, setSigner] = useState<VaultStatusDto | null>(null);
   const [busy, setBusy] = useState(false);
-  // Editable max fee (Gwei) for an eth_sendTransaction request.
+  // Editable EIP-1559 fees (Gwei) for an eth_sendTransaction request: the max fee
+  // cap and the priority fee (tip). Both are sent back as wei-hex overrides.
   const [maxFeeGwei, setMaxFeeGwei] = useState("");
+  const [maxPrioGwei, setMaxPrioGwei] = useState("");
   const [feeError, setFeeError] = useState(false);
+  const [prioError, setPrioError] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!isTauri()) return;
@@ -97,21 +100,34 @@ function ApprovalView() {
   useEffect(() => {
     if (current?.tx) {
       setMaxFeeGwei(formatUnits(current.tx.max_fee_per_gas, 9, 6));
+      setMaxPrioGwei(formatUnits(current.tx.max_priority_fee_per_gas, 9, 6));
       setFeeError(false);
+      setPrioError(false);
     }
-  }, [current?.id, current?.tx?.max_fee_per_gas]);
+  }, [current?.id, current?.tx?.max_fee_per_gas, current?.tx?.max_priority_fee_per_gas]);
 
   const decide = useCallback(
     async (req: PendingRequest, approve: boolean) => {
       let args: Record<string, unknown> = { id: req.id };
       if (approve && req.tx) {
-        // Hand back the (possibly edited) max fee as a wei-hex override.
+        // Hand back the (possibly edited) EIP-1559 fees as wei-hex overrides. Parse
+        // each separately so the offending field is the one flagged. (The backend
+        // re-clamps priority ≤ max fee, so we don't have to.)
+        let maxFeePerGas: string;
+        let maxPriorityFeePerGas: string;
         try {
-          args = { id: req.id, maxFeePerGas: toHexQuantity(parseUnits(maxFeeGwei, 9)) };
+          maxFeePerGas = toHexQuantity(parseUnits(maxFeeGwei, 9));
         } catch {
           setFeeError(true);
           return;
         }
+        try {
+          maxPriorityFeePerGas = toHexQuantity(parseUnits(maxPrioGwei, 9));
+        } catch {
+          setPrioError(true);
+          return;
+        }
+        args = { id: req.id, maxFeePerGas, maxPriorityFeePerGas };
       }
       setBusy(true);
       try {
@@ -121,7 +137,7 @@ function ApprovalView() {
         setBusy(false);
       }
     },
-    [refresh, maxFeeGwei],
+    [refresh, maxFeeGwei, maxPrioGwei],
   );
 
   if (!current) {
@@ -177,6 +193,12 @@ function ApprovalView() {
               setFeeError(false);
             }}
             feeError={feeError}
+            maxPrioGwei={maxPrioGwei}
+            onMaxPrio={(v) => {
+              setMaxPrioGwei(v);
+              setPrioError(false);
+            }}
+            prioError={prioError}
             t={t}
           />
         ) : (
@@ -244,12 +266,18 @@ function TxDetails({
   maxFeeGwei,
   onMaxFee,
   feeError,
+  maxPrioGwei,
+  onMaxPrio,
+  prioError,
   t,
 }: {
   tx: TxDisplay;
   maxFeeGwei: string;
   onMaxFee: (v: string) => void;
   feeError: boolean;
+  maxPrioGwei: string;
+  onMaxPrio: (v: string) => void;
+  prioError: boolean;
   t: TFn;
 }) {
   const hasData = !!tx.data && tx.data !== "0x" && tx.data.length > 2;
@@ -266,19 +294,34 @@ function TxDetails({
       <Row label={t("approval.gasLimit")} value={toBigintSafe(tx.gas)} mono />
       <Row label={t("approval.nonce")} value={toBigintSafe(tx.nonce)} mono />
       {hasData && <Row label={t("approval.data")} value={t("approval.dataBytes", { n: dataBytes })} />}
-      <div className="apv-fee">
-        <label className="field-label">{t("approval.maxFee")}</label>
-        <div className={`apv-fee-input${feeError ? " err" : ""}`}>
-          <input
-            className="input mono"
-            value={maxFeeGwei}
-            inputMode="decimal"
-            onChange={(e) => onMaxFee(e.target.value)}
-          />
-          <span className="apv-fee-unit">Gwei</span>
-        </div>
-        <div className="apv-fee-hint">{t("approval.maxFeeHint")}</div>
+      <FeeInput label={t("approval.maxPriority")} value={maxPrioGwei} onChange={onMaxPrio} err={prioError} hint={t("approval.maxPriorityHint")} />
+      <FeeInput label={t("approval.maxFee")} value={maxFeeGwei} onChange={onMaxFee} err={feeError} hint={t("approval.maxFeeHint")} />
+    </div>
+  );
+}
+
+// One editable EIP-1559 fee field (in Gwei).
+function FeeInput({
+  label,
+  value,
+  onChange,
+  err,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  err: boolean;
+  hint: string;
+}) {
+  return (
+    <div className="apv-fee">
+      <label className="field-label">{label}</label>
+      <div className={`apv-fee-input${err ? " err" : ""}`}>
+        <input className="input mono" value={value} inputMode="decimal" onChange={(e) => onChange(e.target.value)} />
+        <span className="apv-fee-unit">Gwei</span>
       </div>
+      <div className="apv-fee-hint">{hint}</div>
     </div>
   );
 }

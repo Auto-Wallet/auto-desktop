@@ -135,13 +135,20 @@ export default function WalletPage() {
     return out;
   }, [chains, balances, tokenBalances, custom]);
 
-  const rows = useMemo(() => {
-    const shown = chains.filter((c) => filter === "all" || c.id === filter);
-    return buildRows(shown, custom, balances, tokenBalances, prices, tokenPrices);
-  }, [chains, filter, custom, balances, tokenBalances, prices, tokenPrices]);
+  // Build every chain's rows once. The hero TOTAL is always the sum across ALL
+  // chains; the network filter below only narrows the visible token LIST, it must
+  // not change the total.
+  const allRows = useMemo(
+    () => buildRows(chains, custom, balances, tokenBalances, prices, tokenPrices),
+    [chains, custom, balances, tokenBalances, prices, tokenPrices],
+  );
+  const rows = useMemo(
+    () => (filter === "all" ? allRows : allRows.filter((r) => r.chainId === filter)),
+    [allRows, filter],
+  );
   const portfolio = useMemo(
-    () => computePortfolio(rows, prices.status === "loading"),
-    [rows, prices.status],
+    () => computePortfolio(allRows, prices.status === "loading"),
+    [allRows, prices.status],
   );
 
   function copyAddress() {
@@ -307,6 +314,8 @@ type BalState = BalanceState | TokenBalance | undefined;
 // One line in the token list: a chain's native coin, or an ERC-20 held on it.
 type DisplayRow = {
   key: string;
+  /** 0x-hex chain id this row lives on (for the network filter). */
+  chainId: string;
   chainName: string;
   chainColor: string;
   kind: "native" | "erc20";
@@ -345,6 +354,7 @@ function buildRows(
   for (const c of shown) {
     rows.push({
       key: `native:${c.id}`,
+      chainId: c.id,
       chainName: c.name,
       chainColor: c.color,
       kind: "native",
@@ -361,6 +371,7 @@ function buildRows(
       if (!cust && !isHeld(st)) continue; // hide zero-balance default tokens
       rows.push({
         key: `erc20:${c.id}:${tk.address}`,
+        chainId: c.id,
         chainName: c.name,
         chainColor: c.color,
         kind: "erc20",

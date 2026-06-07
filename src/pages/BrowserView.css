@@ -89,7 +89,12 @@
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 1px solid var(--line-2);
-  cursor: default;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.acct-chip:hover {
+  background: var(--surface-2);
 }
 .acct-chip .mono {
   font-family: var(--font-mono);
@@ -97,6 +102,56 @@
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
+}
+
+/* account dropdown (reuses .chain-menu container) */
+.acct-pop {
+  width: 248px;
+  max-height: 320px;
+  overflow: auto;
+}
+.acct-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.acct-opt:hover {
+  background: var(--surface-2);
+}
+.acct-opt.on {
+  background: var(--brand-soft);
+}
+.acct-opt .meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.acct-opt .meta .l {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-opt .meta .a {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.acct-opt .check {
+  color: var(--brand-ink);
+  flex: none;
 }
 
 /* chain dropdown */
