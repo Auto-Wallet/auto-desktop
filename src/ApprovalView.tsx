@@ -6,6 +6,7 @@ import { Avatar } from "./lib/ui";
 import { useT, type TFn } from "./lib/i18n";
 import { formatUnits, parseUnits, shortAddress, toHexQuantity } from "./lib/format";
 import { isTauri } from "./lib/platform";
+import { simulateTx, type SimulationPreview } from "./lib/simulation";
 
 // Mirrors the Rust `PreparedTx` (snake_case from serde).
 interface TxDisplay {
@@ -76,6 +77,11 @@ function ApprovalView() {
   const [maxPrioGwei, setMaxPrioGwei] = useState("");
   const [feeError, setFeeError] = useState(false);
   const [prioError, setPrioError] = useState(false);
+  // Which tx view: the structured basics, raw JSON, or the calldata hex.
+  const [txView, setTxView] = useState<"basic" | "json" | "hex">("basic");
+  // Pre-sign balance-change simulation for the active eth_sendTransaction request.
+  const [sim, setSim] = useState<SimulationPreview | null>(null);
+  const [simPending, setSimPending] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!isTauri()) return;
@@ -105,6 +111,37 @@ function ApprovalView() {
       setPrioError(false);
     }
   }, [current?.id, current?.tx?.max_fee_per_gas, current?.tx?.max_priority_fee_per_gas]);
+
+  // Simulate the active tx to preview the signer's balance changes before signing.
+  useEffect(() => {
+    const tx = current?.tx;
+    if (!tx) {
+      setSim(null);
+      setSimPending(false);
+      return;
+    }
+    let cancelled = false;
+    setSim(null);
+    setSimPending(true);
+    void simulateTx({
+      chainId: parseInt(tx.chain_id, 16),
+      from: tx.from,
+      to: tx.to || null,
+      data: tx.data,
+      value: BigInt(tx.value || "0x0"),
+      gas: BigInt(tx.gas || "0x0"),
+      nativeSymbol: tx.symbol,
+    })
+      .then((preview) => {
+        if (!cancelled) setSim(preview);
+      })
+      .finally(() => {
+        if (!cancelled) setSimPending(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.id, current?.tx?.chain_id, current?.tx?.to, current?.tx?.data, current?.tx?.value]);
 
   const decide = useCallback(
     async (req: PendingRequest, approve: boolean) => {
@@ -185,22 +222,44 @@ function ApprovalView() {
         </div>
 
         {current.tx ? (
-          <TxDetails
-            tx={current.tx}
-            maxFeeGwei={maxFeeGwei}
-            onMaxFee={(v) => {
-              setMaxFeeGwei(v);
-              setFeeError(false);
-            }}
-            feeError={feeError}
-            maxPrioGwei={maxPrioGwei}
-            onMaxPrio={(v) => {
-              setMaxPrioGwei(v);
-              setPrioError(false);
-            }}
-            prioError={prioError}
-            t={t}
-          />
+          <>
+            <div className="apv-tabs">
+              {(["basic", "json", "hex"] as const).map((v) => (
+                <button
+                  key={v}
+                  className={`apv-tab${txView === v ? " on" : ""}`}
+                  onClick={() => setTxView(v)}
+                >
+                  {v === "basic" ? t("approval.tabBasic") : v === "json" ? "JSON" : "HEX"}
+                </button>
+              ))}
+            </div>
+            {txView === "basic" ? (
+              <>
+                <SimPreview sim={sim} pending={simPending} t={t} />
+                <TxDetails
+                tx={current.tx}
+                maxFeeGwei={maxFeeGwei}
+                onMaxFee={(v) => {
+                  setMaxFeeGwei(v);
+                  setFeeError(false);
+                }}
+                feeError={feeError}
+                maxPrioGwei={maxPrioGwei}
+                onMaxPrio={(v) => {
+                  setMaxPrioGwei(v);
+                  setPrioError(false);
+                }}
+                prioError={prioError}
+                t={t}
+                />
+              </>
+            ) : txView === "json" ? (
+              <pre className="apv-msg">{txAsJson(current.tx)}</pre>
+            ) : (
+              <pre className="apv-msg">{current.tx.data && current.tx.data !== "0x" ? current.tx.data : "0x"}</pre>
+            )}
+          </>
         ) : (
           <div>
             <div className="field-label" style={{ padding: "0 2px 7px" }}>
@@ -249,6 +308,60 @@ function ApprovalView() {
         </button>
       </footer>
     </div>
+  );
+}
+
+// Pre-sign balance-change preview from the simulation API.
+function SimPreview({ sim, pending, t }: { sim: SimulationPreview | null; pending: boolean; t: TFn }) {
+  return (
+    <div className="apv-sim">
+      <div className="apv-sim-head">
+        <Icon name="activity" size={14} /> {t("approval.simTitle")}
+        {pending && <span className="apv-sim-tag">{t("approval.simulating")}</span>}
+      </div>
+      {pending ? (
+        <div className="apv-sim-skel">
+          <span className="skeleton" style={{ width: "60%", height: 14 }} />
+          <span className="skeleton" style={{ width: "40%", height: 14 }} />
+        </div>
+      ) : sim && sim.status === "failed" ? (
+        <div className="apv-sim-bad">
+          <Icon name="alert" size={15} /> {sim.error || t("approval.simRevert")}
+        </div>
+      ) : sim && sim.status === "unavailable" ? (
+        <div className="apv-sim-note">{t("approval.simUnavailable")}</div>
+      ) : sim && sim.changes.length > 0 ? (
+        <div className="apv-sim-list">
+          {sim.changes.map((c) => (
+            <div key={c.key} className={`apv-sim-row ${c.direction}`}>
+              <span className="sym">{c.symbol}</span>
+              <span className="delta mono">{c.formattedDelta}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="apv-sim-note">{t("approval.simNoChange")}</div>
+      )}
+    </div>
+  );
+}
+
+// The tx as the EIP-1193 params a dApp sent, pretty-printed (raw hex values).
+function txAsJson(tx: TxDisplay): string {
+  return JSON.stringify(
+    {
+      from: tx.from,
+      to: tx.to,
+      value: tx.value,
+      data: tx.data,
+      gas: tx.gas,
+      nonce: tx.nonce,
+      maxFeePerGas: tx.max_fee_per_gas,
+      maxPriorityFeePerGas: tx.max_priority_fee_per_gas,
+      chainId: tx.chain_id,
+    },
+    null,
+    2,
   );
 }
 

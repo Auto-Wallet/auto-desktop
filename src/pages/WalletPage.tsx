@@ -81,7 +81,8 @@ export default function WalletPage() {
     for (const c of chains) {
       for (const tk of tokensForChain(custom, c.id)) {
         const st = tokenBalances[tokenKey(c.id, tk.address)];
-        if (st?.status === "ok" && BigInt(st.wei) > 0n) out.push({ chainId: c.id, address: tk.address });
+        if (st?.status === "ok" && BigInt(st.wei) > 0n)
+          out.push({ chainId: c.id, address: tk.address, symbol: tk.symbol });
       }
     }
     return out;

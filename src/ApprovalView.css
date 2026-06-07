@@ -162,6 +162,100 @@
   overflow: auto;
 }
 
+/* balance-change simulation preview */
+.apv-sim {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  padding: 11px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.apv-sim-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-3);
+}
+.apv-sim-tag {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-ink);
+}
+.apv-sim-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.apv-sim-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.apv-sim-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.apv-sim-row .sym {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.apv-sim-row .delta {
+  font-size: 13px;
+  font-weight: 700;
+}
+.apv-sim-row.in .delta {
+  color: var(--up, #1a9c5b);
+}
+.apv-sim-row.out .delta {
+  color: var(--coral-2, #e5484d);
+}
+.apv-sim-bad {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--coral-2, #e5484d);
+}
+.apv-sim-note {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* tx view tabs: Basics / JSON / HEX */
+.apv-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface-3);
+  border-radius: var(--r-md);
+}
+.apv-tab {
+  flex: 1;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm, 8px);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.apv-tab.on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--sh-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
+}
+
 /* transaction details + editable fee (eth_sendTransaction) */
 .apv-tx {
   display: flex;

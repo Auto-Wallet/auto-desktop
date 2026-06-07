@@ -66,16 +66,30 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     };
   }, [native, label, dapp.url]);
 
-  // Hide the dApp webview while a topbar menu is open so the menu isn't covered;
-  // restore it (page intact — open_dapp only navigates on first creation) on close.
+  // Keep the page VISIBLE while a topbar menu (chain / account) is open. The menu is
+  // drawn by the shell, which sits BEHIND the dApp's native webview, so instead of
+  // hiding the whole page we inset the webview's top edge to just below the open
+  // menu: the menu shows in the freed strip and the page stays visible beneath it.
   useEffect(() => {
     if (!native) return;
-    if (menuOpen) {
-      void hideDapp(label);
-    } else if (contentRef.current) {
-      void openDapp(label, dapp.url, rectOf(contentRef.current));
+    const el = contentRef.current;
+    if (!el) return;
+    if (!menuOpen) {
+      void setDappBounds(label, rectOf(el)); // restore the full content rect
+      return;
     }
-  }, [menuOpen, native, label, dapp.url]);
+    const id = requestAnimationFrame(() => {
+      const menu = document.querySelector(".chain-menu") as HTMLElement | null;
+      const full = rectOf(el);
+      if (!menu) {
+        void setDappBounds(label, full);
+        return;
+      }
+      const top = Math.min(full.y + full.h - 1, menu.getBoundingClientRect().bottom + 8);
+      void setDappBounds(label, { x: full.x, y: top, w: full.w, h: full.y + full.h - top });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [menuOpen, native, label]);
 
   return (
     <div className="browser">

@@ -10,8 +10,32 @@
 //   Source: https://xflows.wanchain.org/api/v3/supported/{chains,tokens}
 //   (the openapi.json host xflows-open-api.wanscan.org only serves the docs page)
 
+import { mkdir } from "node:fs/promises";
+
 const BASE = "https://xflows.wanchain.org";
 const OUT = new URL("../src/lib/tokenData.ts", import.meta.url).pathname;
+// Logos are downloaded ONCE here into the app's static assets so they ship with
+// the build and load locally — no per-render network fetch (which blanks the icons
+// on a bad connection). tokenData stores the local `/logos/<slug>.<ext>` path.
+const LOGO_DIR = new URL("../public/logos/", import.meta.url).pathname;
+
+/** Download a remote logo into public/logos and return its local `/logos/...` path
+ *  (or "" if there's no URL or the download fails — the UI falls back to a glyph). */
+async function localizeLogo(remoteUrl: string, slug: string): Promise<string> {
+  if (!remoteUrl) return "";
+  try {
+    const res = await fetch(remoteUrl);
+    if (!res.ok) return "";
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0) return "";
+    const ext = (new URL(remoteUrl).pathname.match(/\.(png|webp|svg|jpe?g|gif)$/i)?.[1] ?? "png").toLowerCase();
+    const file = `${slug}.${ext}`;
+    await Bun.write(LOGO_DIR + file, buf);
+    return `/logos/${file}`;
+  } catch {
+    return "";
+  }
+}
 
 // Curated EVM chains: chainId(dec) -> { rpc, color }. Only chains listed here are
 // emitted — this is also how non-EVM xflows chains (Solana/TRON/Bitcoin/Cardano/
@@ -96,6 +120,8 @@ async function main() {
     );
   }
 
+  await mkdir(LOGO_DIR, { recursive: true });
+
   const chains = apiChains
     .filter((c) => EVM[c.chainId])
     .map((c) => ({
@@ -108,13 +134,16 @@ async function main() {
       logo: c.logo ?? "",
     }))
     .sort((a, b) => parseInt(a.id, 16) - parseInt(b.id, 16));
+  // Bake each chain logo locally (slug by chain id).
+  for (const c of chains) c.logo = await localizeLogo(c.logo, `chain-${c.id}`);
 
   // Per-chain ERC-20 token lists. Drop the native (zero-address) pseudo-token —
   // native balances come from the chain itself, not an ERC-20 read.
-  const tokens: Record<string, unknown[]> = {};
+  const tokens: Record<string, { address: string; symbol: string; name: string; decimals: number; logo: string }[]> = {};
   let tokenCount = 0;
   for (const group of apiTokens) {
     if (!EVM[group.chainId]) continue;
+    const chainHex = toHexId(group.chainId);
     const list = group.tokens
       .filter((tk) => tk.tokenContractAddress.toLowerCase() !== ZERO)
       .map((tk) => ({
@@ -124,8 +153,10 @@ async function main() {
         decimals: parseInt(tk.decimals, 10),
         logo: tk.tokenLogoUrl ?? "",
       }));
+    // Bake each token logo locally (slug by chain id + contract address).
+    for (const tk of list) tk.logo = await localizeLogo(tk.logo, `${chainHex}-${tk.address}`);
     if (list.length) {
-      tokens[toHexId(group.chainId)] = list;
+      tokens[chainHex] = list;
       tokenCount += list.length;
     }
   }

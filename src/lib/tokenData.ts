@@ -36,7 +36,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://ethereum-rpc.publicnode.com",
     "decimals": 18,
     "color": "#627EEA",
-    "logo": "https://xflows.wanchain.org/Chain/Ethereum.png"
+    "logo": "/logos/chain-0x1.png"
   },
   {
     "id": "0xa",
@@ -45,7 +45,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://optimism-rpc.publicnode.com",
     "decimals": 18,
     "color": "#FF0420",
-    "logo": "https://xflows.wanchain.org/Chain/Optimism.png"
+    "logo": "/logos/chain-0xa.png"
   },
   {
     "id": "0x38",
@@ -54,7 +54,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://bsc-rpc.publicnode.com",
     "decimals": 18,
     "color": "#F3BA2F",
-    "logo": "https://xflows.wanchain.org/Chain/BNB_Chain.png"
+    "logo": "/logos/chain-0x38.png"
   },
   {
     "id": "0x89",
@@ -63,7 +63,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://polygon-bor-rpc.publicnode.com",
     "decimals": 18,
     "color": "#8247E5",
-    "logo": "https://xflows.wanchain.org/Chain/Polygon.png"
+    "logo": "/logos/chain-0x89.png"
   },
   {
     "id": "0x92",
@@ -72,7 +72,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://rpc.soniclabs.com",
     "decimals": 18,
     "color": "#1969FF",
-    "logo": "https://xflows.wanchain.org/Chain/Sonic.webp"
+    "logo": "/logos/chain-0x92.webp"
   },
   {
     "id": "0xc4",
@@ -81,7 +81,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://rpc.xlayer.tech",
     "decimals": 18,
     "color": "#1A1A1A",
-    "logo": "https://xflows.wanchain.org/Chain/X_Layer.png"
+    "logo": "/logos/chain-0xc4.png"
   },
   {
     "id": "0x144",
@@ -90,7 +90,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://mainnet.era.zksync.io",
     "decimals": 18,
     "color": "#8C8DFC",
-    "logo": "https://xflows.wanchain.org/Chain/zkSync_Era.png"
+    "logo": "/logos/chain-0x144.png"
   },
   {
     "id": "0x1e0",
@@ -99,7 +99,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://worldchain-mainnet.g.alchemy.com/public",
     "decimals": 18,
     "color": "#1A1A1A",
-    "logo": "https://xflows.wanchain.org/Chain/WorldChain.webp"
+    "logo": "/logos/chain-0x1e0.webp"
   },
   {
     "id": "0x250",
@@ -108,7 +108,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://evm.astar.network",
     "decimals": 18,
     "color": "#1B6DC1",
-    "logo": "https://xflows.wanchain.org/Chain/Astar.png"
+    "logo": "/logos/chain-0x250.png"
   },
   {
     "id": "0x378",
@@ -117,7 +117,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://gwan-ssl.wandevs.org:56891",
     "decimals": 18,
     "color": "#2A6BE9",
-    "logo": "https://xflows.wanchain.org/Chain/Wanchain.png"
+    "logo": "/logos/chain-0x378.png"
   },
   {
     "id": "0x440",
@@ -126,7 +126,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://andromeda.metis.io/?owner=1088",
     "decimals": 18,
     "color": "#00DACC",
-    "logo": "https://xflows.wanchain.org/Chain/Metis.png"
+    "logo": "/logos/chain-0x440.png"
   },
   {
     "id": "0x44d",
@@ -135,7 +135,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://zkevm-rpc.com",
     "decimals": 18,
     "color": "#7B3FE4",
-    "logo": "https://xflows.wanchain.org/Chain/PolygonZk.webp"
+    "logo": "/logos/chain-0x44d.webp"
   },
   {
     "id": "0x2105",
@@ -144,7 +144,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://base-rpc.publicnode.com",
     "decimals": 18,
     "color": "#0052FF",
-    "logo": "https://xflows.wanchain.org/Chain/Base.png"
+    "logo": "/logos/chain-0x2105.png"
   },
   {
     "id": "0xa4b1",
@@ -153,7 +153,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://arbitrum-one-rpc.publicnode.com",
     "decimals": 18,
     "color": "#28A0F0",
-    "logo": "https://xflows.wanchain.org/Chain/Arbitrum.png"
+    "logo": "/logos/chain-0xa4b1.png"
   },
   {
     "id": "0xa4ec",
@@ -162,7 +162,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://forno.celo.org",
     "decimals": 18,
     "color": "#FCB728",
-    "logo": "https://xflows.wanchain.org/Chain/Celo.png"
+    "logo": "/logos/chain-0xa4ec.png"
   },
   {
     "id": "0xa86a",
@@ -171,7 +171,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://avalanche-c-chain-rpc.publicnode.com",
     "decimals": 18,
     "color": "#E84142",
-    "logo": "https://xflows.wanchain.org/Chain/Avalanche_C.png"
+    "logo": "/logos/chain-0xa86a.png"
   },
   {
     "id": "0xe708",
@@ -180,7 +180,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://linea-rpc.publicnode.com",
     "decimals": 18,
     "color": "#61DFFF",
-    "logo": "https://xflows.wanchain.org/Chain/Linea.png"
+    "logo": "/logos/chain-0xe708.png"
   },
   {
     "id": "0x13e31",
@@ -189,7 +189,7 @@ export const SUPPORTED_CHAINS: ChainMeta[] = [
     "rpc": "https://blast-rpc.publicnode.com",
     "decimals": 18,
     "color": "#FCD000",
-    "logo": "https://xflows.wanchain.org/Chain/Blast.png"
+    "logo": "/logos/chain-0x13e31.png"
   }
 ];
 
@@ -201,21 +201,21 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDT",
       "name": "Tether",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0x1-0xdac17f958d2ee523a2206206994597c13d831ec7.png"
     },
     {
       "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
       "symbol": "USDC",
       "name": "USDC",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0x1-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.png"
     },
     {
       "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
       "symbol": "WBTC",
       "name": "Wrapped BTC",
       "decimals": 8,
-      "logo": "https://xflows.wanchain.org/Token/WBTC.png"
+      "logo": "/logos/0x1-0x2260fac5e5542a773aa44fbcfedf7c193bc2c599.png"
     }
   ],
   "0xa": [
@@ -224,21 +224,21 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDT",
       "name": "Tether USD",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0xa-0x94b008aa00579c1307b0ef2c499ad98a8ce58e58.png"
     },
     {
       "address": "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
       "symbol": "USDC",
       "name": "usdc",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0xa-0x0b2c639c533813f4aa9d7837caf62653d097ff85.png"
     },
     {
       "address": "0x68f180fcce6836688e9084f035309e29bf0a2095",
       "symbol": "WBTC",
       "name": "Wrapped BTC",
       "decimals": 8,
-      "logo": "https://xflows.wanchain.org/Token/WBTC.png"
+      "logo": "/logos/0xa-0x68f180fcce6836688e9084f035309e29bf0a2095.png"
     }
   ],
   "0x38": [
@@ -247,35 +247,35 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDT",
       "name": "Tether",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0x38-0x55d398326f99059ff775485246999027b3197955.png"
     },
     {
       "address": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
       "symbol": "USDC",
       "name": "USD Coin",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0x38-0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d.png"
     },
     {
       "address": "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c",
       "symbol": "BTCB",
       "name": "Binance-Peg BTCB Token",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/BTCB.png"
+      "logo": "/logos/0x38-0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c.png"
     },
     {
       "address": "0x2170ed0880ac9a755fd29b2688956bd959f933f8",
       "symbol": "ETH",
       "name": "Binance-Peg Ethereum Token",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/ETH.png"
+      "logo": "/logos/0x38-0x2170ed0880ac9a755fd29b2688956bd959f933f8.png"
     },
     {
       "address": "0x3ee2200efb3400fabb9aacf31297cbdd1d435d47",
       "symbol": "ADA",
       "name": "ADA",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Chain/Cardano.png"
+      "logo": "/logos/0x38-0x3ee2200efb3400fabb9aacf31297cbdd1d435d47.png"
     }
   ],
   "0x89": [
@@ -284,21 +284,21 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "WETH",
       "name": "Wrapped Ether",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/WETH.png"
+      "logo": "/logos/0x89-0x7ceb23fd6bc0add59e62ac25578270cff1b9f619.png"
     },
     {
       "address": "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
       "symbol": "USDT",
       "name": "Tether",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0x89-0xc2132d05d31c914a87c6611c10748aeb04b58e8f.png"
     },
     {
       "address": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
       "symbol": "USDC",
       "name": "USD Coin",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0x89-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.png"
     }
   ],
   "0x92": [
@@ -307,7 +307,7 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDC",
       "name": "USDC",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0x92-0x29219dd400f2bf60e5a23d13be72b486d4038894.png"
     }
   ],
   "0xc4": [
@@ -316,14 +316,14 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDT",
       "name": "Tether USD",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0xc4-0x1e4a5963abfd975d8c9021ce480b42188849d41d.png"
     },
     {
       "address": "0x74b7f16337b8972027f6196a17a631ac6de26d22",
       "symbol": "USDC",
       "name": "USDC",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0xc4-0x74b7f16337b8972027f6196a17a631ac6de26d22.png"
     }
   ],
   "0x144": [
@@ -332,7 +332,7 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDC.e",
       "name": "bridged usdc",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0x144-0x3355df6d4c9c3035724fd0e3914de96a5a83aaf4.png"
     }
   ],
   "0x1e0": [
@@ -341,7 +341,7 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDC",
       "name": "USDC",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0x1e0-0x79a02482a880bce3f13e09da970dc34db4cd24d1.png"
     }
   ],
   "0x250": [
@@ -350,7 +350,7 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDT",
       "name": "Tether USD",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0x250-0xffffffff000000000000000000000001000007c0.png"
     }
   ],
   "0x378": [
@@ -359,42 +359,42 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "wanUSDT",
       "name": "wanUSDT",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/wanUSDT.png"
+      "logo": "/logos/0x378-0x11e77e27af5539872efed10abaa0b408cfd9fbbd.png"
     },
     {
       "address": "0x52a9cea01c4cbdd669883e41758b8eb8e8e2b34b",
       "symbol": "wanUSDC",
       "name": "wanUSDC",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/wanUSDC.png"
+      "logo": "/logos/0x378-0x52a9cea01c4cbdd669883e41758b8eb8e8e2b34b.png"
     },
     {
       "address": "0xe3ae74d1518a76715ab4c7bedf1af73893cd435a",
       "symbol": "wanETH",
       "name": "wanETH",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/wanETH.png"
+      "logo": "/logos/0x378-0xe3ae74d1518a76715ab4c7bedf1af73893cd435a.png"
     },
     {
       "address": "0x50c439b6d602297252505a6799d84ea5928bcfb6",
       "symbol": "wanBTC",
       "name": "wanBTC",
       "decimals": 8,
-      "logo": "https://xflows.wanchain.org/Token/wanBTC.png"
+      "logo": "/logos/0x378-0x50c439b6d602297252505a6799d84ea5928bcfb6.png"
     },
     {
       "address": "0x2ea407aa69be7367bf231e76b51fab9ec436766c",
       "symbol": "xWAN",
       "name": "xWAN",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/xWAN.svg"
+      "logo": "/logos/0x378-0x2ea407aa69be7367bf231e76b51fab9ec436766c.svg"
     },
     {
       "address": "0x79d745178bc271a1f29f8fbe9251dfc512db842c",
       "symbol": "wanADA",
       "name": "wanADA",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Chain/Cardano.png"
+      "logo": "/logos/0x378-0x79d745178bc271a1f29f8fbe9251dfc512db842c.png"
     }
   ],
   "0x440": [
@@ -403,28 +403,28 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDT",
       "name": "m.USDT",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0x440-0xbb06dca3ae6887fabf931640f67cab3e3a16f4dc.png"
     },
     {
       "address": "0xea32a96608495e54156ae48931a7c20f0dcc1a21",
       "symbol": "USDC",
       "name": "m.USDC",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0x440-0xea32a96608495e54156ae48931a7c20f0dcc1a21.png"
     },
     {
       "address": "0x420000000000000000000000000000000000000a",
       "symbol": "ETH",
       "name": "WETH",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/ETH.png"
+      "logo": "/logos/0x440-0x420000000000000000000000000000000000000a.png"
     },
     {
       "address": "0x433e43047b95cb83517abd7c9978bdf7005e9938",
       "symbol": "BTC",
       "name": "m.WBTC",
       "decimals": 8,
-      "logo": "https://xflows.wanchain.org/Token/WBTC.png"
+      "logo": "/logos/0x440-0x433e43047b95cb83517abd7c9978bdf7005e9938.png"
     }
   ],
   "0x2105": [
@@ -433,14 +433,14 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDC",
       "name": "usdc",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0x2105-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.png"
     },
     {
       "address": "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",
       "symbol": "DAI",
       "name": "Dai Stablecoin",
       "decimals": 18,
-      "logo": "https://xflows.wanchain.org/Token/DAI.png"
+      "logo": "/logos/0x2105-0x50c5725949a6f0c72e6c4a641f24049a917db0cb.png"
     }
   ],
   "0xa4b1": [
@@ -449,21 +449,21 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDT",
       "name": "tether",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0xa4b1-0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9.png"
     },
     {
       "address": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
       "symbol": "USDC",
       "name": "usdc",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0xa4b1-0xaf88d065e77c8cc2239327c5edb3a432268e5831.png"
     },
     {
       "address": "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f",
       "symbol": "WBTC",
       "name": "Wrapped BTC",
       "decimals": 8,
-      "logo": "https://xflows.wanchain.org/Token/WBTC.png"
+      "logo": "/logos/0xa4b1-0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f.png"
     }
   ],
   "0xa4ec": [
@@ -472,7 +472,7 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDC",
       "name": "USDC",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0xa4ec-0xceba9300f2b948710d2653dd7b07f33a8b32118c.png"
     }
   ],
   "0xa86a": [
@@ -481,21 +481,21 @@ export const DEFAULT_TOKENS: Record<string, TokenMeta[]> = {
       "symbol": "USDT",
       "name": "Tether",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDT.png"
+      "logo": "/logos/0xa86a-0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7.png"
     },
     {
       "address": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
       "symbol": "USDC",
       "name": "USDC",
       "decimals": 6,
-      "logo": "https://xflows.wanchain.org/Token/USDC.png"
+      "logo": "/logos/0xa86a-0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e.png"
     },
     {
       "address": "0x152b9d0fdc40c096757f570a51e494bd4b943e50",
       "symbol": "WBTC",
       "name": "Wrapped BTC",
       "decimals": 8,
-      "logo": "https://xflows.wanchain.org/Token/WBTC.png"
+      "logo": "/logos/0xa86a-0x152b9d0fdc40c096757f570a51e494bd4b943e50.png"
     }
   ]
 };

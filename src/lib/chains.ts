@@ -5,6 +5,7 @@
 // (no Tauri) it falls back to the in-memory built-ins.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 import { isTauri } from "./platform";
 import { SUPPORTED_CHAINS } from "./tokenData";
@@ -93,7 +94,14 @@ export async function loadChains(): Promise<void> {
   }
   chains = await invoke<Chain[]>("get_chains");
   emit();
+  // A dApp can add a network via wallet_addEthereumChain — refresh the list when the
+  // backend signals it (registered once).
+  if (!chainsListenerBound) {
+    chainsListenerBound = true;
+    void listen("chains-changed", () => void loadChains());
+  }
 }
+let chainsListenerBound = false;
 
 export async function addChain(chain: Omit<Chain, "builtin">): Promise<void> {
   const next: Chain = { ...chain, builtin: false };

@@ -413,7 +413,7 @@ const SPIKE_ACCOUNT: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
 /// A supported EVM chain. `rpc` is the public node we forward read-only JSON-RPC
 /// to. Users can add custom chains and edit existing params from Settings; the
 /// effective list lives in `chains_state()` and is persisted to chains.json.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct ChainCfg {
     /// EIP-155 chain id as a 0x-hex string (what dApps see via `eth_chainId`).
     id: String,
@@ -514,6 +514,9 @@ fn route_method(method: &str) -> Route {
 enum WalletOutcome {
     Reply(Value),
     SwitchChain(String),
+    /// EIP-3085: a dApp asked to add a network the registry doesn't have yet. The
+    /// caller inserts + persists it, then switches to it.
+    AddChain(ChainCfg),
 }
 
 /// Handle a wallet-namespaced method against the given `current` chain id and the
@@ -559,12 +562,49 @@ fn handle_wallet_method(
             Ok(WalletOutcome::SwitchChain(chain.id.to_string()))
         }
         "wallet_addEthereumChain" => {
-            // TODO: persist user-added chains (Settings → manage Chains). For now
-            // only chains already in the built-in registry are accepted.
             let target = chain_id_param()?;
-            find_chain(target)
-                .map(|_| WalletOutcome::Reply(Value::Null))
-                .ok_or_else(|| format!("wallet_addEthereumChain not supported yet for {target}"))
+            // Already known → switch to OUR configured chain (we keep our own RPC,
+            // never adopt the dApp-supplied one for a chain we already trust).
+            if let Some(chain) = find_chain(target) {
+                return Ok(WalletOutcome::SwitchChain(chain.id));
+            }
+            // New chain → build a ChainCfg from the EIP-3085 params and add it.
+            let p = params.first().ok_or_else(|| format!("{method}: missing params"))?;
+            let id = normalize_chain_id(target)?;
+            let name = p
+                .get("chainName")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| format!("{method}: chainName is required"))?;
+            let rpc = p
+                .get("rpcUrls")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.iter().find_map(|u| u.as_str()))
+                .map(|s| s.to_string())
+                .ok_or_else(|| format!("{method}: an rpcUrls entry is required"))?;
+            validate_rpc(&rpc)?;
+            let nc = p.get("nativeCurrency");
+            let symbol = nc
+                .and_then(|n| n.get("symbol"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("ETH")
+                .to_string();
+            let decimals = nc
+                .and_then(|n| n.get("decimals"))
+                .and_then(|v| v.as_u64())
+                .filter(|d| *d != 0)
+                .unwrap_or(18) as u32;
+            Ok(WalletOutcome::AddChain(ChainCfg {
+                id,
+                name,
+                symbol,
+                rpc,
+                decimals,
+                color: "#6b7280".to_string(),
+                builtin: false,
+            }))
         }
         // Minimal EIP-2255: we only ever grant eth_accounts.
         "wallet_requestPermissions" | "wallet_getPermissions" => {
@@ -1107,6 +1147,23 @@ async fn handle_rpc<R: Runtime>(
                     let _ = app.emit("active-chain-changed", new_id.clone());
                     push_chain_changed(app, &new_id);
                     Ok(Value::Null) // EIP-3326: null on success
+                }
+                WalletOutcome::AddChain(chain) => {
+                    let new_id = chain.id.clone();
+                    {
+                        let mut chains = chains_state().lock().unwrap();
+                        if !chains.iter().any(|c| c.id.eq_ignore_ascii_case(&new_id)) {
+                            chains.push(chain);
+                        }
+                    }
+                    save_chains(app)?;
+                    println!("[AutoDesktop] dApp added chain -> {new_id}");
+                    // Refresh the shell's network list, then switch to the new chain.
+                    let _ = app.emit("chains-changed", ());
+                    *current_chain().lock().unwrap() = new_id.clone();
+                    let _ = app.emit("active-chain-changed", new_id.clone());
+                    push_chain_changed(app, &new_id);
+                    Ok(Value::Null) // EIP-3085: null on success
                 }
             }
         }
@@ -2432,6 +2489,52 @@ mod tests {
 
         // missing chainId param is a hard error, not a silent default
         assert!(handle_wallet_method("wallet_switchEthereumChain", &[], "0x1", None).is_err());
+    }
+
+    #[test]
+    fn add_ethereum_chain_switches_known_and_adds_new() {
+        // A chain already in the registry → just switch (keep OUR rpc, ignore dApp's).
+        let known = handle_wallet_method(
+            "wallet_addEthereumChain",
+            &[json!({ "chainId": "0xa86a", "rpcUrls": ["https://evil.example/rpc"] })],
+            "0x1",
+            None,
+        )
+        .unwrap();
+        assert_eq!(known, WalletOutcome::SwitchChain("0xa86a".to_string()));
+
+        // A brand-new chain → AddChain built from the EIP-3085 params.
+        let added = handle_wallet_method(
+            "wallet_addEthereumChain",
+            &[json!({
+                "chainId": "0x440b",
+                "chainName": "Local Test Net",
+                "rpcUrls": ["https://rpc.localtest.example"],
+                "nativeCurrency": { "symbol": "LTN", "decimals": 18 }
+            })],
+            "0x1",
+            None,
+        )
+        .unwrap();
+        match added {
+            WalletOutcome::AddChain(c) => {
+                assert_eq!(c.id, "0x440b");
+                assert_eq!(c.name, "Local Test Net");
+                assert_eq!(c.symbol, "LTN");
+                assert_eq!(c.rpc, "https://rpc.localtest.example");
+                assert!(!c.builtin);
+            }
+            other => panic!("expected AddChain, got {other:?}"),
+        }
+
+        // A new chain with a non-http(s) rpc is rejected (no malicious scheme).
+        assert!(handle_wallet_method(
+            "wallet_addEthereumChain",
+            &[json!({ "chainId": "0x440c", "chainName": "X", "rpcUrls": ["ftp://nope"] })],
+            "0x1",
+            None,
+        )
+        .is_err());
     }
 }
 
