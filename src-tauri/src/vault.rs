@@ -41,6 +41,14 @@ const ARGON_P_COST: u32 = 1;
 // BIP-39 / BIP-44 derivation
 // ---------------------------------------------------------------------------
 
+/// A fresh random wallet id (16 bytes hex) — used as the `wallets/<id>.json`
+/// filename. Random, not derived, so it never leaks anything about the secret.
+pub fn new_wallet_id() -> String {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
 /// Generate a fresh 12-word English BIP-39 mnemonic.
 pub fn generate_mnemonic() -> Result<String, String> {
     let mut entropy = Zeroizing::new([0u8; 16]); // 128 bits → 12 words
@@ -172,6 +180,18 @@ pub struct AccountMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Keystore {
     pub version: u32,
+    /// Stable per-wallet id — the filename (`<id>.json`) in the `wallets/` dir.
+    /// Empty in legacy single-vault keystores; assigned on migration.
+    #[serde(default)]
+    pub id: String,
+    /// User-facing wallet name (e.g. "Wallet 1"). Empty in legacy keystores;
+    /// defaulted on migration.
+    #[serde(default)]
+    pub label: String,
+    /// Creation time (ms since epoch) — used only to order the wallet list
+    /// stably. 0 for legacy/migrated keystores (sort first).
+    #[serde(default)]
+    pub created: u64,
     /// Secret kind: "hd" (BIP-39 mnemonic), "privkey" (a single raw key), or
     /// "ledger" (a hardware account — no stored secret).
     /// Defaults to "hd" so keystores written before this field stay readable.
@@ -213,6 +233,9 @@ fn default_kdf() -> String {
 pub fn ledger_keystore(path: &str, accounts: Vec<AccountMeta>) -> Keystore {
     Keystore {
         version: 1,
+        id: String::new(),
+        label: String::new(),
+        created: 0,
         kind: "ledger".to_string(),
         path: Some(path.to_string()),
         kdf: "none".to_string(),
@@ -270,6 +293,9 @@ pub fn seal(
 
     Ok(Keystore {
         version: 1,
+        id: String::new(),
+        label: String::new(),
+        created: 0,
         kind: kind.to_string(),
         path: None,
         kdf: "argon2id".to_string(),

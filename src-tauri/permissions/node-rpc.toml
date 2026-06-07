@@ -1,0 +1,6 @@
+# Permission for the app-defined `node_rpc` command (shell-only read channel to any
+# registered chain's node, server-side so it bypasses the node's CORS policy).
+[[permission]]
+identifier = "allow-node-rpc"
+description = "Allow the trusted shell to perform read-only JSON-RPC against any registered chain."
+commands.allow = ["node_rpc"]

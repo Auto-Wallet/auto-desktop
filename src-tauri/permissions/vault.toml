@@ -56,3 +56,13 @@ commands.allow = ["select_account"]
 identifier = "allow-add-account"
 description = "Allow the shell to derive and persist the next HD account."
 commands.allow = ["add_account"]
+
+[[permission]]
+identifier = "allow-rename-wallet"
+description = "Allow the shell to rename a wallet (plaintext label only)."
+commands.allow = ["rename_wallet"]
+
+[[permission]]
+identifier = "allow-delete-wallet"
+description = "Allow the shell to delete a single wallet's keystore."
+commands.allow = ["delete_wallet"]

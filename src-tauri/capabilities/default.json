@@ -10,6 +10,8 @@
     "allow-set-dapp-bounds",
     "allow-hide-dapp",
     "allow-close-dapp",
+    "allow-node-rpc",
+    "allow-wallet-send",
     "allow-set-active-chain",
     "allow-get-active-chain",
     "allow-get-chains",
@@ -26,6 +28,8 @@
     "allow-ledger-addresses",
     "allow-connect-ledger",
     "allow-select-account",
-    "allow-add-account"
+    "allow-add-account",
+    "allow-rename-wallet",
+    "allow-delete-wallet"
   ]
 }

@@ -27,6 +27,11 @@
   box-shadow: var(--sh-xl);
   padding: 30px 28px 26px;
   animation: fadeUp 0.3s ease;
+  transition: max-width 0.2s ease;
+}
+/* Roomier card for the Ledger address picker (a page of 20 + pagination). */
+.lock-card.wide {
+  max-width: 560px;
 }
 
 .lock-brand {
@@ -408,4 +413,37 @@
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--ink);
+}
+
+/* paginated picker (20 per page, scrollable, streaming) */
+.ledger-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ledger-list.scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.ledger-acct:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.ledger-acct.ledger-skel {
+  cursor: default;
+  pointer-events: none;
+}
+.ledger-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ledger-range {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+  white-space: nowrap;
 }

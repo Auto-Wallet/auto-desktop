@@ -1,0 +1,8 @@
+# Permission for the app-defined `open_external_url` command so it can be granted
+# to remote dApp webviews (bare identifier, no plugin prefix). The command itself
+# only honors http/https and never touches the opener plugin from the page — the
+# dApp can't reach opener:* directly.
+[[permission]]
+identifier = "allow-open-external-url"
+description = "Allow remote dApp webviews to open an http(s) URL in the OS default browser."
+commands.allow = ["open_external_url"]

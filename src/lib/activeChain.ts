@@ -5,6 +5,7 @@
 
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { BUILTIN_CHAINS } from "./chains";
 import { isTauri } from "./platform";
 
@@ -28,6 +29,16 @@ function ensureLoaded() {
       }
     })
     .catch((e) => console.error("[AutoDesktop] get_active_chain failed", e));
+
+  // Follow network switches initiated from INSIDE a dApp (wallet_switchEthereumChain):
+  // the backend emits this so the wallet's own chain selector tracks the dApp.
+  listen<string>("active-chain-changed", (e) => {
+    const id = e.payload;
+    if (id && id !== chainId) {
+      chainId = id;
+      emit();
+    }
+  }).catch((e) => console.error("[AutoDesktop] active-chain listen failed", e));
 }
 
 /** Switch the active wallet network. Updates the backend (which notifies dApps). */

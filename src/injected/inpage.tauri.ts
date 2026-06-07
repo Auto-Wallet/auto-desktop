@@ -66,3 +66,39 @@ const transport: ProviderTransport = {
 
 installProvider(transport, { forceInject: true });
 console.log('[AutoDesktop] Auto Wallet provider injected');
+
+// Route "open in a new window" intents (window.open / <a target="_blank">) to the
+// OS default browser. WKWebView would otherwise silently drop them (there's no
+// second window). Only http(s) is forwarded; the Rust command re-validates the
+// scheme. Normal in-page navigation (target=_self) is untouched.
+function installLinkInterceptor() {
+  const openExternal = (url: string): boolean => {
+    if (!/^https?:\/\//i.test(url)) return false;
+    void getInvoke()
+      .then((invoke) => invoke('open_external_url', { url }))
+      .catch((e) => console.error('[AutoDesktop] open_external_url failed', e));
+    return true;
+  };
+
+  const nativeOpen = window.open.bind(window);
+  window.open = function (url?: string | URL, target?: string, features?: string): Window | null {
+    const u = url == null ? '' : String(url);
+    if (u && openExternal(u)) return null;
+    return nativeOpen(url as string, target, features);
+  } as typeof window.open;
+
+  document.addEventListener(
+    'click',
+    (e) => {
+      const anchor = (e.target as Element | null)?.closest?.('a') as HTMLAnchorElement | null;
+      if (!anchor || anchor.target !== '_blank') return;
+      const href = anchor.href || anchor.getAttribute('href') || '';
+      if (openExternal(href)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    true,
+  );
+}
+installLinkInterceptor();

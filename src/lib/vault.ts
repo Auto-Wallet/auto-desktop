@@ -1,11 +1,14 @@
-// Vault store — the front of the encrypted HD key vault (VISION ④⑤ + the wallet's
-// real key ownership). A tiny external store over the Rust vault commands
-// (create/import/unlock/lock/select/add). Private keys live ONLY in Rust; this
-// layer sees addresses + the one-time mnemonic on the backup screen, never a key.
+// Vault store — the front of the encrypted key vault(s) (VISION ④⑤ + the wallet's
+// real key ownership). A tiny external store over the Rust vault commands. The app
+// now holds MULTIPLE independent wallets side by side (several seeds / private keys
+// / Ledgers): create / import / connect adds a wallet; rename / delete manage them.
+// Private keys live ONLY in Rust; this layer sees addresses + labels + the one-time
+// mnemonic on the backup screen, never a key.
 //
-// In the plain browser dev-preview there is no Tauri backend, so the actions run
-// against an in-memory DEMO vault (the publicly-known Anvil accounts) so the
-// lock/setup/backup UI is fully browseable for screenshot testing.
+// One app password unlocks all software wallets (a Ledger-only setup has none). In
+// the plain browser dev-preview there is no Tauri backend, so the actions run
+// against an in-memory DEMO store (publicly-known Anvil accounts) so the whole
+// onboarding + wallet-management UI is browseable for screenshot testing.
 
 import { invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
@@ -13,33 +16,42 @@ import { isTauri } from "./platform";
 
 export type VaultPhase = "loading" | "absent" | "locked" | "unlocked";
 
-/** Secret kind of the on-disk wallet. A Ledger wallet has no password. */
+/** Secret kind of an on-disk wallet. A Ledger wallet has no password. */
 export type VaultKind = "hd" | "privkey" | "ledger";
+
+/** One wallet for the switcher: id, label, secret kind, and its account addresses. */
+export type WalletInfo = {
+  id: string;
+  label: string;
+  kind: VaultKind;
+  accounts: string[];
+};
 
 export type VaultState = {
   phase: VaultPhase;
-  /** Active address when unlocked, or the stored address (for display) when locked. */
-  address: string | null;
-  /** All unlocked account addresses (empty when locked). */
-  accounts: string[];
-  /** Index of the active account within `accounts`. */
-  active: number;
-  /** Kind of the existing wallet, or null when absent. */
-  kind: VaultKind | null;
+  /** An app password is set (some software wallet exists). When false, the only
+   *  wallets are Ledgers (no password) — adding a software wallet sets one. */
+  hasPassword: boolean;
+  /** Every wallet (from memory when unlocked, else on-disk metadata for display). */
+  wallets: WalletInfo[];
+  /** The active account address (lowercase 0x), or null. */
+  active: string | null;
 };
 
 /** One Ledger account candidate returned by the device for the picker. */
 export type LedgerAccount = { index: number; path: string; address: string };
 
+/** A newly added wallet (id + active address). */
+export type WalletRef = { id: string; address: string };
+
 type RustStatus = {
   exists: boolean;
   unlocked: boolean;
-  address: string | null;
-  accounts: string[];
-  active: number;
-  kind: VaultKind | null;
+  has_password: boolean;
+  wallets: WalletInfo[];
+  active: string | null;
 };
-type NewVault = { address: string; mnemonic: string };
+type NewVault = { id: string; address: string; mnemonic: string };
 
 // Publicly-known Anvil/Hardhat dev addresses — used ONLY for the no-backend
 // browser preview. NOT secrets.
@@ -49,12 +61,12 @@ const DEMO_ADDRESSES = [
   "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc",
   "0x90f79bf6eb2c4f870365e785982e1f101e93b906",
   "0x15d34aaf54267db7d7c367839aaf71a00a2c6a65",
+  "0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc",
+  "0x976ea74026e726554db657fa54763abd0c3a0aa9",
 ];
 const DEMO_MNEMONIC = "test test test test test test test test test test test junk";
 
-let state: VaultState = { phase: "loading", address: null, accounts: [], active: 0, kind: null };
-let demoCreated = false;
-let demoKind: VaultKind | null = null;
+let state: VaultState = { phase: "loading", hasPassword: false, wallets: [], active: null };
 
 const listeners = new Set<() => void>();
 function set(patch: Partial<VaultState>) {
@@ -70,120 +82,171 @@ export function useVault(): VaultState {
   return useSyncExternalStore(subscribe, () => state);
 }
 
-/** Non-hook read of the current unlocked account addresses (for the accounts store). */
+/** All signer account addresses across every wallet (for the accounts store). */
 export function getVaultAccounts(): string[] {
-  return state.accounts;
+  return state.wallets.flatMap((w) => w.accounts);
+}
+
+// ---------------------------------------------------------------------------
+// DEMO store (browser preview, no Tauri backend)
+// ---------------------------------------------------------------------------
+let demoWallets: WalletInfo[] = [];
+let demoActive: string | null = null;
+let demoHasPassword = false;
+let demoLocked = false;
+let demoSeq = 0;
+
+function nextDemoAddr(): string {
+  const used = new Set(demoWallets.flatMap((w) => w.accounts));
+  const free = DEMO_ADDRESSES.find((a) => !used.has(a));
+  if (free) return free;
+  // Fall back to a synthetic address once the pool is exhausted.
+  return `0x${(demoSeq + 1).toString(16).padStart(40, "0")}`;
+}
+function demoStatus(): VaultState {
+  const exists = demoWallets.length > 0;
+  return {
+    phase: !exists ? "absent" : demoLocked ? "locked" : "unlocked",
+    hasPassword: demoHasPassword,
+    wallets: demoWallets.map((w) => ({ ...w, accounts: [...w.accounts] })),
+    active: demoActive,
+  };
+}
+function demoAddWallet(kind: VaultKind): WalletRef {
+  const id = `demo-${++demoSeq}`;
+  const address = nextDemoAddr();
+  demoWallets.push({ id, label: `Wallet ${demoWallets.length + 1}`, kind, accounts: [address] });
+  if (kind !== "ledger") demoHasPassword = true;
+  demoLocked = false;
+  demoActive = address;
+  return { id, address };
 }
 
 /** Load the vault status from the backend (or the demo) on startup. */
 export async function refreshVaultStatus(): Promise<void> {
   if (!isTauri()) {
-    set(
-      demoCreated
-        ? { phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: demoKind }
-        : { phase: "absent", address: null, accounts: [], active: 0, kind: null },
-    );
+    set(demoStatus());
     return;
   }
   const s = await invoke<RustStatus>("vault_status");
   set({
     phase: !s.exists ? "absent" : s.unlocked ? "unlocked" : "locked",
-    address: s.address,
-    accounts: s.accounts,
+    hasPassword: s.has_password,
+    wallets: s.wallets,
     active: s.active,
-    kind: s.kind,
   });
 }
 
-/** Create a new wallet. Returns the mnemonic for the ONE-TIME backup screen. */
-export async function createVault(password: string): Promise<string> {
+/** Add a new HD wallet. `password` is required only for the FIRST software wallet
+ *  (when no app password is set yet); when already unlocked it's ignored. Returns
+ *  the mnemonic for the ONE-TIME backup screen. */
+export async function createVault(password?: string): Promise<string> {
   if (!isTauri()) {
-    demoCreated = true;
-    demoKind = "hd";
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: "hd" });
+    demoAddWallet("hd");
+    set(demoStatus());
     return DEMO_MNEMONIC;
   }
   const nv = await invoke<NewVault>("create_vault", { password });
-  set({ phase: "unlocked", address: nv.address, accounts: [nv.address], active: 0, kind: "hd" });
+  await refreshVaultStatus();
   return nv.mnemonic;
 }
 
-/** Import a wallet from a recovery phrase. */
-export async function importVault(password: string, mnemonic: string): Promise<void> {
+/** Add a wallet from a recovery phrase. */
+export async function importVault(password: string | undefined, mnemonic: string): Promise<WalletRef> {
   if (!isTauri()) {
-    demoCreated = true;
-    demoKind = "hd";
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: "hd" });
-    return;
+    const ref = demoAddWallet("hd");
+    set(demoStatus());
+    return ref;
   }
-  const address = await invoke<string>("import_vault", { password, mnemonic: mnemonic.trim() });
-  set({ phase: "unlocked", address, accounts: [address], active: 0, kind: "hd" });
+  const ref = await invoke<WalletRef>("import_vault", { password, mnemonic: mnemonic.trim() });
+  await refreshVaultStatus();
+  return ref;
 }
 
-/** Import a wallet from a single raw private key. Single-account (no HD derivation). */
-export async function importPrivateKey(password: string, privateKey: string): Promise<void> {
+/** Add a wallet from a single raw private key. Single-account (no HD derivation). */
+export async function importPrivateKey(
+  password: string | undefined,
+  privateKey: string,
+): Promise<WalletRef> {
   if (!isTauri()) {
-    demoCreated = true;
-    demoKind = "privkey";
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: "privkey" });
-    return;
+    const ref = demoAddWallet("privkey");
+    set(demoStatus());
+    return ref;
   }
-  const address = await invoke<string>("import_private_key", {
-    password,
-    privateKey: privateKey.trim(),
-  });
-  set({ phase: "unlocked", address, accounts: [address], active: 0, kind: "privkey" });
+  const ref = await invoke<WalletRef>("import_private_key", { password, privateKey: privateKey.trim() });
+  await refreshVaultStatus();
+  return ref;
 }
 
-/** List addresses from a connected Ledger (for the onboarding picker). Requires the
- *  device unlocked with the Ethereum app open. */
+/** List addresses from a connected Ledger (for the picker). Requires the device
+ *  unlocked with the Ethereum app open. */
 export async function listLedgerAddresses(start: number, count: number): Promise<LedgerAccount[]> {
   if (!isTauri()) {
-    // Browser preview: synthesize a picker from the demo addresses.
-    return DEMO_ADDRESSES.slice(start, start + count).map((address, i) => ({
-      index: start + i,
-      path: `m/44'/60'/${start + i}'/0/0`,
-      address,
-    }));
+    // Browser preview: synthesize a deterministic picker (enough rows for
+    // pagination) by varying a demo address's tail with the derivation index.
+    return Array.from({ length: count }, (_, i) => {
+      const index = start + i;
+      const base = DEMO_ADDRESSES[index % DEMO_ADDRESSES.length].slice(2);
+      const suffix = index.toString(16).padStart(4, "0");
+      const address = "0x" + (base.slice(0, 36) + suffix).slice(0, 40);
+      return { index, path: `m/44'/60'/${index}'/0/0`, address };
+    });
   }
   return invoke<LedgerAccount[]>("ledger_addresses", { start, count });
 }
 
-/** Connect a Ledger account at `path` as THE wallet (no password). */
-export async function connectLedger(path: string): Promise<void> {
+/** Add a Ledger account at `path` as a new wallet (no password). */
+export async function connectLedger(path: string): Promise<WalletRef> {
   if (!isTauri()) {
-    demoCreated = true;
-    demoKind = "ledger";
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: "ledger" });
-    return;
+    const ref = demoAddWallet("ledger");
+    set(demoStatus());
+    return ref;
   }
-  const address = await invoke<string>("connect_ledger", { path });
-  set({ phase: "unlocked", address, accounts: [address], active: 0, kind: "ledger" });
+  const ref = await invoke<WalletRef>("connect_ledger", { path });
+  await refreshVaultStatus();
+  return ref;
 }
 
-/** Unlock the on-disk vault. Throws "incorrect password" on a bad password. */
+/** Transaction shape the wallet's own Send hands to the backend. */
+export type SendTx = { to: string; value?: string; data?: string };
+
+/**
+ * Wallet-initiated send. Runs through the SAME approval window + signing path as a
+ * dApp's eth_sendTransaction, so the user confirms (and can tune the fee) there.
+ * Returns the broadcast tx hash. In the browser preview there's no signer, so it
+ * just simulates a broadcast.
+ */
+export async function walletSend(chainId: string, tx: SendTx): Promise<string> {
+  if (!isTauri()) {
+    await new Promise((r) => setTimeout(r, 700));
+    return "0x" + "ad".repeat(32); // demo: fake but well-formed tx hash
+  }
+  return invoke<string>("wallet_send", { chainId, tx });
+}
+
+/** Unlock every wallet with the app password. Throws "incorrect password" on a bad one. */
 export async function unlockVault(password: string): Promise<void> {
   if (!isTauri()) {
-    demoCreated = true;
-    set({ phase: "unlocked", address: DEMO_ADDRESSES[0], accounts: [DEMO_ADDRESSES[0]], active: 0, kind: demoKind });
+    demoLocked = false;
+    set(demoStatus());
     return;
   }
   await invoke<string>("unlock_vault", { password });
-  await refreshVaultStatus(); // populate the full account list + active index
+  await refreshVaultStatus();
 }
 
-/** Lock the wallet (drop keys from memory). */
+/** Lock all wallets (drop keys + password from memory). */
 export async function lockVault(): Promise<void> {
   if (isTauri()) {
     await invoke("lock_vault");
     await refreshVaultStatus();
     return;
   }
-  demoCreated = false;
-  set({ phase: "absent", accounts: [], active: 0 });
+  demoLocked = true;
+  set(demoStatus());
 }
 
-/** Reset the wallet: delete the on-disk keystore and return to onboarding. The
+/** Reset EVERYTHING: delete every keystore and return to onboarding. The
  *  "forgot password" escape hatch — IRREVERSIBLE; the caller must confirm first. */
 export async function resetVault(): Promise<void> {
   if (isTauri()) {
@@ -191,29 +254,66 @@ export async function resetVault(): Promise<void> {
     await refreshVaultStatus();
     return;
   }
-  demoCreated = false;
-  demoKind = null;
-  set({ phase: "absent", address: null, accounts: [], active: 0, kind: null });
+  demoWallets = [];
+  demoActive = null;
+  demoHasPassword = false;
+  demoLocked = false;
+  set(demoStatus());
 }
 
-/** Switch the active HD account (pushes accountsChanged to dApps backend-side). */
-export async function selectVaultAccount(index: number): Promise<void> {
+/** Switch the active account by ADDRESS (across all wallets); pushes accountsChanged
+ *  to dApps backend-side. */
+export async function selectAccount(address: string): Promise<void> {
   if (!isTauri()) {
-    set({ active: index, address: state.accounts[index] ?? state.address });
+    demoActive = address;
+    set(demoStatus());
     return;
   }
-  const address = await invoke<string>("select_account", { index });
-  set({ active: index, address });
+  await invoke<string>("select_account", { address });
+  set({ active: address });
 }
 
-/** Derive + persist the next HD account. Returns its address. */
-export async function addVaultAccount(): Promise<string> {
+/** Derive + persist the next HD account in wallet `walletId`. Returns its address. */
+export async function addVaultAccount(walletId: string): Promise<string> {
   if (!isTauri()) {
-    const next = DEMO_ADDRESSES[state.accounts.length] ?? `0x${"0".repeat(40)}`;
-    set({ accounts: [...state.accounts, next] });
+    const w = demoWallets.find((x) => x.id === walletId);
+    if (!w) throw new Error("wallet not found");
+    if (w.kind !== "hd") throw new Error("this wallet can't derive more accounts");
+    const next = nextDemoAddr();
+    w.accounts = [...w.accounts, next];
+    demoActive = next;
+    set(demoStatus());
     return next;
   }
-  const address = await invoke<string>("add_account");
-  set({ accounts: [...state.accounts, address] });
+  const address = await invoke<string>("add_account", { walletId });
+  await refreshVaultStatus();
   return address;
+}
+
+/** Rename a wallet (plaintext label only — no password). */
+export async function renameWallet(id: string, label: string): Promise<void> {
+  if (!isTauri()) {
+    const w = demoWallets.find((x) => x.id === id);
+    if (w) w.label = label.trim() || w.label;
+    set(demoStatus());
+    return;
+  }
+  await invoke("rename_wallet", { id, label });
+  await refreshVaultStatus();
+}
+
+/** Delete a single wallet (its keystore). IRREVERSIBLE for a software wallet —
+ *  the caller must confirm first. */
+export async function deleteWallet(id: string): Promise<void> {
+  if (!isTauri()) {
+    demoWallets = demoWallets.filter((w) => w.id !== id);
+    if (!demoWallets.flatMap((w) => w.accounts).includes(demoActive ?? "")) {
+      demoActive = demoWallets.flatMap((w) => w.accounts)[0] ?? null;
+    }
+    if (demoWallets.length === 0) demoHasPassword = false;
+    set(demoStatus());
+    return;
+  }
+  await invoke("delete_wallet", { id });
+  await refreshVaultStatus();
 }

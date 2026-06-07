@@ -1,0 +1,7 @@
+# Permission for the app-defined `wallet_send` command (shell-only). Routes a
+# wallet-initiated send through the SAME approval + sign + broadcast path as a
+# dApp's eth_sendTransaction — the user still confirms in the approval window.
+[[permission]]
+identifier = "allow-wallet-send"
+description = "Allow the trusted shell to initiate a send (native or ERC-20) for user approval."
+commands.allow = ["wallet_send"]

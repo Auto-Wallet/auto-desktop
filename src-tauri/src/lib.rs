@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::webview::WebviewBuilder;
 use tauri::window::WindowBuilder;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl};
 
 // ---------------------------------------------------------------------------
 // Crypto helpers.
@@ -105,32 +105,69 @@ enum ActiveKind {
     Ledger(String),
 }
 
-/// The decrypted vault for this session.
-struct UnlockedVault {
+/// One unlocked wallet — a single keystore's worth of accounts plus its root
+/// secret. The app can hold several at once (multiple seeds / private keys /
+/// Ledgers side by side), each identified by a stable `id`.
+struct UnlockedWallet {
+    id: String,
+    label: String,
     secret: VaultSecret,
     accounts: Vec<UnlockedAccount>,
-    active: usize,
 }
 
-fn vault_state() -> &'static Mutex<Option<UnlockedVault>> {
-    static V: OnceLock<Mutex<Option<UnlockedVault>>> = OnceLock::new();
+impl UnlockedWallet {
+    /// On-disk kind tag for this wallet's secret.
+    fn kind(&self) -> &'static str {
+        match self.secret {
+            VaultSecret::Mnemonic(_) => "hd",
+            VaultSecret::PrivateKey => "privkey",
+            VaultSecret::Ledger => "ledger",
+        }
+    }
+}
+
+/// The decrypted multi-wallet store for this session.
+///
+/// `password` is the single app password, kept in memory (Zeroizing) while
+/// unlocked so a NEW software wallet can be sealed without re-prompting. This is
+/// no weaker than holding the decrypted mnemonics, which already live here — the
+/// password protects the very secrets already in RAM. `None` when no software
+/// wallet exists (a Ledger-only setup has no password). `active` is the active
+/// account ADDRESS (lowercase 0x), unique across all wallets.
+struct WalletStore {
+    password: Option<Zeroizing<String>>,
+    wallets: Vec<UnlockedWallet>,
+    active: String,
+}
+
+fn store_state() -> &'static Mutex<Option<WalletStore>> {
+    static V: OnceLock<Mutex<Option<WalletStore>>> = OnceLock::new();
     V.get_or_init(|| Mutex::new(None))
 }
 
 /// The active account's address, or `None` when the wallet is locked / empty.
 fn active_account_address() -> Option<String> {
-    let guard = vault_state().lock().unwrap();
-    let v = guard.as_ref()?;
-    v.accounts.get(v.active).map(|a| a.address.clone())
+    let guard = store_state().lock().unwrap();
+    let s = guard.as_ref()?;
+    s.wallets
+        .iter()
+        .flat_map(|w| &w.accounts)
+        .find(|a| a.address == s.active)
+        .map(|a| a.address.clone())
 }
 
 /// Run `f` with the active account's *software* signing key. Errors clearly when
 /// locked or when the active account is a Ledger (use the device path instead),
 /// rather than silently falling back to any default key.
 fn with_active_key<T>(f: impl FnOnce(&SigningKey) -> T) -> Result<T, String> {
-    let guard = vault_state().lock().unwrap();
-    let v = guard.as_ref().ok_or("wallet is locked")?;
-    let acct = v.accounts.get(v.active).ok_or("no active account")?;
+    let guard = store_state().lock().unwrap();
+    let s = guard.as_ref().ok_or("wallet is locked")?;
+    let acct = s
+        .wallets
+        .iter()
+        .flat_map(|w| &w.accounts)
+        .find(|a| a.address == s.active)
+        .ok_or("no active account")?;
     match &acct.signer {
         Signer::Local(key) => Ok(f(key)),
         Signer::Ledger { .. } => {
@@ -140,21 +177,28 @@ fn with_active_key<T>(f: impl FnOnce(&SigningKey) -> T) -> Result<T, String> {
 }
 
 /// Snapshot the active account's signing kind (and Ledger path) without holding the
-/// vault lock during the (slow) device round-trip.
+/// store lock during the (slow) device round-trip.
 fn active_signer_kind() -> Result<ActiveKind, String> {
-    let guard = vault_state().lock().unwrap();
-    let v = guard.as_ref().ok_or("wallet is locked")?;
-    let acct = v.accounts.get(v.active).ok_or("no active account")?;
+    let guard = store_state().lock().unwrap();
+    let s = guard.as_ref().ok_or("wallet is locked")?;
+    let acct = s
+        .wallets
+        .iter()
+        .flat_map(|w| &w.accounts)
+        .find(|a| a.address == s.active)
+        .ok_or("no active account")?;
     Ok(match &acct.signer {
         Signer::Local(_) => ActiveKind::Local,
         Signer::Ledger { path } => ActiveKind::Ledger(path.clone()),
     })
 }
 
-/// Derive `count` (≥1) accounts from `mnemonic` and install them as THE unlocked
-/// vault, active = account 0. Shared by create/import/unlock and the e2e tests.
-/// Returns the public account metadata (for sealing into the keystore).
-fn install_unlocked_vault(mnemonic: &str, count: u32) -> Result<Vec<vault::AccountMeta>, String> {
+/// Derive `count` (≥1) HD accounts from `mnemonic` into unlocked accounts + their
+/// public metadata (for sealing into the keystore). Pure — touches no global state.
+fn derive_hd_accounts(
+    mnemonic: &str,
+    count: u32,
+) -> Result<(Vec<UnlockedAccount>, Vec<vault::AccountMeta>), String> {
     let count = count.max(1);
     let mut accounts = Vec::with_capacity(count as usize);
     let mut metas = Vec::with_capacity(count as usize);
@@ -163,57 +207,154 @@ fn install_unlocked_vault(mnemonic: &str, count: u32) -> Result<Vec<vault::Accou
         metas.push(vault::AccountMeta { index, address: address.clone() });
         accounts.push(UnlockedAccount { index, address, signer: Signer::Local(key) });
     }
-    *vault_state().lock().unwrap() = Some(UnlockedVault {
-        secret: VaultSecret::Mnemonic(Zeroizing::new(mnemonic.to_string())),
-        accounts,
-        active: 0,
-    });
-    Ok(metas)
+    Ok((accounts, metas))
 }
 
-/// Install a single imported private key as THE unlocked vault. There is no
-/// mnemonic, so no further accounts can be derived (`add_account` refuses).
-/// Returns the single account's public metadata (for sealing into the keystore).
-fn install_privkey_vault(privkey_hex: &str) -> Result<Vec<vault::AccountMeta>, String> {
+/// Build an in-memory HD wallet from a keystore's decrypted mnemonic, deriving each
+/// RECORDED account index and checking the address matches (integrity). Consumes the
+/// `Zeroizing` mnemonic so it lives on inside the wallet (and nowhere else).
+fn build_hd_wallet_from_keystore(
+    ks: &vault::Keystore,
+    mnemonic: Zeroizing<String>,
+) -> Result<UnlockedWallet, String> {
+    let mut accounts = Vec::new();
+    for meta in &ks.accounts {
+        let (key, address) = vault::derive_account(&mnemonic, meta.index)?;
+        if address != meta.address {
+            return Err("keystore integrity check failed".to_string());
+        }
+        accounts.push(UnlockedAccount { index: meta.index, address, signer: Signer::Local(key) });
+    }
+    if accounts.is_empty() {
+        // A legacy keystore may record no accounts — derive the first.
+        let (key, address) = vault::derive_account(&mnemonic, 0)?;
+        accounts.push(UnlockedAccount { index: 0, address, signer: Signer::Local(key) });
+    }
+    Ok(UnlockedWallet {
+        id: ks.id.clone(),
+        label: ks.label.clone(),
+        secret: VaultSecret::Mnemonic(mnemonic),
+        accounts,
+    })
+}
+
+/// Build an in-memory single-account wallet from a keystore's decrypted private key.
+fn build_privkey_wallet_from_keystore(
+    ks: &vault::Keystore,
+    privkey_hex: &str,
+) -> Result<UnlockedWallet, String> {
     let key = vault::parse_private_key(privkey_hex)?;
     let address = address_from_verifying_key(key.verifying_key());
-    let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
-    *vault_state().lock().unwrap() = Some(UnlockedVault {
+    if let Some(meta) = ks.accounts.first() {
+        if meta.address != address {
+            return Err("keystore integrity check failed".to_string());
+        }
+    }
+    Ok(UnlockedWallet {
+        id: ks.id.clone(),
+        label: ks.label.clone(),
         secret: VaultSecret::PrivateKey,
         accounts: vec![UnlockedAccount { index: 0, address, signer: Signer::Local(key) }],
-        active: 0,
-    });
-    Ok(metas)
+    })
 }
 
-/// Restore a Ledger vault from its on-disk keystore (no password / no device). The
-/// path + address are public, so this just records the active account. Returns the
-/// active address.
-fn install_ledger_vault_from_keystore(ks: &vault::Keystore) -> Result<String, String> {
+/// Build an in-memory Ledger wallet from its keystore (path + public address only —
+/// no in-process key; signing goes to the device).
+fn build_ledger_wallet_from_keystore(ks: &vault::Keystore) -> Result<UnlockedWallet, String> {
     let path = ks.path.as_deref().ok_or("ledger keystore missing derivation path")?;
     let address = ks
         .accounts
         .first()
         .map(|a| a.address.clone())
         .ok_or("ledger keystore has no account")?;
-    install_ledger_vault(path, &address)?;
-    Ok(address)
-}
-
-/// Install a Ledger account (derivation path + its address) as THE unlocked vault.
-/// No in-process key: signing goes to the device. The address is public, so this
-/// needs neither a password nor the device to be present — it just records that the
-/// active wallet is the Ledger at `path`.
-fn install_ledger_vault(path: &str, address: &str) -> Result<Vec<vault::AccountMeta>, String> {
-    let metas = vec![vault::AccountMeta { index: 0, address: address.to_string() }];
-    *vault_state().lock().unwrap() = Some(UnlockedVault {
+    Ok(UnlockedWallet {
+        id: ks.id.clone(),
+        label: ks.label.clone(),
         secret: VaultSecret::Ledger,
         accounts: vec![UnlockedAccount {
             index: 0,
-            address: address.to_string(),
+            address,
             signer: Signer::Ledger { path: path.to_string() },
         }],
-        active: 0,
+    })
+}
+
+/// Push a freshly-built wallet into the session store (creating the store if it was
+/// locked/absent), make its first account active, and — when adding the first
+/// software wallet — record the app password. Returns the new active address.
+fn store_push_wallet(wallet: UnlockedWallet, password: Option<Zeroizing<String>>) -> String {
+    let first = wallet.accounts.first().map(|a| a.address.clone()).unwrap_or_default();
+    let mut guard = store_state().lock().unwrap();
+    match guard.as_mut() {
+        Some(store) => {
+            if password.is_some() {
+                store.password = password;
+            }
+            store.wallets.push(wallet);
+            store.active = first.clone();
+        }
+        None => {
+            *guard = Some(WalletStore { password, wallets: vec![wallet], active: first.clone() });
+        }
+    }
+    first
+}
+
+/// Install a single freshly-derived HD wallet as THE session store (test helper —
+/// resets any existing store; production paths ADD wallets via `store_push_wallet`).
+#[cfg(test)]
+fn install_unlocked_vault(mnemonic: &str, count: u32) -> Result<Vec<vault::AccountMeta>, String> {
+    let (accounts, metas) = derive_hd_accounts(mnemonic, count)?;
+    let active = accounts.first().map(|a| a.address.clone()).unwrap_or_default();
+    *store_state().lock().unwrap() = Some(WalletStore {
+        password: None,
+        wallets: vec![UnlockedWallet {
+            id: "w-hd".to_string(),
+            label: "Wallet 1".to_string(),
+            secret: VaultSecret::Mnemonic(Zeroizing::new(mnemonic.to_string())),
+            accounts,
+        }],
+        active,
+    });
+    Ok(metas)
+}
+
+/// Install a single imported private key as THE session store (test helper).
+#[cfg(test)]
+fn install_privkey_vault(privkey_hex: &str) -> Result<Vec<vault::AccountMeta>, String> {
+    let key = vault::parse_private_key(privkey_hex)?;
+    let address = address_from_verifying_key(key.verifying_key());
+    let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
+    *store_state().lock().unwrap() = Some(WalletStore {
+        password: None,
+        wallets: vec![UnlockedWallet {
+            id: "w-privkey".to_string(),
+            label: "Wallet 1".to_string(),
+            secret: VaultSecret::PrivateKey,
+            accounts: vec![UnlockedAccount { index: 0, address: address.clone(), signer: Signer::Local(key) }],
+        }],
+        active: address,
+    });
+    Ok(metas)
+}
+
+/// Install a single Ledger account as THE session store (test helper).
+#[cfg(test)]
+fn install_ledger_vault(path: &str, address: &str) -> Result<Vec<vault::AccountMeta>, String> {
+    let metas = vec![vault::AccountMeta { index: 0, address: address.to_string() }];
+    *store_state().lock().unwrap() = Some(WalletStore {
+        password: None,
+        wallets: vec![UnlockedWallet {
+            id: "w-ledger".to_string(),
+            label: "Wallet 1".to_string(),
+            secret: VaultSecret::Ledger,
+            accounts: vec![UnlockedAccount {
+                index: 0,
+                address: address.to_string(),
+                signer: Signer::Ledger { path: path.to_string() },
+            }],
+        }],
+        active: address.to_string(),
     });
     Ok(metas)
 }
@@ -291,11 +432,25 @@ fn builtin_chains() -> Vec<ChainCfg> {
         ChainCfg { id: id.into(), name: name.into(), symbol: symbol.into(), rpc: rpc.into(), decimals: 18, color: color.into(), builtin: true }
     }
     vec![
-        c("0x1",    "Ethereum",     "ETH", "https://ethereum-rpc.publicnode.com",    "#627EEA"),
-        c("0x2105", "Base",         "ETH", "https://base-rpc.publicnode.com",        "#0052FF"),
-        c("0xa",    "OP Mainnet",   "ETH", "https://optimism-rpc.publicnode.com",    "#FF0420"),
-        c("0xa4b1", "Arbitrum One", "ETH", "https://arbitrum-one-rpc.publicnode.com", "#28A0F0"),
-        c("0x89",   "Polygon",      "POL", "https://polygon-bor-rpc.publicnode.com", "#8247E5"),
+        c("0x1",     "Ethereum",      "ETH",   "https://ethereum-rpc.publicnode.com",            "#627EEA"),
+        c("0x2105",  "Base",          "ETH",   "https://base-rpc.publicnode.com",                "#0052FF"),
+        c("0xa",     "OP Mainnet",    "ETH",   "https://optimism-rpc.publicnode.com",            "#FF0420"),
+        c("0xa4b1",  "Arbitrum One",  "ETH",   "https://arbitrum-one-rpc.publicnode.com",        "#28A0F0"),
+        c("0x89",    "Polygon",       "POL",   "https://polygon-bor-rpc.publicnode.com",         "#8247E5"),
+        // Extended default set (EVM subset of the xflows supported-chains snapshot).
+        c("0x38",    "BNB Chain",     "BNB",   "https://bsc-rpc.publicnode.com",                 "#F3BA2F"),
+        c("0xa86a",  "Avalanche",     "AVAX",  "https://avalanche-c-chain-rpc.publicnode.com",   "#E84142"),
+        c("0xe708",  "Linea",         "ETH",   "https://linea-rpc.publicnode.com",               "#61DFFF"),
+        c("0x13e31", "Blast",         "ETH",   "https://blast-rpc.publicnode.com",               "#FCD000"),
+        c("0x144",   "zkSync Era",    "ETH",   "https://mainnet.era.zksync.io",                  "#8C8DFC"),
+        c("0x44d",   "Polygon zkEVM", "ETH",   "https://zkevm-rpc.com",                          "#7B3FE4"),
+        c("0x92",    "Sonic",         "S",     "https://rpc.soniclabs.com",                      "#1969FF"),
+        c("0xc4",    "X Layer",       "OKB",   "https://rpc.xlayer.tech",                        "#1A1A1A"),
+        c("0x1e0",   "World Chain",   "ETH",   "https://worldchain-mainnet.g.alchemy.com/public", "#1A1A1A"),
+        c("0x250",   "Astar",         "ASTR",  "https://evm.astar.network",                      "#1B6DC1"),
+        c("0x378",   "Wanchain",      "WAN",   "https://gwan-ssl.wandevs.org:56891",             "#2A6BE9"),
+        c("0x440",   "Metis",         "METIS", "https://andromeda.metis.io/?owner=1088",         "#00DACC"),
+        c("0xa4ec",  "Celo",          "CELO",  "https://forno.celo.org",                         "#FCB728"),
     ]
 }
 
@@ -423,11 +578,11 @@ fn handle_wallet_method(
 
 /// Forward a read-only method to the selected chain's node and return its result.
 /// Node-side JSON-RPC errors are propagated (not masked).
-async fn forward_to_node(method: &str, params: &[Value]) -> Result<Value, String> {
-    let chain_id = current_chain().lock().unwrap().clone();
-    let chain = find_chain(&chain_id)
-        .ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
-
+/// Low-level JSON-RPC POST to a specific chain's configured node. Done server-side
+/// (reqwest), so it is NOT subject to the node's CORS policy — many public RPCs
+/// send no CORS headers, which would break a browser `fetch`. Shared by dApp
+/// forwarding and the shell's read command.
+async fn node_rpc_call(chain: &ChainCfg, method: &str, params: &[Value]) -> Result<Value, String> {
     let payload = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
 
     let resp = http()
@@ -451,6 +606,47 @@ async fn forward_to_node(method: &str, params: &[Value]) -> Result<Value, String
         .ok_or_else(|| format!("RPC response from {} had no result", chain.name))
 }
 
+async fn forward_to_node(method: &str, params: &[Value]) -> Result<Value, String> {
+    let chain_id = current_chain().lock().unwrap().clone();
+    let chain = find_chain(&chain_id)
+        .ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
+    node_rpc_call(&chain, method, params).await
+}
+
+/// Read-only methods the trusted shell may forward to a node. Keeps `node_rpc` a
+/// pure read channel — writes (eth_sendRawTransaction) go through the signing path.
+fn is_read_method(method: &str) -> bool {
+    matches!(
+        method,
+        "eth_getBalance"
+            | "eth_call"
+            | "eth_getTransactionCount"
+            | "eth_gasPrice"
+            | "eth_maxPriorityFeePerGas"
+            | "eth_estimateGas"
+            | "eth_blockNumber"
+            | "eth_getBlockByNumber"
+            | "eth_chainId"
+            | "net_version"
+            | "eth_getCode"
+            | "eth_getTransactionReceipt"
+            | "eth_getTransactionByHash"
+            | "eth_feeHistory"
+    )
+}
+
+/// Read-only JSON-RPC for the TRUSTED shell against ANY registered chain (not just
+/// the active one). Server-side, so it works on chains whose public RPC doesn't
+/// allow browser CORS. Shell-only (capabilities/default.json); read methods only.
+#[tauri::command]
+async fn node_rpc(chain_id: String, method: String, params: Option<Vec<Value>>) -> Result<Value, String> {
+    if !is_read_method(&method) {
+        return Err(format!("node_rpc: method not allowed: {method}"));
+    }
+    let chain = find_chain(&chain_id).ok_or_else(|| format!("node_rpc: unknown chain {chain_id}"))?;
+    node_rpc_call(&chain, &method, &params.unwrap_or_default()).await
+}
+
 // ---------------------------------------------------------------------------
 // Approval flow.
 //
@@ -472,11 +668,45 @@ struct PendingRequest {
     origin: String,
     /// Human-readable summary of what is being signed (decoded message text).
     summary: String,
+    /// For `eth_sendTransaction`: the fully-resolved transaction to display
+    /// (gas/nonce/fees filled in), so the approval window can show details and
+    /// let the user adjust the fee. `None` for message-signing methods.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx: Option<PreparedTx>,
+}
+
+/// A transaction with every field resolved from the node (gas/nonce/fees filled),
+/// ready to display in the approval window and then sign. All quantities 0x-hex.
+#[derive(Debug, Clone, Serialize)]
+struct PreparedTx {
+    chain_id: String,
+    chain_name: String,
+    /// Native gas-token symbol (for displaying `value`).
+    symbol: String,
+    from: String,
+    /// "" for contract creation.
+    to: String,
+    value: String,
+    data: String,
+    /// Gas limit.
+    gas: String,
+    nonce: String,
+    max_priority_fee_per_gas: String,
+    max_fee_per_gas: String,
+}
+
+/// The user's decision from the approval window. For `eth_sendTransaction` the
+/// window may hand back fee overrides (wei hex) the user typed in.
+#[derive(Debug, Clone, Default)]
+struct ApprovalDecision {
+    approved: bool,
+    max_fee_per_gas: Option<String>,
+    max_priority_fee_per_gas: Option<String>,
 }
 
 struct PendingEntry {
     req: PendingRequest,
-    responder: tokio::sync::oneshot::Sender<bool>,
+    responder: tokio::sync::oneshot::Sender<ApprovalDecision>,
 }
 
 fn pending() -> &'static Mutex<HashMap<String, PendingEntry>> {
@@ -498,10 +728,10 @@ fn preview_message(bytes: &[u8]) -> String {
 }
 
 /// Register a pending request, surface the approval window, and await the user's
-/// decision (with a safety timeout). Returns `true` if approved.
-async fn request_approval<R: Runtime>(app: &AppHandle<R>, req: PendingRequest) -> bool {
+/// decision (with a safety timeout). Returns the decision (rejected on timeout).
+async fn request_approval<R: Runtime>(app: &AppHandle<R>, req: PendingRequest) -> ApprovalDecision {
     let id = req.id.clone();
-    let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<ApprovalDecision>();
     pending().lock().unwrap().insert(id.clone(), PendingEntry { req, responder: tx });
 
     // Best-effort: bring up the approval window. If it can't open we still wait —
@@ -512,7 +742,10 @@ async fn request_approval<R: Runtime>(app: &AppHandle<R>, req: PendingRequest) -
 
     let decided = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
     pending().lock().unwrap().remove(&id); // no-op if already resolved; cleans up on timeout
-    matches!(decided, Ok(Ok(true)))
+    match decided {
+        Ok(Ok(decision)) => decision,
+        _ => ApprovalDecision::default(), // timeout / channel drop = rejected
+    }
 }
 
 /// Open (or focus) the dedicated approval window — a separate top-level window
@@ -531,13 +764,17 @@ fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 }
 
 /// Resolve a pending request and close the approval window once nothing is left.
-fn resolve_request<R: Runtime>(app: &AppHandle<R>, id: &str, approved: bool) -> Result<(), String> {
+fn resolve_request<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    decision: ApprovalDecision,
+) -> Result<(), String> {
     let entry = pending()
         .lock()
         .unwrap()
         .remove(id)
         .ok_or_else(|| format!("no pending request {id}"))?;
-    let _ = entry.responder.send(approved); // receiver may have timed out; ignore
+    let _ = entry.responder.send(decision); // receiver may have timed out; ignore
     if pending().lock().unwrap().is_empty() {
         if let Some(win) = app.get_webview_window("approval") {
             let _ = win.close();
@@ -570,8 +807,9 @@ async fn handle_signing<R: Runtime>(
                 method: method.to_string(),
                 origin: origin.to_string(),
                 summary: preview_message(&message),
+                tx: None,
             };
-            if request_approval(app, req).await {
+            if request_approval(app, req).await.approved {
                 personal_sign(&message)
             } else {
                 Err("User rejected the request (4001)".to_string())
@@ -582,17 +820,8 @@ async fn handle_signing<R: Runtime>(
                 .first()
                 .ok_or("eth_sendTransaction: missing transaction param")?
                 .clone();
-            let req = PendingRequest {
-                id: next_request_id(),
-                method: method.to_string(),
-                origin: origin.to_string(),
-                summary: preview_tx(&tx),
-            };
-            if request_approval(app, req).await {
-                build_send_transaction(&tx).await
-            } else {
-                Err("User rejected the request (4001)".to_string())
-            }
+            let chain_id = current_chain().lock().unwrap().clone();
+            approve_and_send(app, &chain_id, origin, &tx).await
         }
         "eth_signTypedData_v4" => {
             // Params are [address, typedData]; the typed data is usually a JSON
@@ -612,8 +841,9 @@ async fn handle_signing<R: Runtime>(
                 method: method.to_string(),
                 origin: origin.to_string(),
                 summary: preview_typed_data(&typed),
+                tx: None,
             };
-            if request_approval(app, req).await {
+            if request_approval(app, req).await.approved {
                 sign_typed_data(&typed)
             } else {
                 Err("User rejected the request (4001)".to_string())
@@ -675,7 +905,7 @@ fn hex_to_u128(hex: &str) -> Result<u128, String> {
 }
 
 /// A human-readable summary of a transaction for the approval window. Display
-/// only — `build_send_transaction` re-parses and validates the real fields.
+/// only — `prepare_tx` resolves the real fields and `finalize_tx` signs them.
 fn preview_tx(tx: &Value) -> String {
     let to = tx_field(tx, "to").unwrap_or("new contract");
     let short_to = if to.len() > 12 { format!("{}…{}", &to[..6], &to[to.len() - 4..]) } else { to.to_string() };
@@ -688,21 +918,21 @@ fn preview_tx(tx: &Value) -> String {
     }
 }
 
-/// Resolve the EIP-1559 fee fields: use the dApp's if both are given, else suggest
-/// `maxPriorityFeePerGas` from the node (1 gwei fallback) and
-/// `maxFeePerGas = 2*baseFee + priority` from the pending block's base fee.
-async fn resolve_fees(tx: &Value) -> Result<(String, String), String> {
+/// Resolve the EIP-1559 fee fields on a specific chain: use the caller's if both
+/// are given, else suggest `maxPriorityFeePerGas` from the node (1 gwei fallback)
+/// and `maxFeePerGas = 2*baseFee + priority` from the pending block's base fee.
+async fn resolve_fees_on(chain: &ChainCfg, tx: &Value) -> Result<(String, String), String> {
     if let (Some(prio), Some(max)) =
         (tx_field(tx, "maxPriorityFeePerGas"), tx_field(tx, "maxFeePerGas"))
     {
         return Ok((prio.to_string(), max.to_string()));
     }
-    let priority = match forward_to_node("eth_maxPriorityFeePerGas", &[]).await {
+    let priority = match node_rpc_call(chain, "eth_maxPriorityFeePerGas", &[]).await {
         Ok(v) => v.as_str().map(str::to_string).unwrap_or_else(|| "0x3b9aca00".into()),
         Err(_) => "0x3b9aca00".to_string(), // 1 gwei
     };
     let priority_wei = hex_to_u128(&priority)?;
-    let block = forward_to_node("eth_getBlockByNumber", &[json!("pending"), json!(false)]).await?;
+    let block = node_rpc_call(chain, "eth_getBlockByNumber", &[json!("pending"), json!(false)]).await?;
     let base_wei = block
         .get("baseFeePerGas")
         .and_then(|v| v.as_str())
@@ -712,40 +942,36 @@ async fn resolve_fees(tx: &Value) -> Result<(String, String), String> {
     Ok((format!("0x{priority_wei:x}"), format!("0x{max_fee:x}")))
 }
 
-/// Build, sign (Rust-side, with the active vault key), and broadcast an EIP-1559
-/// transaction. Missing fields (nonce/gas/fees) are filled from the chain node.
-/// Returns the broadcast tx hash from `eth_sendRawTransaction`.
-async fn build_send_transaction(tx: &Value) -> Result<Value, String> {
-    use eth_tx::{parse_address, parse_data, parse_quantity, Eip1559Tx};
-
+/// Resolve a transaction on `chain_id`: validate `from`, then fill any missing
+/// nonce / gas / fees from the node. Pure preparation — no signing, no broadcast —
+/// so the approval window can show the user exactly what they're about to sign.
+async fn prepare_tx(chain_id: &str, tx: &Value) -> Result<PreparedTx, String> {
+    let chain = find_chain(chain_id).ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
     let from = active_account_address().ok_or("wallet is locked")?;
     if let Some(req_from) = tx_field(tx, "from") {
         if !req_from.eq_ignore_ascii_case(&from) {
-            return Err(format!(
-                "transaction 'from' {req_from} is not the active account {from}"
-            ));
+            return Err(format!("transaction 'from' {req_from} is not the active account {from}"));
         }
     }
 
-    let chain_id_hex = current_chain().lock().unwrap().clone();
-    let to_hex = tx_field(tx, "to").unwrap_or("");
-    let value_hex = tx_field(tx, "value").unwrap_or("0x0");
-    let data_hex = tx_field(tx, "data").or_else(|| tx_field(tx, "input")).unwrap_or("0x");
+    let to = tx_field(tx, "to").unwrap_or("").to_string();
+    let value = tx_field(tx, "value").unwrap_or("0x0").to_string();
+    let data = tx_field(tx, "data").or_else(|| tx_field(tx, "input")).unwrap_or("0x").to_string();
 
-    let nonce_hex = match tx_field(tx, "nonce") {
+    let nonce = match tx_field(tx, "nonce") {
         Some(n) => n.to_string(),
-        None => forward_to_node("eth_getTransactionCount", &[json!(from), json!("pending")])
+        None => node_rpc_call(&chain, "eth_getTransactionCount", &[json!(from), json!("pending")])
             .await?
             .as_str()
             .ok_or("node returned a non-string nonce")?
             .to_string(),
     };
 
-    let gas_hex = match tx_field(tx, "gas") {
+    let gas = match tx_field(tx, "gas") {
         Some(g) => g.to_string(),
         None => {
-            let call = json!({ "from": from, "to": to_hex, "value": value_hex, "data": data_hex });
-            forward_to_node("eth_estimateGas", &[call])
+            let call = json!({ "from": from, "to": to, "value": value, "data": data });
+            node_rpc_call(&chain, "eth_estimateGas", &[call])
                 .await?
                 .as_str()
                 .ok_or("node returned a non-string gas estimate")?
@@ -753,17 +979,40 @@ async fn build_send_transaction(tx: &Value) -> Result<Value, String> {
         }
     };
 
-    let (priority_hex, max_fee_hex) = resolve_fees(tx).await?;
+    let (priority, max_fee) = resolve_fees_on(&chain, tx).await?;
+
+    Ok(PreparedTx {
+        chain_id: chain.id,
+        chain_name: chain.name,
+        symbol: chain.symbol,
+        from,
+        to,
+        value,
+        data,
+        gas,
+        nonce,
+        max_priority_fee_per_gas: priority,
+        max_fee_per_gas: max_fee,
+    })
+}
+
+/// Sign (Rust-side software key, or on the Ledger) and broadcast a fully-prepared
+/// EIP-1559 transaction. Returns the broadcast tx hash.
+async fn finalize_tx(p: &PreparedTx) -> Result<Value, String> {
+    use eth_tx::{parse_address, parse_data, parse_quantity, Eip1559Tx};
+
+    let chain = find_chain(&p.chain_id)
+        .ok_or_else(|| format!("no RPC configured for chain {}", p.chain_id))?;
 
     let tx1559 = Eip1559Tx {
-        chain_id: parse_quantity(&chain_id_hex)?,
-        nonce: parse_quantity(&nonce_hex)?,
-        max_priority_fee_per_gas: parse_quantity(&priority_hex)?,
-        max_fee_per_gas: parse_quantity(&max_fee_hex)?,
-        gas_limit: parse_quantity(&gas_hex)?,
-        to: parse_address(to_hex)?,
-        value: parse_quantity(value_hex)?,
-        data: parse_data(data_hex)?,
+        chain_id: parse_quantity(&p.chain_id)?,
+        nonce: parse_quantity(&p.nonce)?,
+        max_priority_fee_per_gas: parse_quantity(&p.max_priority_fee_per_gas)?,
+        max_fee_per_gas: parse_quantity(&p.max_fee_per_gas)?,
+        gas_limit: parse_quantity(&p.gas)?,
+        to: parse_address(&p.to)?,
+        value: parse_quantity(&p.value)?,
+        data: parse_data(&p.data)?,
     };
 
     // Sign Rust-side (software) or on the device (Ledger) — never in a webview.
@@ -775,7 +1024,63 @@ async fn build_send_transaction(tx: &Value) -> Result<Value, String> {
         }
     };
     // Broadcast; the node echoes the canonical transaction hash.
-    forward_to_node("eth_sendRawTransaction", &[json!(raw_tx)]).await
+    node_rpc_call(&chain, "eth_sendRawTransaction", &[json!(raw_tx)]).await
+}
+
+/// The shared eth_sendTransaction path: resolve the tx, ask the user (showing full
+/// details + an editable fee), apply any fee override, then sign + broadcast. Used
+/// by both a dApp's `eth_sendTransaction` and the wallet's own Send.
+async fn approve_and_send<R: Runtime>(
+    app: &AppHandle<R>,
+    chain_id: &str,
+    origin: &str,
+    tx: &Value,
+) -> Result<Value, String> {
+    let prepared = prepare_tx(chain_id, tx).await?;
+    let req = PendingRequest {
+        id: next_request_id(),
+        method: "eth_sendTransaction".to_string(),
+        origin: origin.to_string(),
+        summary: preview_tx(tx),
+        tx: Some(prepared.clone()),
+    };
+
+    let decision = request_approval(app, req).await;
+    if !decision.approved {
+        return Err("User rejected the request (4001)".to_string());
+    }
+
+    let mut p = prepared;
+    if let Some(mf) = decision.max_fee_per_gas {
+        p.max_fee_per_gas = mf;
+    }
+    if let Some(mp) = decision.max_priority_fee_per_gas {
+        p.max_priority_fee_per_gas = mp;
+    }
+    // Keep priority ≤ max fee even if the user lowered the cap below it.
+    if hex_to_u128(&p.max_priority_fee_per_gas).unwrap_or(0)
+        > hex_to_u128(&p.max_fee_per_gas).unwrap_or(u128::MAX)
+    {
+        p.max_priority_fee_per_gas = p.max_fee_per_gas.clone();
+    }
+    finalize_tx(&p).await
+}
+
+/// Wallet-initiated send (shell-only): same approval + sign + broadcast path as a
+/// dApp's eth_sendTransaction, so the user confirms in the approval window with the
+/// full gas/nonce details. `tx` is `{ to, value?, data? }`; native sends set
+/// `value`, ERC-20 sends set `to`=token + `data`=transfer(...).
+#[tauri::command]
+async fn wallet_send<R: Runtime>(
+    app: AppHandle<R>,
+    chain_id: String,
+    tx: Value,
+) -> Result<Value, String> {
+    if active_account_address().is_none() {
+        return Err("wallet is locked".to_string());
+    }
+    find_chain(&chain_id).ok_or_else(|| format!("wallet_send: unknown chain {chain_id}"))?;
+    approve_and_send(&app, &chain_id, "AutoDesktop Wallet", &tx).await
 }
 
 /// The single wallet backend entry point. `origin` is the trustworthy caller
@@ -796,6 +1101,11 @@ async fn handle_rpc<R: Runtime>(
                 WalletOutcome::SwitchChain(new_id) => {
                     *current_chain().lock().unwrap() = new_id.clone();
                     println!("[AutoDesktop] switched chain -> {new_id}");
+                    // A dApp switched the network: make the wallet UI (shell) follow
+                    // (event the activeChain store listens for), and re-push
+                    // chainChanged to every dApp tab so they all agree.
+                    let _ = app.emit("active-chain-changed", new_id.clone());
+                    push_chain_changed(app, &new_id);
                     Ok(Value::Null) // EIP-3326: null on success
                 }
             }
@@ -805,16 +1115,27 @@ async fn handle_rpc<R: Runtime>(
     }
 }
 
-/// Approve a pending request. Scoped to the "approval" webview (ACL).
+/// Approve a pending request. Scoped to the "approval" webview (ACL). For a
+/// transaction the window may pass fee overrides (wei hex) the user typed in;
+/// they're absent (None) for message signing or an unchanged fee.
 #[tauri::command]
-fn approve_request<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
-    resolve_request(&app, &id, true)
+fn approve_request<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    max_fee_per_gas: Option<String>,
+    max_priority_fee_per_gas: Option<String>,
+) -> Result<(), String> {
+    resolve_request(
+        &app,
+        &id,
+        ApprovalDecision { approved: true, max_fee_per_gas, max_priority_fee_per_gas },
+    )
 }
 
 /// Reject a pending request. Scoped to the "approval" webview (ACL).
 #[tauri::command]
 fn reject_request<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
-    resolve_request(&app, &id, false)
+    resolve_request(&app, &id, ApprovalDecision { approved: false, ..Default::default() })
 }
 
 /// List requests awaiting approval, for the approval window to render.
@@ -1013,6 +1334,25 @@ fn close_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String
     Ok(())
 }
 
+/// Open an http(s) URL in the OS default browser. Granted to the dapp webview so
+/// that "open in a new window" links (window.open / target=_blank) — which
+/// WKWebView can't satisfy in-app — land in the user's real browser. SECURITY:
+/// only http/https is honored; a dApp can't coerce us into file://, custom
+/// schemes, or shell execution.
+#[tauri::command]
+fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let u = url.trim();
+    let lower = u.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(format!("refusing to open non-http(s) url: {u}"));
+    }
+    println!("[AutoDesktop] open external -> {u}");
+    app.opener()
+        .open_url(u.to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Active wallet network (the chain dApps see via eth_chainId).
 // ---------------------------------------------------------------------------
@@ -1206,11 +1546,29 @@ fn remove_chain<R: Runtime>(app: AppHandle<R>, id: String) -> Result<Vec<ChainCf
 // NEVER in the repo (密钥安全).
 // ---------------------------------------------------------------------------
 
-const KEYSTORE_FILE: &str = "vault.json";
+/// Each wallet is one keystore file under `wallets/<id>.json` in the app-data dir,
+/// so several independent wallets (seeds / private keys / Ledgers) coexist. A
+/// pre-multi-wallet install kept a single `vault.json`; `migrate_legacy_keystore`
+/// folds that into the new dir on first read.
+const WALLETS_DIR: &str = "wallets";
+const LEGACY_KEYSTORE_FILE: &str = "vault.json";
 
-fn keystore_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(dir.join(KEYSTORE_FILE))
+fn wallets_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(WALLETS_DIR))
+}
+
+/// Path to one wallet's keystore. `id` is our own random hex; still validate it so
+/// a crafted id can never traverse out of the wallets dir.
+fn wallet_file<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<PathBuf, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("invalid wallet id".to_string());
+    }
+    Ok(wallets_dir(app)?.join(format!("{id}.json")))
+}
+
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 fn read_keystore(path: &Path) -> Result<Option<vault::Keystore>, String> {
@@ -1231,22 +1589,133 @@ fn write_keystore(path: &Path, ks: &vault::Keystore) -> Result<(), String> {
     std::fs::write(path, json).map_err(|e| format!("writing keystore: {e}"))
 }
 
+/// Fold a legacy single-vault `vault.json` into `wallets/<id>.json` (assigning an
+/// id + label) once, before any multi-wallet read. Idempotent: removes the legacy
+/// file only after the new one is safely written.
+fn migrate_legacy_keystore<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let legacy = base.join(LEGACY_KEYSTORE_FILE);
+    if !legacy.exists() {
+        return Ok(());
+    }
+    if let Some(mut ks) = read_keystore(&legacy)? {
+        if ks.id.is_empty() {
+            ks.id = vault::new_wallet_id();
+        }
+        if ks.label.is_empty() {
+            ks.label = "Wallet 1".to_string();
+        }
+        let dest = wallet_file(app, &ks.id)?;
+        write_keystore(&dest, &ks)?;
+    }
+    let _ = std::fs::remove_file(&legacy);
+    Ok(())
+}
+
+/// Every wallet keystore on disk, in stable creation order (migrating the legacy
+/// single vault first). The shell renders the wallet switcher from this.
+fn read_all_keystores<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<vault::Keystore>, String> {
+    migrate_legacy_keystore(app)?;
+    let dir = wallets_dir(app)?;
+    let mut out: Vec<vault::Keystore> = Vec::new();
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|x| x.to_str()) == Some("json") {
+                    if let Some(ks) = read_keystore(&path)? {
+                        out.push(ks);
+                    }
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("reading wallets dir: {e}")),
+    }
+    // Stable order: by creation time, then id (creation is 0 for migrated wallets).
+    out.sort_by(|a, b| a.created.cmp(&b.created).then_with(|| a.id.cmp(&b.id)));
+    Ok(out)
+}
+
+/// Default label for the next wallet ("Wallet N", N = count + 1).
+fn next_wallet_label<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
+    Ok(format!("Wallet {}", read_all_keystores(app)?.len() + 1))
+}
+
+/// The app password to seal a new SOFTWARE wallet with, plus whether to record it
+/// in the store (Some only when this call establishes the password). If we're
+/// already unlocked with a password, reuse it (no re-prompt); otherwise the caller
+/// must supply one (≥8 chars) — and if software wallets already exist on disk, it
+/// must decrypt one of them, so every software wallet shares the one app password.
+fn resolve_app_password<R: Runtime>(
+    app: &AppHandle<R>,
+    provided: Option<String>,
+) -> Result<(Zeroizing<String>, Option<Zeroizing<String>>), String> {
+    if let Some(pw) = store_state().lock().unwrap().as_ref().and_then(|s| s.password.clone()) {
+        return Ok((pw, None));
+    }
+    let pw = provided.ok_or("a password is required to add this wallet")?;
+    if pw.len() < 8 {
+        return Err("password must be at least 8 characters".to_string());
+    }
+    if let Some(existing) = read_all_keystores(app)?
+        .iter()
+        .find(|k| k.kind == "hd" || k.kind == "privkey")
+    {
+        vault::open(&pw, existing).map_err(|_| "incorrect password".to_string())?;
+    }
+    let pw = Zeroizing::new(pw);
+    Ok((pw.clone(), Some(pw)))
+}
+
+/// One wallet for the shell switcher: its id, label, secret kind, and account
+/// addresses.
+#[derive(Serialize)]
+struct WalletInfo {
+    id: String,
+    label: String,
+    /// "hd" | "privkey" | "ledger".
+    kind: String,
+    accounts: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct VaultStatus {
-    /// A keystore file exists on disk.
+    /// At least one wallet keystore exists on disk.
     exists: bool,
-    /// The wallet is unlocked in memory this session.
+    /// The wallets are unlocked in memory this session.
     unlocked: bool,
-    /// The active address (when unlocked) or the first stored address (when locked,
-    /// for display), if any.
-    address: Option<String>,
-    /// All unlocked account addresses (empty when locked).
-    accounts: Vec<String>,
-    /// Index of the active account among `accounts`.
-    active: usize,
-    /// Secret kind of the on-disk wallet: "hd" | "privkey" | "ledger" (None if absent).
-    /// The shell uses this to skip the password unlock for a Ledger wallet.
-    kind: Option<String>,
+    /// An app password is set (any software wallet exists). When false, the only
+    /// wallets are Ledgers (no password) and the shell can skip the unlock screen.
+    has_password: bool,
+    /// All wallets (from memory when unlocked, else on-disk metadata for display).
+    wallets: Vec<WalletInfo>,
+    /// The active account address, if any.
+    active: Option<String>,
+}
+
+fn store_wallet_infos(store: &WalletStore) -> Vec<WalletInfo> {
+    store
+        .wallets
+        .iter()
+        .map(|w| WalletInfo {
+            id: w.id.clone(),
+            label: w.label.clone(),
+            kind: w.kind().to_string(),
+            accounts: w.accounts.iter().map(|a| a.address.clone()).collect(),
+        })
+        .collect()
+}
+
+fn disk_wallet_infos(disk: &[vault::Keystore]) -> Vec<WalletInfo> {
+    disk.iter()
+        .map(|k| WalletInfo {
+            id: k.id.clone(),
+            label: k.label.clone(),
+            kind: k.kind.clone(),
+            accounts: k.accounts.iter().map(|a| a.address.clone()).collect(),
+        })
+        .collect()
 }
 
 /// Newly created wallet — returns the mnemonic ONCE so the trusted shell can show
@@ -1254,154 +1723,232 @@ struct VaultStatus {
 /// shell-only.)
 #[derive(Serialize)]
 struct NewVault {
+    id: String,
     address: String,
     mnemonic: String,
 }
 
-/// Whether a vault exists / is unlocked, plus the visible address(es).
+/// A newly added wallet (id + active address) for import/connect paths.
+#[derive(Serialize)]
+struct WalletRef {
+    id: String,
+    address: String,
+}
+
+/// Whether any wallet exists / is unlocked, the full wallet list, and the active
+/// account. The shell renders the switcher + gates the lock screen from this.
 #[tauri::command]
 fn vault_status<R: Runtime>(app: AppHandle<R>) -> Result<VaultStatus, String> {
-    let on_disk = read_keystore(&keystore_path(&app)?)?;
-    let guard = vault_state().lock().unwrap();
-    let unlocked = guard.as_ref();
-    let address = unlocked
-        .and_then(|v| v.accounts.get(v.active))
-        .map(|a| a.address.clone())
-        .or_else(|| {
-            on_disk
-                .as_ref()
-                .and_then(|k| k.accounts.first())
-                .map(|a| a.address.clone())
-        });
+    let disk = read_all_keystores(&app)?;
+    let has_password = disk.iter().any(|k| k.kind == "hd" || k.kind == "privkey");
+    let guard = store_state().lock().unwrap();
+    let (wallets, active) = match guard.as_ref() {
+        Some(store) => (
+            store_wallet_infos(store),
+            (!store.active.is_empty()).then(|| store.active.clone()),
+        ),
+        None => (
+            disk_wallet_infos(&disk),
+            disk.iter().find_map(|k| k.accounts.first()).map(|a| a.address.clone()),
+        ),
+    };
     Ok(VaultStatus {
-        exists: on_disk.is_some(),
-        unlocked: unlocked.is_some(),
-        address,
-        accounts: unlocked
-            .map(|v| v.accounts.iter().map(|a| a.address.clone()).collect())
-            .unwrap_or_default(),
-        active: unlocked.map(|v| v.active).unwrap_or(0),
-        kind: on_disk.as_ref().map(|k| k.kind.clone()),
+        exists: !disk.is_empty(),
+        unlocked: guard.is_some(),
+        has_password,
+        wallets,
+        active,
     })
 }
 
-/// Create a brand-new wallet: generate a mnemonic, seal it under `password`, write
-/// the keystore, and unlock it in memory. Refuses to overwrite an existing vault.
-/// Returns the mnemonic for the one-time backup screen.
+/// Add a brand-new HD wallet: generate a mnemonic, seal it under the app password,
+/// persist it as a new keystore, and add it to the unlocked store (active). The
+/// `password` is required only when establishing the app password (first software
+/// wallet); when already unlocked it is ignored. Returns the mnemonic for the
+/// one-time backup screen.
 #[tauri::command]
-fn create_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<NewVault, String> {
-    if password.len() < 8 {
-        return Err("password must be at least 8 characters".to_string());
-    }
-    let path = keystore_path(&app)?;
-    if read_keystore(&path)?.is_some() {
-        return Err("a wallet already exists".to_string());
-    }
+fn create_vault<R: Runtime>(
+    app: AppHandle<R>,
+    password: Option<String>,
+) -> Result<NewVault, String> {
+    let (pw, store_pw) = resolve_app_password(&app, password)?;
     let mnemonic = vault::generate_mnemonic()?;
-    let metas = install_unlocked_vault(&mnemonic, 1)?;
-    let ks = vault::seal(&password, &mnemonic, "hd", metas)?;
-    write_keystore(&path, &ks)?;
-    let address = active_account_address().ok_or("vault install failed")?;
-    Ok(NewVault { address, mnemonic })
+    let id = vault::new_wallet_id();
+    let label = next_wallet_label(&app)?;
+    let (accounts, metas) = derive_hd_accounts(&mnemonic, 1)?;
+    let mut ks = vault::seal(&pw, &mnemonic, "hd", metas)?;
+    ks.id = id.clone();
+    ks.label = label.clone();
+    ks.created = now_ms();
+    write_keystore(&wallet_file(&app, &id)?, &ks)?;
+    let wallet = UnlockedWallet {
+        id: id.clone(),
+        label,
+        secret: VaultSecret::Mnemonic(Zeroizing::new(mnemonic.clone())),
+        accounts,
+    };
+    let address = store_push_wallet(wallet, store_pw);
+    push_accounts_changed(&app, Some(&address));
+    Ok(NewVault { id, address, mnemonic })
 }
 
-/// Import an existing wallet from a recovery phrase, seal it under `password`, and
-/// unlock it. Refuses to overwrite an existing vault. Returns the active address.
+/// Add a wallet from a recovery phrase. Returns the new wallet's id + active address.
 #[tauri::command]
 fn import_vault<R: Runtime>(
     app: AppHandle<R>,
-    password: String,
+    password: Option<String>,
     mnemonic: String,
-) -> Result<String, String> {
-    if password.len() < 8 {
-        return Err("password must be at least 8 characters".to_string());
-    }
+) -> Result<WalletRef, String> {
     vault::validate_mnemonic(&mnemonic)?;
-    let path = keystore_path(&app)?;
-    if read_keystore(&path)?.is_some() {
-        return Err("a wallet already exists".to_string());
-    }
-    let metas = install_unlocked_vault(&mnemonic, 1)?;
-    let ks = vault::seal(&password, &mnemonic, "hd", metas)?;
-    write_keystore(&path, &ks)?;
-    active_account_address().ok_or_else(|| "vault install failed".to_string())
+    let (pw, store_pw) = resolve_app_password(&app, password)?;
+    let id = vault::new_wallet_id();
+    let label = next_wallet_label(&app)?;
+    let (accounts, metas) = derive_hd_accounts(&mnemonic, 1)?;
+    let mut ks = vault::seal(&pw, &mnemonic, "hd", metas)?;
+    ks.id = id.clone();
+    ks.label = label.clone();
+    ks.created = now_ms();
+    write_keystore(&wallet_file(&app, &id)?, &ks)?;
+    let wallet = UnlockedWallet {
+        id: id.clone(),
+        label,
+        secret: VaultSecret::Mnemonic(Zeroizing::new(mnemonic.trim().to_string())),
+        accounts,
+    };
+    let address = store_push_wallet(wallet, store_pw);
+    push_accounts_changed(&app, Some(&address));
+    Ok(WalletRef { id, address })
 }
 
-/// Import an existing wallet from a single raw private key (the "导入私钥"
-/// onboarding path), seal it under `password`, and unlock it. Refuses to overwrite
-/// an existing vault. Returns the active address. The resulting vault is single-
-/// account (no mnemonic to derive from).
+/// Add a wallet from a single raw private key (single-account — no mnemonic to
+/// derive from). Returns the new wallet's id + active address.
 #[tauri::command]
 fn import_private_key<R: Runtime>(
     app: AppHandle<R>,
-    password: String,
+    password: Option<String>,
     private_key: String,
-) -> Result<String, String> {
-    if password.len() < 8 {
-        return Err("password must be at least 8 characters".to_string());
-    }
+) -> Result<WalletRef, String> {
     // Validate + canonicalize to 0x-lowercase-hex before sealing, so unlock
     // re-derives the same address deterministically.
     let key = vault::parse_private_key(&private_key)?;
     let key_hex = Zeroizing::new(format!("0x{}", hex::encode(key.to_bytes())));
-    let path = keystore_path(&app)?;
-    if read_keystore(&path)?.is_some() {
-        return Err("a wallet already exists".to_string());
-    }
-    let metas = install_privkey_vault(&key_hex)?;
-    let ks = vault::seal(&password, &key_hex, "privkey", metas)?;
-    write_keystore(&path, &ks)?;
-    active_account_address().ok_or_else(|| "vault install failed".to_string())
+    let address = address_from_verifying_key(key.verifying_key());
+    let (pw, store_pw) = resolve_app_password(&app, password)?;
+    let id = vault::new_wallet_id();
+    let label = next_wallet_label(&app)?;
+    let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
+    let mut ks = vault::seal(&pw, &key_hex, "privkey", metas)?;
+    ks.id = id.clone();
+    ks.label = label.clone();
+    ks.created = now_ms();
+    write_keystore(&wallet_file(&app, &id)?, &ks)?;
+    let wallet = UnlockedWallet {
+        id: id.clone(),
+        label,
+        secret: VaultSecret::PrivateKey,
+        accounts: vec![UnlockedAccount { index: 0, address, signer: Signer::Local(key) }],
+    };
+    let address = store_push_wallet(wallet, store_pw);
+    push_accounts_changed(&app, Some(&address));
+    Ok(WalletRef { id, address })
 }
 
-/// Unlock the on-disk vault with `password`. A wrong password fails the AEAD tag
-/// check and surfaces as "incorrect password". Returns the active address. A Ledger
-/// keystore has no secret, so it "unlocks" with no password — its addresses are
-/// public; signing still requires the device.
+/// On boot, auto-load wallets ONLY when there is no app password to enter — i.e. a
+/// Ledger-only (or empty) setup. Their addresses are public, so they open straight
+/// to the wallet with no lock screen (matching the old single-Ledger behaviour). If
+/// ANY software wallet exists, do nothing: the app stays locked until the user
+/// enters the password (which also loads the Ledger wallets).
+fn boot_load_ledger_only<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let disk = read_all_keystores(app)?;
+    let has_software = disk.iter().any(|k| k.kind == "hd" || k.kind == "privkey");
+    if has_software || disk.is_empty() {
+        return Ok(());
+    }
+    let mut wallets = Vec::new();
+    for ks in disk.iter().filter(|k| k.kind == "ledger") {
+        wallets.push(build_ledger_wallet_from_keystore(ks)?);
+    }
+    let active = wallets
+        .iter()
+        .flat_map(|w| &w.accounts)
+        .next()
+        .map(|a| a.address.clone())
+        .unwrap_or_default();
+    *store_state().lock().unwrap() = Some(WalletStore { password: None, wallets, active });
+    Ok(())
+}
+
+/// Unlock ALL wallets with the one app `password`: decrypt every software wallet
+/// (a wrong password fails the AEAD tag check → "incorrect password") and load the
+/// Ledger wallets (public addresses, no secret). The password is kept in memory so
+/// further software wallets can be added without re-prompting. Returns the active
+/// address.
 #[tauri::command]
 fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<String, String> {
-    let ks = read_keystore(&keystore_path(&app)?)?.ok_or("no wallet to unlock")?;
-    if ks.kind == "ledger" {
-        return install_ledger_vault_from_keystore(&ks);
+    let disk = read_all_keystores(&app)?;
+    if disk.is_empty() {
+        return Err("no wallet to unlock".to_string());
     }
-    let secret = vault::open(&password, &ks)?;
-    // "privkey" vaults install the single imported key; everything else (incl.
-    // legacy keystores with no `kind`, defaulted to "hd") walks the HD path.
-    let metas = if ks.kind == "privkey" {
-        install_privkey_vault(&secret)?
-    } else {
-        install_unlocked_vault(&secret, ks.accounts.len().max(1) as u32)?
-    };
-    // Integrity: the addresses we just derived must match what the keystore recorded.
-    for (got, want) in metas.iter().zip(ks.accounts.iter()) {
-        if got.address != want.address {
-            *vault_state().lock().unwrap() = None;
-            return Err("keystore integrity check failed".to_string());
-        }
+    let mut wallets = Vec::with_capacity(disk.len());
+    let mut used_password = false;
+    for ks in &disk {
+        let wallet = match ks.kind.as_str() {
+            "ledger" => build_ledger_wallet_from_keystore(ks)?,
+            "privkey" => {
+                let secret = vault::open(&password, ks)?;
+                used_password = true;
+                build_privkey_wallet_from_keystore(ks, &secret)?
+            }
+            // "hd" + legacy keystores with no `kind` (defaulted to "hd").
+            _ => {
+                let secret = vault::open(&password, ks)?;
+                used_password = true;
+                build_hd_wallet_from_keystore(ks, secret)?
+            }
+        };
+        wallets.push(wallet);
     }
-    active_account_address().ok_or_else(|| "unlock failed".to_string())
+    let active = wallets
+        .iter()
+        .flat_map(|w| &w.accounts)
+        .next()
+        .map(|a| a.address.clone())
+        .unwrap_or_default();
+    let password = used_password.then(|| Zeroizing::new(password));
+    *store_state().lock().unwrap() = Some(WalletStore { password, wallets, active: active.clone() });
+    if active.is_empty() {
+        return Err("unlock failed".to_string());
+    }
+    Ok(active)
 }
 
-/// Lock the wallet: drop all decrypted key material from memory.
+/// Lock the wallet: drop all decrypted key material (and the app password) from
+/// memory.
 #[tauri::command]
 fn lock_vault() {
-    *vault_state().lock().unwrap() = None;
+    *store_state().lock().unwrap() = None;
 }
 
-/// Reset the wallet: drop in-memory keys AND delete the on-disk keystore, so the
-/// app returns to first-run onboarding. This is the "忘记密码" escape hatch — it is
-/// IRREVERSIBLE and destroys the only copy of the encrypted secret, so the UI must
+/// Reset EVERYTHING: drop in-memory keys AND delete every keystore, so the app
+/// returns to first-run onboarding. This is the "忘记密码" escape hatch — it is
+/// IRREVERSIBLE and destroys the only copy of every encrypted secret, so the UI must
 /// gate it behind an explicit, clearly-worded confirmation (funds are unrecoverable
-/// without the user's own mnemonic/key backup).
+/// without the user's own mnemonic/key backups). To remove a single wallet, use
+/// `delete_wallet`.
 #[tauri::command]
 fn reset_vault<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    *vault_state().lock().unwrap() = None;
-    let path = keystore_path(&app)?;
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("removing keystore: {e}")),
+    *store_state().lock().unwrap() = None;
+    let dir = wallets_dir(&app)?;
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("removing wallets dir: {e}")),
     }
+    // Also drop any un-migrated legacy keystore.
+    if let Ok(base) = app.path().app_data_dir() {
+        let _ = std::fs::remove_file(base.join(LEGACY_KEYSTORE_FILE));
+    }
+    Ok(())
 }
 
 /// One Ledger account candidate for the onboarding picker.
@@ -1417,7 +1964,9 @@ struct LedgerAccount {
 /// Ethereum app open. No on-device confirmation (read-only address query).
 #[tauri::command]
 fn ledger_addresses(start: u32, count: u32) -> Result<Vec<LedgerAccount>, String> {
-    let count = count.clamp(1, 10);
+    // One picker page is 20 addresses; the UI fetches them in small chunks so it
+    // can render each as it streams in (the device derives them sequentially).
+    let count = count.clamp(1, 20);
     let indices: Vec<u32> = (start..start.saturating_add(count)).collect();
     let rows = ledger::get_addresses(&indices)?;
     Ok(rows
@@ -1426,49 +1975,68 @@ fn ledger_addresses(start: u32, count: u32) -> Result<Vec<LedgerAccount>, String
         .collect())
 }
 
-/// Connect a Ledger account at `path` as THE wallet: re-read its address from the
-/// device, install it as the (no-password) unlocked vault, and persist a Ledger
-/// keystore (path + address; no secret at rest). Refuses to overwrite an existing
-/// wallet. Returns the address.
+/// Add a Ledger wallet at `path`: re-read its address from the device, persist a
+/// Ledger keystore (path + address; no secret at rest), and add it to the store
+/// (no password). Returns the new wallet's id + address.
 #[tauri::command]
-fn connect_ledger<R: Runtime>(app: AppHandle<R>, path: String) -> Result<String, String> {
-    let kpath = keystore_path(&app)?;
-    if read_keystore(&kpath)?.is_some() {
-        return Err("a wallet already exists".to_string());
-    }
+fn connect_ledger<R: Runtime>(app: AppHandle<R>, path: String) -> Result<WalletRef, String> {
     let address = ledger::get_address(&path)?;
-    let metas = install_ledger_vault(&path, &address)?;
-    let ks = vault::ledger_keystore(&path, metas);
-    write_keystore(&kpath, &ks)?;
-    Ok(address)
+    let id = vault::new_wallet_id();
+    let label = next_wallet_label(&app)?;
+    let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
+    let mut ks = vault::ledger_keystore(&path, metas);
+    ks.id = id.clone();
+    ks.label = label.clone();
+    ks.created = now_ms();
+    write_keystore(&wallet_file(&app, &id)?, &ks)?;
+    let wallet = UnlockedWallet {
+        id: id.clone(),
+        label,
+        secret: VaultSecret::Ledger,
+        accounts: vec![UnlockedAccount {
+            index: 0,
+            address: address.clone(),
+            signer: Signer::Ledger { path },
+        }],
+    };
+    // A Ledger adds no app password (None never overwrites an existing one).
+    let address = store_push_wallet(wallet, None);
+    push_accounts_changed(&app, Some(&address));
+    Ok(WalletRef { id, address })
 }
 
-/// Switch the active account (feature ①: 切换钱包地址). Pushes EIP-1193
-/// `accountsChanged` to open dApps. Returns the new active address.
+/// Switch the active account by ADDRESS (feature ①: 切换钱包地址), across all
+/// wallets. Pushes EIP-1193 `accountsChanged` to open dApps. Returns the address.
 #[tauri::command]
-fn select_account<R: Runtime>(app: AppHandle<R>, index: usize) -> Result<String, String> {
-    let address = {
-        let mut guard = vault_state().lock().unwrap();
-        let v = guard.as_mut().ok_or("wallet is locked")?;
-        if index >= v.accounts.len() {
-            return Err(format!("account index {index} out of range"));
+fn select_account<R: Runtime>(app: AppHandle<R>, address: String) -> Result<String, String> {
+    let address = address.to_lowercase();
+    {
+        let mut guard = store_state().lock().unwrap();
+        let store = guard.as_mut().ok_or("wallet is locked")?;
+        let known = store.wallets.iter().flat_map(|w| &w.accounts).any(|a| a.address == address);
+        if !known {
+            return Err(format!("unknown account {address}"));
         }
-        v.active = index;
-        v.accounts[index].address.clone()
-    };
+        store.active = address.clone();
+    }
     push_accounts_changed(&app, Some(&address));
     Ok(address)
 }
 
-/// Derive the next HD account, persist it to the keystore's (plaintext) account
-/// list, and return its address. The encrypted mnemonic is unchanged, so no
-/// password is needed to add an account.
+/// Derive the next HD account in wallet `wallet_id`, persist it to that keystore's
+/// (plaintext) account list, and return its address. The encrypted mnemonic is
+/// unchanged, so no password is needed.
 #[tauri::command]
-fn add_account<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+fn add_account<R: Runtime>(app: AppHandle<R>, wallet_id: String) -> Result<String, String> {
     let (address, metas) = {
-        let mut guard = vault_state().lock().unwrap();
-        let v = guard.as_mut().ok_or("wallet is locked")?;
-        let mnemonic = match &v.secret {
+        let mut guard = store_state().lock().unwrap();
+        let store = guard.as_mut().ok_or("wallet is locked")?;
+        let w = store
+            .wallets
+            .iter_mut()
+            .find(|w| w.id == wallet_id)
+            .ok_or("wallet not found")?;
+        let mnemonic = match &w.secret {
             VaultSecret::Mnemonic(m) => m.clone(),
             VaultSecret::PrivateKey => {
                 return Err("imported private-key wallets can't derive more accounts".to_string())
@@ -1477,14 +2045,14 @@ fn add_account<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
                 return Err("Ledger accounts are added by connecting the device".to_string())
             }
         };
-        let next_index = v.accounts.iter().map(|a| a.index).max().map_or(0, |m| m + 1);
+        let next_index = w.accounts.iter().map(|a| a.index).max().map_or(0, |m| m + 1);
         let (key, address) = vault::derive_account(&mnemonic, next_index)?;
-        v.accounts.push(UnlockedAccount {
+        w.accounts.push(UnlockedAccount {
             index: next_index,
             address: address.clone(),
             signer: Signer::Local(key),
         });
-        let metas = v
+        let metas = w
             .accounts
             .iter()
             .map(|a| vault::AccountMeta { index: a.index, address: a.address.clone() })
@@ -1492,12 +2060,77 @@ fn add_account<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
         (address, metas)
     };
     // Persist the grown account list (public metadata only — ciphertext untouched).
-    let path = keystore_path(&app)?;
+    let path = wallet_file(&app, &wallet_id)?;
     if let Some(mut ks) = read_keystore(&path)? {
         ks.accounts = metas;
         write_keystore(&path, &ks)?;
     }
     Ok(address)
+}
+
+/// Rename wallet `id` (label is plaintext metadata — no password needed).
+#[tauri::command]
+fn rename_wallet<R: Runtime>(app: AppHandle<R>, id: String, label: String) -> Result<(), String> {
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err("wallet name cannot be empty".to_string());
+    }
+    let path = wallet_file(&app, &id)?;
+    let mut ks = read_keystore(&path)?.ok_or("wallet not found")?;
+    ks.label = label.clone();
+    write_keystore(&path, &ks)?;
+    if let Some(store) = store_state().lock().unwrap().as_mut() {
+        if let Some(w) = store.wallets.iter_mut().find(|w| w.id == id) {
+            w.label = label;
+        }
+    }
+    Ok(())
+}
+
+/// Delete wallet `id`: remove its keystore from disk and from memory. If it held the
+/// active account, the active is moved to another account (or cleared when none
+/// remain). IRREVERSIBLE for a software wallet — the UI must confirm first.
+#[tauri::command]
+fn delete_wallet<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
+    let path = wallet_file(&app, &id)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("removing keystore: {e}")),
+    }
+    let new_active = {
+        let mut guard = store_state().lock().unwrap();
+        match guard.as_mut() {
+            Some(store) => {
+                store.wallets.retain(|w| w.id != id);
+                if store.wallets.is_empty() {
+                    *guard = None;
+                    Some(None) // nothing left → no active account
+                } else {
+                    let still = store
+                        .wallets
+                        .iter()
+                        .flat_map(|w| &w.accounts)
+                        .any(|a| a.address == store.active);
+                    if !still {
+                        store.active = store
+                            .wallets
+                            .iter()
+                            .flat_map(|w| &w.accounts)
+                            .next()
+                            .map(|a| a.address.clone())
+                            .unwrap_or_default();
+                    }
+                    Some(Some(store.active.clone()))
+                }
+            }
+            None => None,
+        }
+    };
+    if let Some(active) = new_active {
+        push_accounts_changed(&app, active.as_deref());
+    }
+    Ok(())
 }
 
 /// Push an EIP-1193 `accountsChanged` to every open dApp tab (same eval-push
@@ -1564,6 +2197,9 @@ pub fn run() {
             set_dapp_bounds,
             hide_dapp,
             close_dapp,
+            open_external_url,
+            node_rpc,
+            wallet_send,
             set_active_chain,
             get_active_chain,
             get_chains,
@@ -1580,19 +2216,18 @@ pub fn run() {
             ledger_addresses,
             connect_ledger,
             select_account,
-            add_account
+            add_account,
+            rename_wallet,
+            delete_wallet
         ])
         .setup(|app| {
             // Load any persisted custom networks / RPC overrides before the UI asks.
             load_chains(app.handle());
-            // A Ledger wallet has no secret at rest, so unlock it on boot (path +
-            // address are public) — it boots straight to the wallet, no password.
-            if let Ok(Some(ks)) = keystore_path(app.handle()).and_then(|p| read_keystore(&p)) {
-                if ks.kind == "ledger" {
-                    if let Err(e) = install_ledger_vault_from_keystore(&ks) {
-                        println!("[AutoDesktop] warn: could not restore Ledger vault: {e}");
-                    }
-                }
+            // A Ledger-only setup has no secret at rest, so load it on boot (paths +
+            // addresses are public) — it boots straight to the wallet, no password.
+            // (Migrates a legacy vault.json into wallets/ as a side effect.)
+            if let Err(e) = boot_load_ledger_only(app.handle()) {
+                println!("[AutoDesktop] warn: could not restore Ledger wallets: {e}");
             }
             // Container window (no webview of its own).
             let window = WindowBuilder::new(app, "main")
@@ -1846,6 +2481,9 @@ mod e2e {
                 set_dapp_bounds,
                 hide_dapp,
                 close_dapp,
+                open_external_url,
+                node_rpc,
+                wallet_send,
                 set_active_chain,
                 get_active_chain,
                 get_chains,
@@ -1862,7 +2500,9 @@ mod e2e {
                 ledger_addresses,
                 connect_ledger,
                 select_account,
-                add_account
+                add_account,
+                rename_wallet,
+                delete_wallet
             ])
             .build(build_context())
             .expect("failed to build mock app");
@@ -2034,11 +2674,67 @@ mod e2e {
 
         // add_account returns its refusal BEFORE any keystore I/O, so this stays
         // disk-free. The error must name the real cause, not a silent no-op.
-        let err = super::add_account(app.handle().clone()).unwrap_err();
+        // (install_privkey_vault tags the wallet id "w-privkey".)
+        let err = super::add_account(app.handle().clone(), "w-privkey".to_string()).unwrap_err();
         assert!(
             err.contains("can't derive"),
             "expected a 'can't derive more accounts' refusal, got: {err}"
         );
+    }
+
+    /// Several independent wallets coexist in one store: adding a second wallet makes
+    /// its account active (dApps see it), the ACTIVE signing key follows the selected
+    /// ADDRESS across wallets, and deleting the active wallet moves the active account
+    /// back to a surviving wallet. Pure in-memory (delete's keystore file never
+    /// exists, so disk stays untouched). Deleting the core dispatch breaks this.
+    #[test]
+    fn e2e_multi_wallet_active_follows_address_across_wallets() {
+        let _guard = wallet_guard(); // installs HD wallet "w-hd" (2 Anvil accounts), active #0
+        let app = build_app();
+
+        // Add a second, independent wallet: Anvil #3's well-known key as a privkey
+        // wallet (NOT a secret — a public dev key, used here as an oracle).
+        let key = super::vault::parse_private_key(
+            "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
+        )
+        .unwrap();
+        let addr3 = super::address_from_verifying_key(key.verifying_key());
+        super::store_push_wallet(
+            super::UnlockedWallet {
+                id: "w-2".to_string(),
+                label: "Wallet 2".to_string(),
+                secret: super::VaultSecret::PrivateKey,
+                accounts: vec![super::UnlockedAccount {
+                    index: 0,
+                    address: addr3.clone(),
+                    signer: super::Signer::Local(key),
+                }],
+            },
+            None,
+        );
+
+        // The new wallet's account is active, and dApps see exactly that address.
+        assert_eq!(super::active_account_address().as_deref(), Some(addr3.as_str()));
+        let wv = dapp_webview(app);
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([addr3]));
+        // The active signing key recovers to Anvil #3 (the second wallet's key).
+        let active_addr =
+            super::with_active_key(|k| super::address_from_verifying_key(k.verifying_key())).unwrap();
+        assert_eq!(active_addr, addr3);
+
+        // Switch back to the FIRST wallet's account (Anvil #0) by address — the active
+        // key must now be Anvil #0's, proving selection spans wallets.
+        super::select_account(app.handle().clone(), SPIKE_ACCOUNT.to_string()).unwrap();
+        let active_addr =
+            super::with_active_key(|k| super::address_from_verifying_key(k.verifying_key())).unwrap();
+        assert_eq!(active_addr, SPIKE_ACCOUNT);
+
+        // Deleting the second wallet (its keystore file doesn't exist → disk no-op)
+        // leaves the first wallet's accounts; active stays a valid, surviving account.
+        super::delete_wallet(app.handle().clone(), "w-2".to_string()).unwrap();
+        let active = super::active_account_address().expect("an account remains active");
+        assert_eq!(active, SPIKE_ACCOUNT);
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([SPIKE_ACCOUNT]));
     }
 
     /// A Ledger account exposes its address to dApps WITHOUT any in-process key, and

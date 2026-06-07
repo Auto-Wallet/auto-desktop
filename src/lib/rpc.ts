@@ -1,15 +1,18 @@
 // Read-only JSON-RPC client for the TRUSTED shell UI.
 //
-// The shell is our own local React code, so it may talk to public RPC nodes
-// directly (unlike the untrusted dApp webview, whose reads are forced through
-// the Rust `wallet_request` bridge). Direct fetch works identically in the
-// Chrome dev-preview and in WKWebView because tauri.conf.json sets csp: null.
+// In the Tauri app, reads go through the Rust `node_rpc` command (server-side
+// reqwest). That matters because many public RPCs send NO CORS headers, so a
+// browser `fetch` to them would fail — routing through Rust bypasses CORS and
+// lets every registered chain's balances load. In the browser dev-preview (no
+// Tauri) we fall back to a direct fetch, which only reaches CORS-friendly nodes.
 //
 // Errors are NOT swallowed: a non-200 response or a JSON-RPC `error` object
 // throws, so the calling component can show a real failure instead of a fake
 // zero.
 
+import { invoke } from "@tauri-apps/api/core";
 import { findChain } from "./chains";
+import { isTauri } from "./platform";
 
 let nextId = 1;
 
@@ -18,6 +21,10 @@ export async function rpc<T = unknown>(
   method: string,
   params: unknown[] = [],
 ): Promise<T> {
+  if (isTauri()) {
+    return invoke<T>("node_rpc", { chainId, method, params });
+  }
+
   const chain = findChain(chainId);
   if (!chain) throw new Error(`rpc: unknown chain ${chainId}`);
 

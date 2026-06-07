@@ -5,7 +5,15 @@
   padding: 22px 24px 44px;
 }
 
-/* account switcher (top of wallet) */
+/* wallet header row — account switcher + copy, aligned with the hero (#1, #2) */
+.wallet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* account / wallet switcher */
 .acct-switch {
   position: relative;
 }
@@ -18,11 +26,16 @@
   border-radius: var(--r-pill);
   background: var(--surface);
   cursor: pointer;
+  font: inherit;
+  text-align: left;
   transition: border-color 0.13s, background 0.13s;
 }
 .acct-pill:hover {
   border-color: var(--line-3);
   background: var(--surface-2);
+}
+.acct-pill-meta {
+  min-width: 0;
 }
 .acct-pill .nm {
   font-size: 13.5px;
@@ -46,8 +59,10 @@
   z-index: 40;
   top: calc(100% + 8px);
   left: 0;
-  width: 340px;
+  width: 360px;
   max-width: calc(100vw - 48px);
+  max-height: 72vh;
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
@@ -68,10 +83,70 @@
   text-transform: uppercase;
   color: var(--ink-4);
 }
+
+/* one wallet's group (header + accounts + add-account), or the watch group */
+.acct-group {
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+  padding-top: 2px;
+}
+.acct-group + .acct-group {
+  margin-top: 4px;
+}
+.acct-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 2px 10px;
+  min-height: 30px;
+}
+.acct-group-head > span {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+.acct-group-head.wallet .wallet-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--ink-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wallet-acts {
+  display: flex;
+  gap: 1px;
+  flex: none;
+}
+.acct-rename {
+  flex: 1;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .acct-row {
   display: flex;
   align-items: center;
+  border-radius: var(--r-md);
+}
+.acct-row.on,
+.acct-row-main.on {
+  background: var(--brand-soft);
+}
+.acct-row-main {
+  display: flex;
+  align-items: center;
   gap: 11px;
+  flex: 1;
+  min-width: 0;
   width: 100%;
   padding: 9px 10px;
   border: none;
@@ -81,80 +156,238 @@
   text-align: left;
   font: inherit;
 }
-.acct-row:hover {
+.acct-row-main:hover {
   background: var(--surface-2);
 }
-.acct-row.on {
-  background: var(--brand-soft);
-}
-.acct-row .meta {
+.acct-row-main .meta {
   flex: 1;
   min-width: 0;
 }
-.acct-row .meta .l {
-  font-size: 13.5px;
+.acct-row-main .meta .l {
+  font-size: 13px;
   font-weight: 700;
   color: var(--ink);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.acct-row .meta .a {
+.acct-row-main .meta .a {
   font-family: var(--font-mono);
   font-size: 11.5px;
   color: var(--ink-3);
+  margin-top: 1px;
 }
-.acct-row .check {
+.acct-row-main .check {
   color: var(--brand-ink);
+  flex: none;
 }
-.acct-menu-foot {
-  border-top: 1px solid var(--line);
-  margin-top: 4px;
-  padding-top: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+.acct-row-act {
+  flex: none;
+  margin-right: 6px;
+  color: var(--ink-4);
 }
-.acct-act {
+.acct-row-act:hover {
+  color: var(--down);
+}
+
+.acct-add-account {
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 9px 10px;
+  gap: 7px;
+  width: calc(100% - 8px);
+  margin: 1px 4px 3px;
+  padding: 7px 10px;
   border: none;
   background: transparent;
   border-radius: var(--r-sm);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--brand-ink);
-  text-align: left;
 }
-.acct-act:hover {
-  background: var(--surface-2);
+.acct-add-account:hover {
+  background: var(--brand-soft);
 }
-.acct-act.danger {
-  color: var(--down);
-}
-.acct-act.danger:hover {
-  background: var(--down-soft);
-}
-.acct-add-row {
+
+.acct-add-wallet {
   display: flex;
-  gap: 6px;
-  padding: 6px 8px 8px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 11px;
+  border: 1px dashed var(--line-3);
+  background: transparent;
+  border-radius: var(--r-md);
+  color: var(--brand-ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
 }
-.acct-add-row .input {
+.acct-add-wallet:hover {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+}
+
+/* add-wallet modal */
+.add-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.add-opt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+.add-opt:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.add-opt-ic {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+  flex: none;
+}
+.add-opt.coral .add-opt-ic {
+  background: var(--coral-soft);
+  color: var(--coral-2);
+}
+.add-opt-label {
   flex: 1;
-  height: 36px;
-  padding: 0 12px;
-  font-size: 12.5px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
 }
-.acct-add-err {
-  color: var(--down);
+.add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.add-note {
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.add-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 2px;
+}
+
+/* roomier modal for the Ledger address picker (20 + pagination) */
+.modal.wide {
+  max-width: 560px;
+}
+
+/* send modal */
+.field-aux {
+  float: right;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--ink-3);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.send-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
   font-size: 12px;
-  padding: 0 10px 8px;
+}
+
+/* add custom token */
+.scan-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.scan-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.scan-row .btn {
+  flex: none;
+  white-space: nowrap;
+}
+.scan-preview {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px;
+  border-radius: var(--r-lg, 14px);
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  box-shadow: inset 0 0 0 1px var(--line, rgba(127, 127, 127, 0.16));
+}
+.scan-meta {
+  flex: 1;
+  min-width: 0;
+}
+.scan-meta .l {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+}
+.scan-meta .l .muted,
+.scan-meta .a {
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.scan-meta .a {
+  font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  margin-top: 2px;
+}
+.custom-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.custom-list-head {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 2px;
+}
+.custom-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 4px;
+}
+.custom-meta {
+  flex: 1;
+  min-width: 0;
+}
+.custom-meta .l {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+}
+.custom-meta .a {
+  font-size: 11px;
+  color: var(--ink-3);
 }
 
 /* hero portfolio card */
@@ -166,7 +399,6 @@
   color: #fff;
   padding: 24px 26px 22px;
   box-shadow: var(--sh-brand);
-  margin-top: 18px;
 }
 .hero::after {
   content: "";
@@ -379,6 +611,12 @@
   color: #fff;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
+.coin-img {
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
 .coin-chain {
   position: absolute;
   right: -2px;
@@ -507,6 +745,17 @@
   font-weight: 700;
   font-size: 14px;
   color: var(--ink);
+}
+.receive-qr {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0 4px;
+}
+.receive-qr .qr {
+  padding: 12px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 .receive-hint {
   font-size: 12px;

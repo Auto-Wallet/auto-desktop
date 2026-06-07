@@ -26,6 +26,26 @@ export function isAddress(s: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(s.trim());
 }
 
+/**
+ * Human token amount -> integer base units (wei). Throws on a malformed amount or
+ * more fractional digits than `decimals` — callers validate first, so a bad value
+ * surfaces loudly instead of silently truncating (CLAUDE: no fallback masking).
+ */
+export function parseUnits(amount: string, decimals = 18): bigint {
+  const s = amount.trim();
+  if (s === "" || s === "." || !/^\d*\.?\d*$/.test(s)) {
+    throw new Error(`invalid amount: "${amount}"`);
+  }
+  const [whole, frac = ""] = s.split(".");
+  if (frac.length > decimals) throw new Error(`too many decimals (max ${decimals})`);
+  return BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, "0") || "0");
+}
+
+/** A bigint -> minimal 0x-hex quantity (EIP-1474 style, no leading zeros). */
+export function toHexQuantity(n: bigint): string {
+  return "0x" + n.toString(16);
+}
+
 /** USD amount, e.g. `$1,234.56` (or `+$12.30` / `−$4.00` with sign). */
 export function fmtUsd(n: number, opts: { sign?: boolean; dp?: number } = {}): string {
   const { sign = false, dp = 2 } = opts;

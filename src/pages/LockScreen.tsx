@@ -3,16 +3,14 @@ import "./LockScreen.css";
 import mascot from "../assets/mascot.png";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
+import { LedgerList, useLedgerScan } from "../lib/LedgerPicker";
 import {
-  connectLedger,
   createVault,
   importPrivateKey,
   importVault,
-  listLedgerAddresses,
   resetVault,
   unlockVault,
   useVault,
-  type LedgerAccount,
 } from "../lib/vault";
 
 // The wallet's front door (VISION ④⑤ — real key ownership), restyled to the
@@ -33,7 +31,7 @@ export default function LockScreen({ onDone }: { onDone: () => void }) {
   return (
     <div className="lock">
       <span className="lock-aura" />
-      <div className="lock-card">
+      <div className={`lock-card${mode === "ledger" ? " wide" : ""}`}>
         <div className="lock-brand">
           <div className="lock-mark-wrap">
             <span className="ring" />
@@ -313,36 +311,9 @@ function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
 
 function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
   const { t } = useT();
-  type Step = "intro" | "scanning" | "pick" | "connecting";
-  const [step, setStep] = useState<Step>("intro");
-  const [accounts, setAccounts] = useState<LedgerAccount[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  async function scan() {
-    setStep("scanning");
-    setError(null);
-    try {
-      const list = await listLedgerAddresses(0, 5);
-      if (list.length === 0) throw new Error("No accounts returned by the device.");
-      setAccounts(list);
-      setStep("pick");
-    } catch (e) {
-      setError(errText(e));
-      setStep("intro");
-    }
-  }
-
-  async function pick(acct: LedgerAccount) {
-    setStep("connecting");
-    setError(null);
-    try {
-      await connectLedger(acct.path);
-      onDone();
-    } catch (e) {
-      setError(errText(e));
-      setStep("pick");
-    }
-  }
+  const { accounts, page, loading, connecting, started, error, scan, nextPage, prevPage, pick } =
+    useLedgerScan(onDone);
+  const showList = started && (accounts.length > 0 || loading);
 
   return (
     <div className="lock-body">
@@ -356,26 +327,18 @@ function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => voi
         </div>
       </div>
 
-      {step === "pick" ? (
-        <ul className="ledger-list">
-          {accounts.map((a) => (
-            <li key={a.path}>
-              <button className="ledger-acct" onClick={() => pick(a)}>
-                <span className="ledger-idx">#{a.index}</span>
-                <span className="ledger-addr">{shortAddr(a.address)}</span>
-                <Icon name="chevronR" size={16} />
-              </button>
-            </li>
-          ))}
-        </ul>
+      {showList ? (
+        <LedgerList
+          accounts={accounts}
+          page={page}
+          loading={loading}
+          connecting={connecting}
+          onPick={pick}
+          onPrev={prevPage}
+          onNext={nextPage}
+        />
       ) : (
-        <div className="lock-info">
-          {step === "scanning"
-            ? t("lock.ledgerScanning")
-            : step === "connecting"
-              ? t("lock.ledgerConnecting")
-              : t("lock.ledgerIntro")}
-        </div>
+        <div className="lock-info">{connecting ? t("lock.ledgerConnecting") : t("lock.ledgerIntro")}</div>
       )}
 
       {error && (
@@ -384,9 +347,9 @@ function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => voi
         </div>
       )}
 
-      {(step === "intro" || step === "scanning") && (
-        <button className="btn btn-aurora btn-lg btn-block" disabled={step === "scanning"} onClick={scan}>
-          {step === "scanning" ? "…" : error ? t("lock.retry") : t("lock.ledgerScan")}
+      {!showList && (
+        <button className="btn btn-aurora btn-lg btn-block" disabled={loading} onClick={scan}>
+          {loading ? "…" : error ? t("lock.retry") : t("lock.ledgerScan")}
         </button>
       )}
 
@@ -395,10 +358,6 @@ function LedgerPanel({ onBack, onDone }: { onBack: () => void; onDone: () => voi
       </button>
     </div>
   );
-}
-
-function shortAddr(a: string): string {
-  return a.length > 12 ? `${a.slice(0, 8)}…${a.slice(-6)}` : a;
 }
 
 function BackupScreen({ mnemonic, onDone }: { mnemonic: string; onDone: () => void }) {

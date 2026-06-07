@@ -23,12 +23,27 @@ export type Chain = {
   builtin: boolean;
 };
 
+// Browser-preview fallback only — in the Tauri app the registry comes from the
+// Rust `get_chains`. Kept in sync with `builtin_chains()` in src-tauri/src/lib.rs.
 export const BUILTIN_CHAINS: Chain[] = [
-  { id: "0x1",    name: "Ethereum",     symbol: "ETH", rpc: "https://ethereum-rpc.publicnode.com",    decimals: 18, color: "#627EEA", builtin: true },
-  { id: "0x2105", name: "Base",         symbol: "ETH", rpc: "https://base-rpc.publicnode.com",        decimals: 18, color: "#0052FF", builtin: true },
-  { id: "0xa",    name: "OP Mainnet",   symbol: "ETH", rpc: "https://optimism-rpc.publicnode.com",    decimals: 18, color: "#FF0420", builtin: true },
-  { id: "0xa4b1", name: "Arbitrum One", symbol: "ETH", rpc: "https://arbitrum-one-rpc.publicnode.com", decimals: 18, color: "#28A0F0", builtin: true },
-  { id: "0x89",   name: "Polygon",      symbol: "POL", rpc: "https://polygon-bor-rpc.publicnode.com", decimals: 18, color: "#8247E5", builtin: true },
+  { id: "0x1",     name: "Ethereum",      symbol: "ETH",   rpc: "https://ethereum-rpc.publicnode.com",            decimals: 18, color: "#627EEA", builtin: true },
+  { id: "0x2105",  name: "Base",          symbol: "ETH",   rpc: "https://base-rpc.publicnode.com",                decimals: 18, color: "#0052FF", builtin: true },
+  { id: "0xa",     name: "OP Mainnet",    symbol: "ETH",   rpc: "https://optimism-rpc.publicnode.com",            decimals: 18, color: "#FF0420", builtin: true },
+  { id: "0xa4b1",  name: "Arbitrum One",  symbol: "ETH",   rpc: "https://arbitrum-one-rpc.publicnode.com",        decimals: 18, color: "#28A0F0", builtin: true },
+  { id: "0x89",    name: "Polygon",       symbol: "POL",   rpc: "https://polygon-bor-rpc.publicnode.com",         decimals: 18, color: "#8247E5", builtin: true },
+  { id: "0x38",    name: "BNB Chain",     symbol: "BNB",   rpc: "https://bsc-rpc.publicnode.com",                 decimals: 18, color: "#F3BA2F", builtin: true },
+  { id: "0xa86a",  name: "Avalanche",     symbol: "AVAX",  rpc: "https://avalanche-c-chain-rpc.publicnode.com",   decimals: 18, color: "#E84142", builtin: true },
+  { id: "0xe708",  name: "Linea",         symbol: "ETH",   rpc: "https://linea-rpc.publicnode.com",               decimals: 18, color: "#61DFFF", builtin: true },
+  { id: "0x13e31", name: "Blast",         symbol: "ETH",   rpc: "https://blast-rpc.publicnode.com",               decimals: 18, color: "#FCD000", builtin: true },
+  { id: "0x144",   name: "zkSync Era",    symbol: "ETH",   rpc: "https://mainnet.era.zksync.io",                  decimals: 18, color: "#8C8DFC", builtin: true },
+  { id: "0x44d",   name: "Polygon zkEVM", symbol: "ETH",   rpc: "https://zkevm-rpc.com",                          decimals: 18, color: "#7B3FE4", builtin: true },
+  { id: "0x92",    name: "Sonic",         symbol: "S",     rpc: "https://rpc.soniclabs.com",                      decimals: 18, color: "#1969FF", builtin: true },
+  { id: "0xc4",    name: "X Layer",       symbol: "OKB",   rpc: "https://rpc.xlayer.tech",                        decimals: 18, color: "#1A1A1A", builtin: true },
+  { id: "0x1e0",   name: "World Chain",   symbol: "ETH",   rpc: "https://worldchain-mainnet.g.alchemy.com/public", decimals: 18, color: "#1A1A1A", builtin: true },
+  { id: "0x250",   name: "Astar",         symbol: "ASTR",  rpc: "https://evm.astar.network",                      decimals: 18, color: "#1B6DC1", builtin: true },
+  { id: "0x378",   name: "Wanchain",      symbol: "WAN",   rpc: "https://gwan-ssl.wandevs.org:56891",             decimals: 18, color: "#2A6BE9", builtin: true },
+  { id: "0x440",   name: "Metis",         symbol: "METIS", rpc: "https://andromeda.metis.io/?owner=1088",         decimals: 18, color: "#00DACC", builtin: true },
+  { id: "0xa4ec",  name: "Celo",          symbol: "CELO",  rpc: "https://forno.celo.org",                         decimals: 18, color: "#FCB728", builtin: true },
 ];
 
 let chains: Chain[] = BUILTIN_CHAINS;

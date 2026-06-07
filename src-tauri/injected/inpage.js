@@ -191,4 +191,30 @@
   };
   installProvider(transport, { forceInject: true });
   console.log("[AutoDesktop] Auto Wallet provider injected");
+  function installLinkInterceptor() {
+    const openExternal = (url) => {
+      if (!/^https?:\/\//i.test(url))
+        return false;
+      getInvoke().then((invoke) => invoke("open_external_url", { url })).catch((e) => console.error("[AutoDesktop] open_external_url failed", e));
+      return true;
+    };
+    const nativeOpen = window.open.bind(window);
+    window.open = function(url, target, features) {
+      const u = url == null ? "" : String(url);
+      if (u && openExternal(u))
+        return null;
+      return nativeOpen(url, target, features);
+    };
+    document.addEventListener("click", (e) => {
+      const anchor = e.target?.closest?.("a");
+      if (!anchor || anchor.target !== "_blank")
+        return;
+      const href = anchor.href || anchor.getAttribute("href") || "";
+      if (openExternal(href)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+  }
+  installLinkInterceptor();
 })();

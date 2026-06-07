@@ -69,6 +69,14 @@ const PATHS: Record<string, JSX.Element> = {
       <path d="M7 15h4" />
     </>
   ),
+  bridge: (
+    <>
+      <path d="M2 12h20" />
+      <path d="M4 12v6M20 12v6" />
+      <path d="M4 12a8 8 0 0 1 16 0" />
+      <path d="M12 12v6M8.5 13.2V18M15.5 13.2V18" />
+    </>
+  ),
   copy: (
     <>
       <rect x="9" y="9" width="11" height="11" rx="2.5" />

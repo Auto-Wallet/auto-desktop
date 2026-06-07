@@ -3,7 +3,8 @@ import "./SettingsPage.css";
 import mascot from "../assets/mascot.png";
 import { addChain, removeChain, updateChain, useChains, type Chain } from "../lib/chains";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
-import { lockVault, useVault } from "../lib/vault";
+import { lockVault } from "../lib/vault";
+import { useActiveWallet } from "../lib/accounts";
 import { setLang, useT, type Lang, type TFn } from "../lib/i18n";
 import { setThemePref, useThemePref, type ThemePref } from "../lib/theme";
 import { Icon, type IconName } from "../lib/icons";
@@ -29,7 +30,7 @@ export default function SettingsPage() {
   const chains = useChains();
   const activeChain = useActiveChain();
   const themePref = useThemePref();
-  const vault = useVault();
+  const activeWallet = useActiveWallet();
   const [updated, setUpdated] = useState(false);
   const [editing, setEditing] = useState<Chain | "new" | null>(null);
 
@@ -163,7 +164,7 @@ export default function SettingsPage() {
               </h2>
             </div>
             <div className="set-card">
-              {vault.kind === "ledger" ? (
+              {activeWallet?.kind === "ledger" ? (
                 <div className="set-row">
                   <span className="row-ic">
                     <Icon name="ledger" size={17} />
@@ -185,7 +186,7 @@ export default function SettingsPage() {
                     </div>
                     <Icon name="chevronR" size={16} />
                   </button>
-                  {vault.kind === "hd" && (
+                  {activeWallet?.kind === "hd" && (
                     <button className="set-row" onClick={() => toast(t("settings.soon"), "info")}>
                       <span className="row-ic">
                         <Icon name="key" size={17} />

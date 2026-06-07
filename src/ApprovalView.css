@@ -68,6 +68,11 @@
   flex-direction: column;
   gap: 14px;
 }
+/* Don't let tall content (a tx with fee editor) shrink the cards — the body
+   scrolls instead of clipping/overlapping them. */
+.approval-body > * {
+  flex: 0 0 auto;
+}
 
 .apv-kind {
   display: flex;
@@ -155,6 +160,77 @@
   word-break: break-word;
   max-height: 220px;
   overflow: auto;
+}
+
+/* transaction details + editable fee (eth_sendTransaction) */
+.apv-tx {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.apv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.apv-row-l {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  flex: none;
+}
+.apv-row-v {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apv-row-v.mono {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+.apv-fee {
+  padding: 12px 13px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.apv-fee-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding-right: 12px;
+}
+.apv-fee-input.err {
+  border-color: var(--danger, #e5484d);
+}
+.apv-fee-input .input {
+  border: none;
+  background: transparent;
+  flex: 1;
+  min-width: 0;
+}
+.apv-fee-unit {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.apv-fee-hint {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  padding: 0 2px;
 }
 
 .apv-signer {
