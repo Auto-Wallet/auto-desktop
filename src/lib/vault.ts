@@ -139,16 +139,17 @@ export async function refreshVaultStatus(): Promise<void> {
 
 /** Add a new HD wallet. `password` is required only for the FIRST software wallet
  *  (when no app password is set yet); when already unlocked it's ignored. Returns
- *  the mnemonic for the ONE-TIME backup screen. */
-export async function createVault(password?: string): Promise<string> {
+ *  the mnemonic for the ONE-TIME backup screen plus the new account address (so the
+ *  caller can make it the active selection — keeps shell, backend and dApps in sync). */
+export async function createVault(password?: string): Promise<{ mnemonic: string; address: string }> {
   if (!isTauri()) {
-    demoAddWallet("hd");
+    const ref = demoAddWallet("hd");
     set(demoStatus());
-    return DEMO_MNEMONIC;
+    return { mnemonic: DEMO_MNEMONIC, address: ref.address };
   }
   const nv = await invoke<NewVault>("create_vault", { password });
   await refreshVaultStatus();
-  return nv.mnemonic;
+  return { mnemonic: nv.mnemonic, address: nv.address };
 }
 
 /** Add a wallet from a recovery phrase. */
@@ -264,6 +265,8 @@ export async function resetVault(): Promise<void> {
 /** Switch the active account by ADDRESS (across all wallets); pushes accountsChanged
  *  to dApps backend-side. */
 export async function selectAccount(address: string): Promise<void> {
+  // Already the active account → no backend call, no redundant accountsChanged push.
+  if (state.active && state.active.toLowerCase() === address.toLowerCase()) return;
   if (!isTauri()) {
     demoActive = address;
     set(demoStatus());

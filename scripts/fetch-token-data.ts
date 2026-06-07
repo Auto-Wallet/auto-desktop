@@ -72,6 +72,30 @@ async function main() {
     getJson<ApiTokenGroup[]>("/api/v3/supported/tokens"),
   ]);
 
+  // EVM-only wallet: these xflows chains are intentionally NOT supported (different
+  // curve / address model — secp256k1/EVM only, so we can't sign or read them).
+  // Listed EXPLICITLY so that a NEW chain appearing in the API which is neither here
+  // nor in the curated EVM map becomes a hard error instead of being silently
+  // dropped. That enforces the product rule that our default chain set must stay a
+  // SUPERSET of the API's EVM chains ("只能多不能少").
+  const NON_EVM = new Set<number>([
+    195, // TRON (TVM)
+    501, // Solana
+    2147483648, // Bitcoin
+    2147485463, // Cardano
+    2147484432, // Sui
+    2147484107, // Kava (native/Cosmos id here, not Kava-EVM 2222)
+  ]);
+  const unclassified = apiChains.filter((c) => !EVM[c.chainId] && !NON_EVM.has(c.chainId));
+  if (unclassified.length) {
+    throw new Error(
+      `xflows lists chain(s) not classified as EVM or non-EVM: ` +
+        unclassified.map((c) => `${c.chainName}(${c.chainId})`).join(", ") +
+        `\n  → add an EVM entry (rpc + color) for each EVM chain so the wallet supports it, ` +
+        `or add its chainId to NON_EVM if it can't be (the default set must be ≥ the API's EVM set).`,
+    );
+  }
+
   const chains = apiChains
     .filter((c) => EVM[c.chainId])
     .map((c) => ({

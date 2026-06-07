@@ -4,7 +4,7 @@
 // prev/next pagination so the user can scan far down the derivation path.
 
 import { useCallback, useState } from "react";
-import { connectLedger, listLedgerAddresses, type LedgerAccount } from "./vault";
+import { connectLedger, listLedgerAddresses, type LedgerAccount, type WalletRef } from "./vault";
 import { shortAddress } from "./format";
 import { useT } from "./i18n";
 import { Icon } from "./icons";
@@ -18,7 +18,7 @@ function errText(e: unknown): string {
   return String(e);
 }
 
-export function useLedgerScan(onConnected: () => void) {
+export function useLedgerScan(onConnected: (ref: WalletRef) => void) {
   const [accounts, setAccounts] = useState<LedgerAccount[]>([]);
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false); // scanning a page
@@ -68,8 +68,8 @@ export function useLedgerScan(onConnected: () => void) {
       setConnecting(true);
       setError(null);
       try {
-        await connectLedger(acct.path);
-        onConnected();
+        const ref = await connectLedger(acct.path);
+        onConnected(ref);
       } catch (e) {
         setError(errText(e));
         setConnecting(false);

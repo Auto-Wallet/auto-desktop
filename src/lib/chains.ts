@@ -7,6 +7,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
 import { isTauri } from "./platform";
+import { SUPPORTED_CHAINS } from "./tokenData";
 
 export type Chain = {
   /** EIP-155 chain id as a 0x-hex string (what dApps see via eth_chainId). */
@@ -45,6 +46,19 @@ export const BUILTIN_CHAINS: Chain[] = [
   { id: "0x440",   name: "Metis",         symbol: "METIS", rpc: "https://andromeda.metis.io/?owner=1088",         decimals: 18, color: "#00DACC", builtin: true },
   { id: "0xa4ec",  name: "Celo",          symbol: "CELO",  rpc: "https://forno.celo.org",                         decimals: 18, color: "#FCB728", builtin: true },
 ];
+
+// chainId (lowercased) -> remote brand-logo URL, from the baked xflows snapshot
+// (src/lib/tokenData.ts). The chain registry itself is backend-owned and carries
+// no logo; the UI joins this in at render time so the native coin shows the same
+// kind of icon a token does. User-added chains aren't in the snapshot -> undefined,
+// and the Coin glyph falls back to its brand color.
+const CHAIN_LOGO: Record<string, string> = {};
+for (const c of SUPPORTED_CHAINS) if (c.logo) CHAIN_LOGO[c.id.toLowerCase()] = c.logo;
+
+/** Remote brand logo for a chain id, or undefined (built-ins only). */
+export function chainLogo(id: string): string | undefined {
+  return CHAIN_LOGO[id.toLowerCase()];
+}
 
 let chains: Chain[] = BUILTIN_CHAINS;
 const listeners = new Set<() => void>();

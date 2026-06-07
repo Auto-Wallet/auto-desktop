@@ -9,7 +9,7 @@
 // The active address is tracked locally; selecting a signer account also tells the
 // backend to switch its active signing account (and pushes accountsChanged to dApps).
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { isAddress } from "./format";
 import { getVaultAccounts, selectAccount, useVault, type VaultKind, type VaultState } from "./vault";
 
@@ -95,6 +95,23 @@ export function useAccounts(): Account[] {
   const vault = useVault();
   useSyncExternalStore(subscribe, () => watch); // re-render on watch changes
   return allAccounts(vault);
+}
+
+/** Keep the BACKEND's active signing account in lockstep with the account the shell
+ *  shows. The shell remembers its selection in localStorage, but the backend resets
+ *  to the first account on every `unlock_vault`; without this, `eth_accounts` (and so
+ *  the address a dApp connects to) would lag behind the sidebar until the user
+ *  re-clicked an account. Pushing the shell's choice down also fires accountsChanged
+ *  to any open dApp, so switching wallets in the shell switches it inside the dApp.
+ *  Mount once at the app root. Watch-only accounts can't sign, so they're left as-is. */
+export function useActiveAccountSync(): void {
+  const vault = useVault();
+  const active = useActiveAccount();
+  useEffect(() => {
+    if (vault.phase !== "unlocked" || !active.signer) return;
+    if (vault.active && vault.active.toLowerCase() === active.address.toLowerCase()) return;
+    void selectAccount(active.address);
+  }, [vault.phase, vault.active, active.address, active.signer]);
 }
 
 /** The wallet that owns the active account (for per-wallet UI like Settings → Security). */

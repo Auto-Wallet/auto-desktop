@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import "./WalletPage.css";
-import { findChain, useChains, type Chain } from "../lib/chains";
+import { chainLogo, findChain, useChains, type Chain } from "../lib/chains";
 import {
   fmtPct,
   fmtUsd,
@@ -110,6 +110,7 @@ export default function WalletPage() {
           symbol: c.symbol,
           decimals: c.decimals,
           color: c.color,
+          logo: chainLogo(c.id),
           wei: nb.wei,
         });
       }
@@ -350,7 +351,7 @@ function buildRows(
       symbol: c.symbol,
       decimals: c.decimals,
       color: c.color,
-      logo: undefined,
+      logo: chainLogo(c.id),
       state: balances[c.id],
       price: prices.status === "ok" ? prices.prices[c.symbol.toUpperCase()] : undefined,
     });
@@ -886,9 +887,10 @@ function CreateWalletForm({
     setBusy(true);
     setError(null);
     try {
-      const m = await createVault(needsPassword ? pw : undefined);
+      const { mnemonic, address } = await createVault(needsPassword ? pw : undefined);
+      setActive(address); // make the new wallet active everywhere (shell + backend + dApps)
       toast(t("wallet.added"));
-      onCreated(m);
+      onCreated(mnemonic);
     } catch (e) {
       setError(errText(e));
       setBusy(false);
@@ -952,8 +954,11 @@ function ImportWalletForm({
     setBusy(true);
     setError(null);
     try {
-      if (tab === "phrase") await importVault(needsPassword ? pw : undefined, phrase);
-      else await importPrivateKey(needsPassword ? pw : undefined, privkey);
+      const ref =
+        tab === "phrase"
+          ? await importVault(needsPassword ? pw : undefined, phrase)
+          : await importPrivateKey(needsPassword ? pw : undefined, privkey);
+      setActive(ref.address); // make the imported wallet active everywhere
       toast(t("wallet.added"));
       onDone();
     } catch (e) {
@@ -1012,7 +1017,8 @@ function ImportWalletForm({
 function LedgerForm({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
   const { t } = useT();
   const { accounts, page, loading, connecting, started, error, scan, nextPage, prevPage, pick } =
-    useLedgerScan(() => {
+    useLedgerScan((ref) => {
+      setActive(ref.address); // make the connected Ledger account active everywhere
       toast(t("wallet.added"));
       onDone();
     });

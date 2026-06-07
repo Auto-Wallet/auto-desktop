@@ -9,7 +9,7 @@ import LockScreen from "./pages/LockScreen";
 import { faviconOf, type Dapp } from "./lib/dapps";
 import { closeDapp, dappLabel } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
-import { useActiveAccount } from "./lib/accounts";
+import { useActiveAccount, useActiveAccountSync } from "./lib/accounts";
 import { loadChains } from "./lib/chains";
 import { useT } from "./lib/i18n";
 import { Icon } from "./lib/icons";
@@ -24,6 +24,10 @@ const SIDEBAR_KEY = "autodesktop.sidebarCollapsed";
 
 function App() {
   const vault = useVault();
+  // Reconcile the backend's active signer with the shell's remembered selection so a
+  // dApp always connects to the account shown in the sidebar (and follows wallet
+  // switches). Backend resets to the first account on every unlock; this re-syncs it.
+  useActiveAccountSync();
 
   // Gate the whole app behind the vault: load its status on boot, then show the
   // lock/setup screen until the wallet is unlocked for this session. A backend

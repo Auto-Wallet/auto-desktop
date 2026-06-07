@@ -149,8 +149,8 @@ function CreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: (m: 
     setBusy(true);
     setError(null);
     try {
-      const m = await createVault(pw);
-      onCreated(m);
+      const { mnemonic } = await createVault(pw);
+      onCreated(mnemonic);
     } catch (e) {
       setError(errText(e));
       setBusy(false);
