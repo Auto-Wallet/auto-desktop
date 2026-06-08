@@ -209,7 +209,19 @@ export async function connectLedger(path: string): Promise<WalletRef> {
 }
 
 /** Transaction shape the wallet's own Send hands to the backend. */
-export type SendTx = { to: string; value?: string; data?: string };
+export type SendTx = {
+  to: string;
+  value?: string;
+  data?: string;
+  activity?: {
+    kind?: "send" | "contract" | "token_send";
+    counterparty?: string;
+    assetSymbol?: string;
+    assetDecimals?: number;
+    amount?: string;
+    tokenAddress?: string;
+  };
+};
 
 /**
  * Wallet-initiated send. Runs through the SAME approval window + signing path as a

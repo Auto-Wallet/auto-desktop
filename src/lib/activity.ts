@@ -14,7 +14,13 @@ export type ActivityRecord = {
   value: string;
   data: string;
   origin: string;
-  kind: "send" | "contract";
+  kind: "send" | "contract" | "token_send";
+  counterparty?: string | null;
+  assetSymbol?: string | null;
+  assetDecimals?: number | null;
+  amount?: string | null;
+  tokenAddress?: string | null;
+  status?: "submitted" | "confirmed" | "failed" | string | null;
   timestamp: number;
 };
 

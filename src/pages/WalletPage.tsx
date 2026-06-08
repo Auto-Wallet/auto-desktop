@@ -740,11 +740,27 @@ function ActivityList({
           (c) => c.id.toLowerCase() === record.chainId.toLowerCase(),
         );
         const href = txExplorerUrl(chain, record);
-        const hasValue = BigInt(record.value || "0x0") > 0n;
-        const label =
-          record.kind === "contract"
+        const isTokenSend = record.kind === "token_send";
+        const amount = record.amount ?? record.value;
+        const amountWei = safeHexToBigInt(amount);
+        const decimals =
+          record.assetDecimals ??
+          (isTokenSend ? undefined : (chain?.decimals ?? 18));
+        const symbol =
+          record.assetSymbol ??
+          (isTokenSend ? t("wallet.activityToken") : record.symbol);
+        const label = isTokenSend
+          ? t("wallet.activityTokenSend")
+          : record.kind === "contract"
             ? t("wallet.activityContract")
             : t("wallet.activitySend");
+        const counterparty = record.counterparty || record.to || record.hash;
+        const statusLabel =
+          record.status === "failed"
+            ? t("wallet.activityFailed")
+            : record.status === "confirmed"
+              ? t("wallet.activityConfirmed")
+              : t("wallet.activitySubmitted");
         return (
           <button
             key={record.id}
@@ -767,14 +783,17 @@ function ActivityList({
                 </span>
               </span>
               <span className="activity-sub">
-                {shortAddress(record.to || record.hash, 10, 8)} ·{" "}
-                {record.origin}
+                {shortAddress(counterparty, 10, 8)} · {record.origin}
+              </span>
+              <span className="activity-hash">
+                {shortAddress(record.hash, 10, 8)}
+                <span> · {statusLabel}</span>
               </span>
             </span>
             <span className="activity-right">
               <span className="activity-value">
-                {hasValue
-                  ? `${formatUnits(record.value, chain?.decimals ?? 18)} ${record.symbol}`
+                {amountWei > 0n && decimals != null
+                  ? `${formatUnits(amount, decimals)} ${symbol}`
                   : t("wallet.activityNoValue")}
               </span>
               <span className="activity-time">
@@ -787,6 +806,14 @@ function ActivityList({
       })}
     </div>
   );
+}
+
+function safeHexToBigInt(value: string | null | undefined): bigint {
+  try {
+    return BigInt(value || "0x0");
+  } catch {
+    return 0n;
+  }
 }
 
 function formatActivityTime(timestamp: number): string {
@@ -2215,11 +2242,29 @@ function SendModal({
 
     const tx =
       asset.kind === "native"
-        ? { to, value: toHexQuantity(amountWei) }
+        ? {
+            to,
+            value: toHexQuantity(amountWei),
+            activity: {
+              kind: "send" as const,
+              counterparty: to,
+              assetSymbol: asset.symbol,
+              assetDecimals: asset.decimals,
+              amount: toHexQuantity(amountWei),
+            },
+          }
         : {
             to: asset.address as string,
             value: "0x0",
             data: encodeErc20Transfer(to, amountWei),
+            activity: {
+              kind: "token_send" as const,
+              counterparty: to,
+              assetSymbol: asset.symbol,
+              assetDecimals: asset.decimals,
+              amount: toHexQuantity(amountWei),
+              tokenAddress: asset.address,
+            },
           };
 
     setBusy(true);

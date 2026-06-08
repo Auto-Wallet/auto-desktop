@@ -441,6 +441,18 @@ struct ActivityRecord {
     data: String,
     origin: String,
     kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    counterparty: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    asset_symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    asset_decimals: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    amount: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
     timestamp: u64,
 }
 
@@ -1190,7 +1202,7 @@ async fn approve_and_send<R: Runtime>(
     }
     let hash = finalize_tx(&p).await?;
     if let Some(hash_str) = hash.as_str() {
-        record_activity(app, &p, origin, hash_str);
+        record_activity(app, &p, origin, hash_str, tx);
     }
     Ok(hash)
 }
@@ -1655,8 +1667,82 @@ fn save_activity_records<R: Runtime>(app: &AppHandle<R>, records: &[ActivityReco
     std::fs::write(&path, json).map_err(|e| format!("writing activity: {e}"))
 }
 
-fn record_activity<R: Runtime>(app: &AppHandle<R>, prepared: &PreparedTx, origin: &str, hash: &str) {
+#[derive(Default)]
+struct ActivityMeta {
+    kind: Option<String>,
+    counterparty: Option<String>,
+    asset_symbol: Option<String>,
+    asset_decimals: Option<u32>,
+    amount: Option<String>,
+    token_address: Option<String>,
+}
+
+fn tx_activity_meta(tx: &Value) -> ActivityMeta {
+    let Some(meta) = tx.get("activity").and_then(|v| v.as_object()) else {
+        return ActivityMeta::default();
+    };
+    ActivityMeta {
+        kind: meta.get("kind").and_then(|v| v.as_str()).map(str::to_string),
+        counterparty: meta
+            .get("counterparty")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        asset_symbol: meta
+            .get("assetSymbol")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        asset_decimals: meta
+            .get("assetDecimals")
+            .and_then(|v| v.as_u64())
+            .and_then(|n| u32::try_from(n).ok()),
+        amount: meta
+            .get("amount")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        token_address: meta
+            .get("tokenAddress")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    }
+}
+
+fn parse_erc20_transfer(data: &str) -> Option<(String, String)> {
+    let hex = data.strip_prefix("0x").unwrap_or(data);
+    if hex.len() < 8 + 64 + 64 || !hex[..8].eq_ignore_ascii_case("a9059cbb") {
+        return None;
+    }
+    let to_word = &hex[8..72];
+    let amount_word = &hex[72..136];
+    let to = format!("0x{}", &to_word[24..64]);
+    let amount = format!("0x{}", amount_word.trim_start_matches('0'));
+    Some((to, if amount == "0x" { "0x0".to_string() } else { amount }))
+}
+
+fn record_activity<R: Runtime>(
+    app: &AppHandle<R>,
+    prepared: &PreparedTx,
+    origin: &str,
+    hash: &str,
+    tx: &Value,
+) {
     let has_data = prepared.data.trim() != "0x" && !prepared.data.trim().is_empty();
+    let mut meta = tx_activity_meta(tx);
+    let parsed_transfer = parse_erc20_transfer(&prepared.data);
+    if parsed_transfer.is_some() && meta.kind.is_none() {
+        meta.kind = Some("token_send".to_string());
+    }
+    if let Some((to, amount)) = parsed_transfer {
+        meta.counterparty.get_or_insert(to);
+        meta.amount.get_or_insert(amount);
+        meta.token_address.get_or_insert(prepared.to.clone());
+    }
+    let kind = meta.kind.clone().unwrap_or_else(|| {
+        if has_data {
+            "contract".to_string()
+        } else {
+            "send".to_string()
+        }
+    });
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -1672,7 +1758,37 @@ fn record_activity<R: Runtime>(app: &AppHandle<R>, prepared: &PreparedTx, origin
         value: prepared.value.clone(),
         data: prepared.data.clone(),
         origin: origin.to_string(),
-        kind: if has_data { "contract".to_string() } else { "send".to_string() },
+        kind,
+        counterparty: meta.counterparty.or_else(|| {
+            if prepared.to.is_empty() {
+                None
+            } else {
+                Some(prepared.to.clone())
+            }
+        }),
+        asset_symbol: meta.asset_symbol.or_else(|| {
+            if has_data {
+                None
+            } else {
+                Some(prepared.symbol.clone())
+            }
+        }),
+        asset_decimals: meta.asset_decimals.or_else(|| {
+            if has_data {
+                None
+            } else {
+                Some(18)
+            }
+        }),
+        amount: meta.amount.or_else(|| {
+            if prepared.value != "0x0" {
+                Some(prepared.value.clone())
+            } else {
+                None
+            }
+        }),
+        token_address: meta.token_address,
+        status: Some("submitted".to_string()),
         timestamp: now,
     };
 
@@ -2823,6 +2939,19 @@ mod tests {
             "data": "0xa9059cbb"
         });
         assert!(preview_tx(&call).contains("Contract interaction"));
+    }
+
+    #[test]
+    fn parses_erc20_transfer_activity() {
+        let data = concat!(
+            "0xa9059cbb",
+            "00000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c8",
+            "000000000000000000000000000000000000000000000000000000000012d687"
+        );
+        let parsed = parse_erc20_transfer(data).unwrap();
+        assert_eq!(parsed.0, "0x70997970c51812dc3a010c7d01b50e0d17dc79c8");
+        assert_eq!(parsed.1, "0x12d687");
+        assert!(parse_erc20_transfer("0x095ea7b3").is_none());
     }
 
     #[test]

@@ -94,6 +94,18 @@ jobs:
 
           # Derive the Developer ID Application identity and hand it to the Tauri bundler.
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No Developer ID Application signing identity found in the imported certificate."
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+            exit 1
+          fi
+          case "$IDENTITY" in
+            Developer\ ID\ Application:*) ;;
+            *)
+              echo "::error::Expected a Developer ID Application identity, got: $IDENTITY"
+              exit 1
+              ;;
+          esac
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
       - name: Build signed + notarized DMG
@@ -103,6 +115,42 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bun run tauri build --target ${{ matrix.target }} --bundles dmg
+
+      - name: Notarize and staple DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euxo pipefail
+          DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      - name: Verify macOS signature and notarization
+        run: |
+          set -euxo pipefail
+          DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          MOUNT_DIR="$RUNNER_TEMP/dmg-mount"
+          mkdir -p "$MOUNT_DIR"
+          hdiutil attach "$DMG" -mountpoint "$MOUNT_DIR" -nobrowse -readonly
+          trap 'hdiutil detach "$MOUNT_DIR" || true' EXIT
+          APP="$MOUNT_DIR/AutoDesktop.app"
+
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
+          grep -q "Authority=Developer ID Application" "$RUNNER_TEMP/codesign.txt"
+          grep -q "Runtime Version=" "$RUNNER_TEMP/codesign.txt"
+
+          spctl -a -vvv -t execute "$APP"
+          spctl -a -vvv -t install "$DMG"
+          xcrun stapler validate "$APP"
+          xcrun stapler validate "$DMG"
 
       - name: Stage artifact
         run: |
