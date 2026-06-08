@@ -526,6 +526,14 @@ struct ActivityRecord {
     to: String,
     value: String,
     data: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    gas: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    nonce: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    max_priority_fee_per_gas: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    max_fee_per_gas: String,
     origin: String,
     kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2297,6 +2305,10 @@ fn record_activity<R: Runtime>(
         to: prepared.to.clone(),
         value: prepared.value.clone(),
         data: prepared.data.clone(),
+        gas: prepared.gas.clone(),
+        nonce: prepared.nonce.clone(),
+        max_priority_fee_per_gas: prepared.max_priority_fee_per_gas.clone(),
+        max_fee_per_gas: prepared.max_fee_per_gas.clone(),
         origin: origin.to_string(),
         kind,
         counterparty: meta.counterparty.or_else(|| {
@@ -2346,6 +2358,174 @@ fn record_activity<R: Runtime>(
 #[tauri::command]
 fn get_activity<R: Runtime>(app: AppHandle<R>) -> Vec<ActivityRecord> {
     load_activity_records(&app)
+}
+
+async fn receipt_status(chain: &ChainCfg, hash: &str) -> Result<Option<String>, String> {
+    let receipt = node_rpc_call(chain, "eth_getTransactionReceipt", &[json!(hash)]).await?;
+    if receipt.is_null() {
+        return Ok(None);
+    }
+    let status = receipt
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x0");
+    Ok(Some(if status == "0x1" {
+        "confirmed".to_string()
+    } else {
+        "failed".to_string()
+    }))
+}
+
+#[tauri::command]
+async fn sync_activity_receipts<R: Runtime>(app: AppHandle<R>) -> Result<Vec<ActivityRecord>, String> {
+    let mut records = load_activity_records(&app);
+    let pending: Vec<(usize, String, String)> = records
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.status.as_deref().unwrap_or("submitted") == "submitted")
+        .map(|(idx, r)| (idx, r.chain_id.clone(), r.hash.clone()))
+        .collect();
+
+    let mut changed = false;
+    for (idx, chain_id, hash) in pending {
+        let Some(chain) = find_chain(&chain_id) else {
+            continue;
+        };
+        match receipt_status(&chain, &hash).await {
+            Ok(Some(status)) => {
+                if records[idx].status.as_deref() != Some(status.as_str()) {
+                    records[idx].status = Some(status);
+                    changed = true;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => println!("[AutoDesktop] warn: failed to sync receipt {hash}: {e}"),
+        }
+    }
+
+    if changed {
+        save_activity_records(&app, &records)?;
+        let _ = app.emit("activity-changed", ());
+    }
+    Ok(records)
+}
+
+#[tauri::command]
+async fn replace_activity_transaction<R: Runtime>(
+    app: AppHandle<R>,
+    activity_id: String,
+    action: String,
+    max_fee_per_gas: String,
+    max_priority_fee_per_gas: String,
+) -> Result<Value, String> {
+    let records = load_activity_records(&app);
+    let original = records
+        .iter()
+        .find(|r| r.id == activity_id)
+        .cloned()
+        .ok_or("activity record not found")?;
+    if original.status.as_deref().unwrap_or("submitted") != "submitted" {
+        return Err("only pending transactions can be replaced".to_string());
+    }
+    if original.nonce.is_empty() || original.gas.is_empty() {
+        return Err("this activity record is missing nonce/gas; it cannot be replaced".to_string());
+    }
+    let active = active_account_address().ok_or("wallet is locked")?;
+    if !original.from.eq_ignore_ascii_case(&active) {
+        return Err("only the active sender can replace this transaction".to_string());
+    }
+    if hex_to_u128(&max_priority_fee_per_gas).unwrap_or(0)
+        > hex_to_u128(&max_fee_per_gas).unwrap_or(u128::MAX)
+    {
+        return Err("priority fee cannot exceed max fee".to_string());
+    }
+    let chain = find_chain(&original.chain_id)
+        .ok_or_else(|| format!("no RPC configured for chain {}", original.chain_id))?;
+
+    let is_cancel = action == "cancel" || action == "revoke";
+    let prepared = if is_cancel {
+        PreparedTx {
+            chain_id: chain.id,
+            chain_name: chain.name,
+            symbol: chain.symbol,
+            from: original.from.clone(),
+            to: original.from.clone(),
+            value: "0x0".to_string(),
+            data: "0x".to_string(),
+            gas: "0x5208".to_string(),
+            nonce: original.nonce.clone(),
+            max_priority_fee_per_gas,
+            max_fee_per_gas,
+        }
+    } else {
+        PreparedTx {
+            chain_id: original.chain_id.clone(),
+            chain_name: original.chain_name.clone(),
+            symbol: original.symbol.clone(),
+            from: original.from.clone(),
+            to: original.to.clone(),
+            value: original.value.clone(),
+            data: original.data.clone(),
+            gas: original.gas.clone(),
+            nonce: original.nonce.clone(),
+            max_priority_fee_per_gas,
+            max_fee_per_gas,
+        }
+    };
+
+    let req = PendingRequest {
+        id: next_request_id(),
+        method: "eth_sendTransaction".to_string(),
+        origin: "AutoDesktop Wallet".to_string(),
+        summary: if is_cancel {
+            format!("Cancel pending transaction\nOriginal: {}", original.hash)
+        } else {
+            format!("Speed up pending transaction\nOriginal: {}", original.hash)
+        },
+        tx: Some(prepared.clone()),
+    };
+    let decision = request_approval(&app, req).await;
+    if !decision.approved {
+        return Err("User rejected the request (4001)".to_string());
+    }
+    let mut p = prepared;
+    if let Some(mf) = decision.max_fee_per_gas {
+        p.max_fee_per_gas = mf;
+    }
+    if let Some(mp) = decision.max_priority_fee_per_gas {
+        p.max_priority_fee_per_gas = mp;
+    }
+    if hex_to_u128(&p.max_priority_fee_per_gas).unwrap_or(0)
+        > hex_to_u128(&p.max_fee_per_gas).unwrap_or(u128::MAX)
+    {
+        p.max_priority_fee_per_gas = p.max_fee_per_gas.clone();
+    }
+
+    let hash = finalize_tx(&p).await?;
+    if let Some(hash_str) = hash.as_str() {
+        let tx = json!({
+            "to": p.to,
+            "value": p.value,
+            "data": p.data,
+            "activity": {
+                "kind": if is_cancel { "cancel" } else { "speedup" },
+                "counterparty": original.counterparty,
+                "assetSymbol": original.asset_symbol,
+                "assetDecimals": original.asset_decimals,
+                "amount": original.amount,
+                "tokenAddress": original.token_address
+            }
+        });
+        record_activity(&app, &p, "AutoDesktop Wallet", hash_str, &tx, Vec::new());
+
+        let mut records = load_activity_records(&app);
+        if let Some(old) = records.iter_mut().find(|r| r.id == activity_id) {
+            old.status = Some("replaced".to_string());
+        }
+        save_activity_records(&app, &records)?;
+        let _ = app.emit("activity-changed", ());
+    }
+    Ok(hash)
 }
 
 #[tauri::command]
@@ -3632,6 +3812,8 @@ pub fn run() {
             set_close_behavior,
             check_for_update,
             get_activity,
+            sync_activity_receipts,
+            replace_activity_transaction,
             get_portfolio_history,
             record_portfolio_snapshot,
             get_defi_positions,

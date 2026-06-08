@@ -3,6 +3,8 @@ import "./WalletPage.css";
 import { chainLogo, findChain, useChains, type Chain } from "../lib/chains";
 import {
   loadActivity,
+  replaceActivityTransaction,
+  syncActivityReceipts,
   useActivity,
   type ActivityRecord,
 } from "../lib/activity";
@@ -50,6 +52,22 @@ import {
   type PricedToken,
 } from "../lib/prices";
 import { usePortfolioHistory, type PortfolioTrend } from "../lib/portfolioHistory";
+import {
+  fetchAllQuotes,
+  getProvider,
+  isNativeAddress,
+  loadSupportedSets,
+  pickBestSlot,
+  PROVIDERS,
+  NATIVE_TOKEN_ADDRESS,
+  type MergedChain,
+  type MergedToken,
+  type NeutralStatus,
+  type ProviderId,
+  type ProviderToken,
+  type QuoteParams,
+  type QuoteSlot,
+} from "../lib/swap";
 import {
   addCustomToken,
   encodeErc20Transfer,
@@ -142,7 +160,16 @@ export default function WalletPage() {
   const [showReceive, setShowReceive] = useState(false);
   const [showAddToken, setShowAddToken] = useState(false);
   const [showSend, setShowSend] = useState(false);
+  const [showSwap, setShowSwap] = useState(false);
+  const [tokenSearch, setTokenSearch] = useState("");
+  const [replaceTarget, setReplaceTarget] = useState<{
+    record: ActivityRecord;
+    action: "speedup" | "cancel";
+  } | null>(null);
   const [sendAssetKey, setSendAssetKey] = useState<string | undefined>(
+    undefined,
+  );
+  const [swapAssetKey, setSwapAssetKey] = useState<string | undefined>(
     undefined,
   );
 
@@ -157,6 +184,14 @@ export default function WalletPage() {
 
   useEffect(() => {
     void loadActivity();
+  }, []);
+
+  useEffect(() => {
+    void syncActivityReceipts().catch(() => undefined);
+    const id = window.setInterval(() => {
+      void syncActivityReceipts().catch(() => undefined);
+    }, 20_000);
+    return () => window.clearInterval(id);
   }, []);
 
   // Assets the active account can actually send (non-zero native + ERC-20).
@@ -210,6 +245,10 @@ export default function WalletPage() {
     () =>
       filter === "all" ? allRows : allRows.filter((r) => r.chainId === filter),
     [allRows, filter],
+  );
+  const visibleRows = useMemo(
+    () => filterTokenRows(rows, tokenSearch),
+    [rows, tokenSearch],
   );
   const portfolio = useMemo(
     () => computePortfolio(allRows, prices.status === "loading", defi),
@@ -350,13 +389,11 @@ export default function WalletPage() {
             />
             <QuickBtn
               icon="swap"
-              label={t("wallet.swap")}
-              onClick={() => toast(t("wallet.swapSoon"), "info")}
-            />
-            <QuickBtn
-              icon="bridge"
-              label={t("wallet.bridge")}
-              onClick={() => toast(t("wallet.bridgeSoon"), "info")}
+              label={t("wallet.swapBridge")}
+              onClick={() => {
+                setSwapAssetKey(undefined);
+                setShowSwap(true);
+              }}
             />
           </div>
         )}
@@ -410,22 +447,34 @@ export default function WalletPage() {
                       {t("wallet.tokenHoldingsHint")}
                     </div>
                   </div>
+                  <SectionSearch
+                    value={tokenSearch}
+                    onChange={setTokenSearch}
+                    placeholder={t("wallet.searchTokenHoldings")}
+                  />
                 </div>
-                <div className="token-list">
-                  {rows.map((r) => (
-                    <HoldingRow
-                      key={r.key}
-                      row={r}
-                      t={t}
-                      canSign={!!active.signer}
-                      onSend={(assetKey) => {
-                        setSendAssetKey(assetKey);
-                        setShowSend(true);
-                      }}
-                      onSwap={() => toast(t("wallet.swapSoon"), "info")}
-                    />
-                  ))}
-                </div>
+                {visibleRows.length > 0 ? (
+                  <div className="token-list">
+                    {visibleRows.map((r) => (
+                      <HoldingRow
+                        key={r.key}
+                        row={r}
+                        t={t}
+                        canSign={!!active.signer}
+                        onSend={(assetKey) => {
+                          setSendAssetKey(assetKey);
+                          setShowSend(true);
+                        }}
+                        onSwap={(assetKey) => {
+                          setSwapAssetKey(assetKey);
+                          setShowSwap(true);
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="section-empty">{t("wallet.noTokenMatches")}</div>
+                )}
                 <button
                   className="add-token"
                   onClick={() => setShowAddToken(true)}
@@ -436,7 +485,12 @@ export default function WalletPage() {
               <DefiSection t={t} defi={defi} />
             </>
           ) : (
-            <ActivityList records={accountActivity} chains={chains} t={t} />
+            <ActivityList
+              records={accountActivity}
+              chains={chains}
+              t={t}
+              onReplace={(record, action) => setReplaceTarget({ record, action })}
+            />
           )}
         </div>
       </div>
@@ -457,11 +511,69 @@ export default function WalletPage() {
           onClose={() => setShowSend(false)}
         />
       )}
+      {showSwap && (
+        <SwapModal
+          assets={sendableAssets}
+          initialAssetKey={swapAssetKey}
+          activeAddress={active.address}
+          onClose={() => setShowSwap(false)}
+        />
+      )}
+      {replaceTarget && (
+        <ReplaceTxModal
+          record={replaceTarget.record}
+          action={replaceTarget.action}
+          t={t}
+          onClose={() => setReplaceTarget(null)}
+          onSubmit={async (maxFee, priorityFee) => {
+            const hash = await replaceActivityTransaction(
+              replaceTarget.record.id,
+              replaceTarget.action,
+              maxFee,
+              priorityFee,
+            );
+            toast(t("wallet.txSubmitted", { hash: shortAddress(hash, 8, 6) }));
+            setReplaceTarget(null);
+            await syncActivityReceipts().catch(() => undefined);
+          }}
+        />
+      )}
     </div>
   );
 }
 
+function SectionSearch({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <label className="section-search">
+      <Icon name="search" size={14} />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      {value && (
+        <button type="button" onClick={() => onChange("")} aria-label="Clear">
+          <Icon name="close" size={13} />
+        </button>
+      )}
+    </label>
+  );
+}
+
 function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
+  const [query, setQuery] = useState("");
+  const positions = useMemo(
+    () => filterDefiPositions(defi.positions, query),
+    [defi.positions, query],
+  );
   return (
     <section className="asset-section defi-section">
       <div className="asset-section-head">
@@ -469,6 +581,11 @@ function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
           <div className="asset-section-title">{t("wallet.defiHoldings")}</div>
           <div className="asset-section-sub">{t("wallet.defiHoldingsHint")}</div>
         </div>
+        <SectionSearch
+          value={query}
+          onChange={setQuery}
+          placeholder={t("wallet.searchDefiPositions")}
+        />
       </div>
       {defi.status === "loading" && defi.positions.length === 0 ? (
         <div className="defi-list">
@@ -492,11 +609,15 @@ function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
           </div>
         </div>
       ) : defi.positions.length > 0 ? (
+        positions.length > 0 ? (
         <div className="defi-list">
-          {defi.positions.map((position) => (
+          {positions.map((position) => (
             <DefiPositionCard key={position.id} position={position} />
           ))}
         </div>
+        ) : (
+          <div className="section-empty">{t("wallet.noDefiMatches")}</div>
+        )
       ) : (
         <div className="defi-empty">
           <div className="defi-empty-ic">
@@ -588,6 +709,28 @@ type SendAsset = {
   color: string;
   logo?: string;
   wei: string;
+};
+
+type SwapStage =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "approving" }
+  | { kind: "swapping" }
+  | { kind: "submitted"; hash: string; providerId: ProviderId; requestId?: string }
+  | { kind: "error"; message: string };
+
+type SwapPickerMode = "source" | "target";
+
+type SwapPickerItem = {
+  chainId: number;
+  chainName: string;
+  chainLogo?: string;
+  chainSymbol?: string;
+  key: string;
+  token: ProviderToken | MergedToken;
+  balance?: string;
+  providers?: ProviderId[];
+  sourceAssetKey?: string;
 };
 
 type Portfolio = {
@@ -696,6 +839,46 @@ function buildRows(
 function rowUsdValue(row: DisplayRow): number | null {
   if (!row.state || row.state.status !== "ok" || !row.price) return null;
   return weiToUsd(row.state.wei, row.decimals, row.price.usd);
+}
+
+function normalizedSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function includesQuery(query: string, values: Array<string | null | undefined>): boolean {
+  if (!query) return true;
+  return values.some((value) => value?.toLowerCase().includes(query));
+}
+
+function filterTokenRows(rows: DisplayRow[], query: string): DisplayRow[] {
+  const q = normalizedSearch(query);
+  if (!q) return rows;
+  return rows.filter((row) =>
+    includesQuery(q, [
+      row.symbol,
+      row.chainName,
+      row.chainSymbol,
+      row.address,
+      row.kind,
+    ]),
+  );
+}
+
+function filterDefiPositions(
+  positions: DefiState["positions"],
+  query: string,
+): DefiState["positions"] {
+  const q = normalizedSearch(query);
+  if (!q) return positions;
+  return positions.filter((position) =>
+    includesQuery(q, [
+      position.appName,
+      position.networkName,
+      position.label,
+      ...position.symbols,
+      ...position.tokens.map((token) => token.symbol),
+    ]),
+  );
 }
 
 function computePortfolio(
@@ -836,7 +1019,7 @@ function HoldingRow({
   t: TFn;
   canSign: boolean;
   onSend: (assetKey: string) => void;
-  onSwap: () => void;
+  onSwap: (assetKey: string) => void;
 }) {
   const usd =
     row.state?.status === "ok" && row.price
@@ -890,7 +1073,11 @@ function HoldingRow({
         >
           <Icon name="send" size={14} /> {t("wallet.send")}
         </button>
-        <button className="token-action" onClick={onSwap}>
+        <button
+          className="token-action"
+          disabled={!canSend}
+          onClick={() => sendAssetKey && onSwap(sendAssetKey)}
+        >
           <Icon name="swap" size={14} /> {t("wallet.swap")}
         </button>
       </div>
@@ -918,10 +1105,12 @@ function ActivityList({
   records,
   chains,
   t,
+  onReplace,
 }: {
   records: ActivityRecord[];
   chains: Chain[];
   t: TFn;
+  onReplace: (record: ActivityRecord, action: "speedup" | "cancel") => void;
 }) {
   if (records.length === 0) {
     return (
@@ -952,29 +1141,53 @@ function ActivityList({
         const symbol =
           record.assetSymbol ??
           (isTokenSend ? t("wallet.activityToken") : record.symbol);
-        const label = isTokenSend
-          ? t("wallet.activityTokenSend")
-          : record.kind === "contract"
-            ? t("wallet.activityContract")
-            : t("wallet.activitySend");
+        const label =
+          record.kind === "speedup"
+            ? t("wallet.speedUpTx")
+            : record.kind === "cancel"
+              ? t("wallet.revokeTx")
+              : isTokenSend
+                ? t("wallet.activityTokenSend")
+                : record.kind === "contract"
+                  ? t("wallet.activityContract")
+                  : t("wallet.activitySend");
         const counterparty = record.counterparty || record.to || record.hash;
         const statusLabel =
           record.status === "failed"
             ? t("wallet.activityFailed")
             : record.status === "confirmed"
               ? t("wallet.activityConfirmed")
-              : t("wallet.activitySubmitted");
+              : record.status === "replaced"
+                ? t("wallet.activityReplaced")
+                : t("wallet.activitySubmitted");
+        const canReplace =
+          record.status !== "confirmed" &&
+          record.status !== "failed" &&
+          record.status !== "replaced" &&
+          !!record.nonce &&
+          !!record.gas;
         return (
-          <button
+          <div
             key={record.id}
-            className="activity-row"
+            className={`activity-row${href ? "" : " disabled"}`}
+            role="button"
+            tabIndex={href ? 0 : -1}
             onClick={() => href && void openExternalUrl(href)}
-            disabled={!href}
+            onKeyDown={(event) => {
+              if (href && (event.key === "Enter" || event.key === " ")) {
+                event.preventDefault();
+                void openExternalUrl(href);
+              }
+            }}
             title={href ? t("wallet.openExplorer") : t("wallet.noExplorer")}
           >
             <span className={`activity-ic ${record.kind}`}>
               <Icon
-                name={record.kind === "contract" ? "doc" : "send"}
+                name={
+                  record.kind === "contract" || record.kind === "speedup"
+                    ? "doc"
+                    : "send"
+                }
                 size={17}
               />
             </span>
@@ -1015,9 +1228,33 @@ function ActivityList({
               <span className="activity-time">
                 {formatActivityTime(record.timestamp)}
               </span>
+              {canReplace && (
+                <span className="activity-actions">
+                  <button
+                    type="button"
+                    className="mini-action"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onReplace(record, "speedup");
+                    }}
+                  >
+                    {t("wallet.speedUp")}
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-action danger"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onReplace(record, "cancel");
+                    }}
+                  >
+                    {t("wallet.revokeTx")}
+                  </button>
+                </span>
+              )}
             </span>
             {href && <Icon name="external" size={15} />}
-          </button>
+          </div>
         );
       })}
     </div>
@@ -1071,6 +1308,123 @@ function txExplorerUrl(
   const base =
     bases[id] ?? (name.includes("0g") ? "https://chainscan.0g.ai/tx/" : null);
   return base ? `${base}${record.hash}` : null;
+}
+
+function feeHexToGwei(value: string | null | undefined): string {
+  if (!value) return "";
+  try {
+    const formatted = formatUnits(value, 9);
+    return formatted.replace(/\.?0+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function ReplaceTxModal({
+  record,
+  action,
+  t,
+  onClose,
+  onSubmit,
+}: {
+  record: ActivityRecord;
+  action: "speedup" | "cancel";
+  t: TFn;
+  onClose: () => void;
+  onSubmit: (maxFeePerGas: string, maxPriorityFeePerGas: string) => Promise<void>;
+}) {
+  const [maxFee, setMaxFee] = useState(() => feeHexToGwei(record.maxFeePerGas));
+  const [priorityFee, setPriorityFee] = useState(() =>
+    feeHexToGwei(record.maxPriorityFeePerGas),
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setError(null);
+    let maxHex: string;
+    let priorityHex: string;
+    try {
+      maxHex = toHexQuantity(parseUnits(cleanDecimal(maxFee), 9));
+      priorityHex = toHexQuantity(parseUnits(cleanDecimal(priorityFee), 9));
+    } catch {
+      setError(t("wallet.invalidGas"));
+      return;
+    }
+    if (safeHexToBigInt(priorityHex) > safeHexToBigInt(maxHex)) {
+      setError(t("wallet.priorityTooHigh"));
+      return;
+    }
+    if (safeHexToBigInt(maxHex) <= 0n) {
+      setError(t("wallet.invalidGas"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSubmit(maxHex, priorityHex);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="send-modal replace-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>
+            {action === "speedup" ? t("wallet.speedUpTx") : t("wallet.revokeTx")}
+          </h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">
+            <Icon name="x" size={20} />
+          </button>
+        </div>
+        <div className="replace-summary">
+          <span>{t("wallet.originalTx")}</span>
+          <strong>{shortAddress(record.hash, 10, 8)}</strong>
+          <span>{record.chainName}</span>
+        </div>
+        <label className="field">
+          <span>{t("wallet.maxFeePerGas")}</span>
+          <div className="fee-input-row">
+            <input
+              className="input"
+              value={maxFee}
+              onChange={(e) => setMaxFee(e.target.value)}
+              placeholder="0"
+            />
+            <span>Gwei</span>
+          </div>
+        </label>
+        <label className="field">
+          <span>{t("wallet.priorityFee")}</span>
+          <div className="fee-input-row">
+            <input
+              className="input"
+              value={priorityFee}
+              onChange={(e) => setPriorityFee(e.target.value)}
+              placeholder="0"
+            />
+            <span>Gwei</span>
+          </div>
+        </label>
+        <div className="hint">
+          <Icon name="info" size={14} />
+          {action === "speedup" ? t("wallet.speedUpHint") : t("wallet.revokeHint")}
+        </div>
+        {error && <div className="error-line">{error}</div>}
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onClose}>
+            {t("wallet.cancel")}
+          </button>
+          <button className="btn primary" onClick={submit} disabled={busy}>
+            {busy ? t("wallet.submitting") : t("common.confirm")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function KindBadge({
@@ -2298,20 +2652,10 @@ function AddTokenModal({
 
 // Wallet-initiated Send (#7): pick a held asset (native or ERC-20), recipient, and
 // amount; the actual confirm (with gas details) happens in the approval window.
-function resolveRecipient(input: string, accounts: Account[]): string | null {
+function resolveRecipient(input: string): string | null {
   const raw = input.trim();
   if (isAddress(raw)) return raw;
-  const q = raw.toLowerCase();
-  if (!q) return null;
-  const exact = accounts.filter((a) => a.label.toLowerCase() === q);
-  if (exact.length === 1) return exact[0].address;
-  const matches = accounts.filter((a) =>
-    [a.label, a.address, shortAddress(a.address, 10, 6), a.kind]
-      .join(" ")
-      .toLowerCase()
-      .includes(q),
-  );
-  return matches.length === 1 ? matches[0].address : null;
+  return null;
 }
 
 function AssetSelect({
@@ -2396,6 +2740,864 @@ function AssetSelect({
   );
 }
 
+const MAX_UINT256 = (1n << 256n) - 1n;
+
+function swapInitialSlots(): QuoteSlot[] {
+  return PROVIDERS.map((p) => ({
+    providerId: p.id,
+    displayName: p.displayName,
+    loading: false,
+    quote: null,
+    error: null,
+    unsupported: false,
+  }));
+}
+
+function swapLoadingSlots(): QuoteSlot[] {
+  return PROVIDERS.map((p) => ({
+    providerId: p.id,
+    displayName: p.displayName,
+    loading: true,
+    quote: null,
+    error: null,
+    unsupported: false,
+  }));
+}
+
+function numericChainId(chainId: string): number | null {
+  try {
+    return chainId.startsWith("0x") ? parseInt(chainId, 16) : Number(chainId);
+  } catch {
+    return null;
+  }
+}
+
+function numberToChainId(chainId: number): string {
+  return `0x${chainId.toString(16)}`;
+}
+
+function tokenKeyOf(token: ProviderToken): string {
+  return token.address.toLowerCase();
+}
+
+function nativeTokenAddress(address?: string): string {
+  return address?.toLowerCase() || NATIVE_TOKEN_ADDRESS;
+}
+
+function sendAssetToProviderToken(
+  asset: SendAsset,
+  chainId: number,
+  tokensByChain: Map<number, MergedToken[]>,
+): ProviderToken {
+  const wanted = asset.kind === "native" ? NATIVE_TOKEN_ADDRESS : nativeTokenAddress(asset.address);
+  const supported = (tokensByChain.get(chainId) ?? []).find(
+    (tk) => tk.address.toLowerCase() === wanted,
+  );
+  if (supported) return supported;
+  return {
+    chainId,
+    address: wanted,
+    symbol: asset.symbol,
+    name: asset.symbol,
+    decimals: asset.decimals,
+    logo: asset.logo ?? "",
+  };
+}
+
+function swapTokenProviders(token: ProviderToken | MergedToken | null | undefined): ProviderId[] | undefined {
+  const providers = (token as Partial<MergedToken> | null | undefined)?.providers;
+  return Array.isArray(providers) ? providers : undefined;
+}
+
+function cleanDecimal(value: string): string {
+  const cleaned = value.replace(/[^0-9.]/g, "");
+  const dot = cleaned.indexOf(".");
+  return dot === -1
+    ? cleaned
+    : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, "");
+}
+
+function trimAmount(s: string, maxDecimals: number): string {
+  const n = Number.parseFloat(s);
+  if (!Number.isFinite(n)) return s;
+  if (n === 0) return "0";
+  if (n >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  return n.toFixed(maxDecimals).replace(/\.?0+$/, "");
+}
+
+function normalizeTxValue(value: string | undefined): string {
+  if (!value || value === "0") return "0x0";
+  if (value.startsWith("0x")) return value;
+  try {
+    return toHexQuantity(BigInt(value));
+  } catch {
+    return "0x0";
+  }
+}
+
+function encodeErc20Approve(spender: string, amount: bigint): string {
+  const addr = spender.toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]{40}$/.test(addr)) throw new Error("invalid spender");
+  return `0x095ea7b3${addr.padStart(64, "0")}${amount.toString(16).padStart(64, "0")}`;
+}
+
+function providerName(id: ProviderId): string {
+  return PROVIDERS.find((p) => p.id === id)?.displayName ?? id;
+}
+
+async function pollSwapStatus(
+  params: QuoteParams,
+  hash: string,
+  providerId: ProviderId,
+  requestId: string | undefined,
+  setStatus: (status: NeutralStatus) => void,
+) {
+  const provider = getProvider(providerId);
+  for (let i = 0; i < 60; i++) {
+    try {
+      const status = await provider.getStatus({ params, sourceHash: hash, requestId });
+      setStatus(status);
+      if (status.state !== "pending") return;
+    } catch {
+      // Source txs often take a few blocks to be indexed by swap providers.
+    }
+    await new Promise((r) => window.setTimeout(r, 5000));
+  }
+}
+
+function QuoteChooser({
+  slots,
+  selectedProvider,
+  toSymbol,
+  onSelect,
+}: {
+  slots: QuoteSlot[];
+  selectedProvider: ProviderId | null;
+  toSymbol: string;
+  onSelect: (id: ProviderId) => void;
+}) {
+  const best = pickBestSlot(slots)?.providerId ?? null;
+  return (
+    <div className="swap-quotes">
+      {slots.map((slot) => (
+        <button
+          key={slot.providerId}
+          className={`swap-quote${slot.providerId === selectedProvider ? " on" : ""}`}
+          disabled={!slot.quote}
+          onClick={() => slot.quote && onSelect(slot.providerId)}
+        >
+          <span className="swap-quote-head">
+            <b>{slot.displayName}</b>
+            {best === slot.providerId && slot.quote && <i>Best</i>}
+          </span>
+          {slot.loading ? (
+            <span className="swap-quote-muted">Fetching…</span>
+          ) : slot.unsupported ? (
+            <span className="swap-quote-muted">Unsupported</span>
+          ) : slot.error ? (
+            <span className="swap-quote-error" title={slot.error}>{slot.error}</span>
+          ) : slot.quote ? (
+            <>
+              <span className="swap-quote-amount">
+                {trimAmount(slot.quote.amountOut, 8)} {toSymbol}
+              </span>
+              <span className="swap-quote-muted">
+                {slot.quote.estimatedTimeSeconds != null
+                  ? `~${Math.max(1, Math.round(slot.quote.estimatedTimeSeconds / 60))}m`
+                  : slot.quote.routeDescription}
+              </span>
+            </>
+          ) : (
+            <span className="swap-quote-muted">—</span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SwapStatusView({
+  status,
+  hash,
+  provider,
+  t,
+}: {
+  status: NeutralStatus | null;
+  hash: string;
+  provider: ProviderId;
+  t: TFn;
+}) {
+  const done = status?.state === "success";
+  const failed = status?.state === "failed" || status?.state === "refunded";
+  return (
+    <div className={`swap-status-card${done ? " done" : failed ? " failed" : ""}`}>
+      <div className="swap-status-title">
+        {done
+          ? t("wallet.swapComplete")
+          : failed
+            ? status?.message || t("wallet.swapFailed")
+            : t("wallet.swapTracking", { provider: providerName(provider) })}
+      </div>
+      <div className="swap-status-sub mono">
+        {shortAddress(status?.sourceHash ?? hash, 10, 8)}
+      </div>
+      {status?.destHash && (
+        <div className="swap-status-sub mono">
+          {t("wallet.received")}: {shortAddress(status.destHash, 10, 8)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SwapAssetButton({
+  token,
+  chainName,
+  chainLogo,
+  balance,
+  providers,
+  placeholder,
+  onClick,
+}: {
+  token: ProviderToken | MergedToken | null;
+  chainName?: string;
+  chainLogo?: string;
+  balance?: string;
+  providers?: ProviderId[];
+  placeholder: string;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="swap-asset-btn" onClick={onClick}>
+      {token ? (
+        <>
+          <SwapLogo url={token.logo} fallback={token.symbol} size={34} />
+          <span className="swap-asset-copy">
+            <span className="swap-asset-symbol">{token.symbol}</span>
+            <span className="swap-asset-chain">
+              <SwapLogo url={chainLogo} fallback={chainName ?? token.symbol} size={14} />
+              {chainName}
+              {providers && <SwapProviderBadges providers={providers} />}
+            </span>
+          </span>
+          {balance && <span className="swap-asset-balance">{balance}</span>}
+        </>
+      ) : (
+        <span className="swap-asset-placeholder">{placeholder}</span>
+      )}
+      <Icon name="chevronDown" size={16} />
+    </button>
+  );
+}
+
+function SwapAssetPicker({
+  title,
+  items,
+  selectedKey,
+  t,
+  onPick,
+  onClose,
+}: {
+  title: string;
+  items: SwapPickerItem[];
+  selectedKey: string;
+  t: TFn;
+  onPick: (item: SwapPickerItem) => void;
+  onClose: () => void;
+}) {
+  const [chainQuery, setChainQuery] = useState("");
+  const [tokenQuery, setTokenQuery] = useState("");
+  const selected = items.find((item) => item.key === selectedKey);
+  const chainIds = useMemo(() => {
+    const map = new Map<number, SwapPickerItem>();
+    for (const item of items) {
+      if (!map.has(item.chainId)) map.set(item.chainId, item);
+    }
+    return [...map.values()].sort((a, b) => a.chainName.localeCompare(b.chainName));
+  }, [items]);
+  const [selectedChainId, setSelectedChainId] = useState<number | null>(
+    selected?.chainId ?? chainIds[0]?.chainId ?? null,
+  );
+
+  useEffect(() => {
+    if (selectedChainId && chainIds.some((c) => c.chainId === selectedChainId)) return;
+    setSelectedChainId(selected?.chainId ?? chainIds[0]?.chainId ?? null);
+  }, [chainIds, selected?.chainId, selectedChainId]);
+
+  const visibleChains = useMemo(() => {
+    const q = chainQuery.trim().toLowerCase();
+    return chainIds.filter((item) => !q || item.chainName.toLowerCase().includes(q));
+  }, [chainIds, chainQuery]);
+
+  const visibleTokens = useMemo(() => {
+    const q = tokenQuery.trim().toLowerCase();
+    const addrSearch = q.startsWith("0x");
+    return items
+      .filter((item) => !selectedChainId || item.chainId === selectedChainId)
+      .filter((item) => {
+        if (!q) return true;
+        const token = item.token;
+        return (
+          token.symbol.toLowerCase().includes(q) ||
+          token.name.toLowerCase().includes(q) ||
+          (addrSearch && token.address.toLowerCase().includes(q))
+        );
+      })
+      .sort((a, b) => a.token.symbol.localeCompare(b.token.symbol));
+  }, [items, selectedChainId, tokenQuery]);
+
+  return (
+    <div className="swap-picker-layer" onClick={onClose}>
+      <div className="swap-picker-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="swap-picker-head">
+          <div className="swap-picker-title">{title}</div>
+          <button className="icon-btn bare" onClick={onClose}>
+            <Icon name="close" size={17} />
+          </button>
+        </div>
+        <div className="swap-picker-body">
+          <aside className="swap-picker-chains">
+            <label className="swap-picker-search">
+              <Icon name="search" size={14} />
+              <input
+                value={chainQuery}
+                onChange={(e) => setChainQuery(e.target.value)}
+                placeholder={t("wallet.searchChains")}
+              />
+            </label>
+            <div className="swap-picker-chain-list">
+              {visibleChains.map((item) => (
+                <button
+                  key={item.chainId}
+                  type="button"
+                  className={`swap-picker-chain${item.chainId === selectedChainId ? " on" : ""}`}
+                  onClick={() => setSelectedChainId(item.chainId)}
+                >
+                  <SwapLogo
+                    url={item.chainLogo}
+                    fallback={item.chainSymbol ?? item.chainName}
+                    size={22}
+                  />
+                  <span>{item.chainName}</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+          <section className="swap-picker-tokens">
+            <label className="swap-picker-search wide">
+              <Icon name="search" size={14} />
+              <input
+                value={tokenQuery}
+                onChange={(e) => setTokenQuery(e.target.value)}
+                placeholder={t("wallet.searchTokens")}
+                autoFocus
+              />
+            </label>
+            <div className="swap-picker-token-list">
+              {visibleTokens.length === 0 ? (
+                <div className="swap-picker-empty">{t("wallet.noTokensFound")}</div>
+              ) : (
+                visibleTokens.slice(0, 180).map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`swap-picker-token${item.key === selectedKey ? " on" : ""}`}
+                    onClick={() => onPick(item)}
+                  >
+                    <SwapLogo url={item.token.logo} fallback={item.token.symbol} size={36} />
+                    <span className="swap-picker-token-main">
+                      <span className="swap-picker-token-top">
+                        <strong>{item.token.symbol}</strong>
+                        {item.providers && <SwapProviderBadges providers={item.providers} />}
+                      </span>
+                      <span className="swap-picker-token-sub">
+                        {item.chainName}
+                        <span>{shortAddress(item.token.address, 6, 4)}</span>
+                      </span>
+                    </span>
+                    {item.balance && <span className="swap-picker-balance">{item.balance}</span>}
+                    {item.key === selectedKey && <Icon name="check" size={16} />}
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SwapLogo({
+  url,
+  fallback,
+  size,
+}: {
+  url?: string;
+  fallback: string;
+  size: number;
+}) {
+  return (
+    <span className="swap-logo" style={{ width: size, height: size, fontSize: Math.max(9, size * 0.34) }}>
+      {url ? <img src={url} alt="" /> : fallback.slice(0, 2).toUpperCase()}
+    </span>
+  );
+}
+
+function SwapProviderBadges({ providers }: { providers: ProviderId[] }) {
+  return (
+    <span className="swap-provider-badges">
+      {providers.includes("xflows") && <span className="x">X</span>}
+      {providers.includes("relay") && <span className="r">R</span>}
+    </span>
+  );
+}
+
+function SwapModal({
+  assets,
+  initialAssetKey,
+  activeAddress,
+  onClose,
+}: {
+  assets: SendAsset[];
+  initialAssetKey?: string;
+  activeAddress: string;
+  onClose: () => void;
+}) {
+  const { t } = useT();
+  const [sel, setSel] = useState<string>(
+    initialAssetKey && assets.some((a) => a.key === initialAssetKey)
+      ? initialAssetKey
+      : (assets[0]?.key ?? ""),
+  );
+  const [amount, setAmount] = useState("");
+  const [slippage, setSlippage] = useState(0.01);
+  const [supportedChains, setSupportedChains] = useState<MergedChain[]>([]);
+  const [tokensByChain, setTokensByChain] = useState<Map<number, MergedToken[]>>(new Map());
+  const [targetChainId, setTargetChainId] = useState<number | null>(null);
+  const [targetTokenKey, setTargetTokenKey] = useState("");
+  const [pickerMode, setPickerMode] = useState<SwapPickerMode | null>(null);
+  const [quoteSlots, setQuoteSlots] = useState<QuoteSlot[]>(() => swapInitialSlots());
+  const [selectedProvider, setSelectedProvider] = useState<ProviderId | null>(null);
+  const [userPickedProvider, setUserPickedProvider] = useState(false);
+  const [approved, setApproved] = useState<Set<string>>(() => new Set());
+  const [stage, setStage] = useState<SwapStage>({ kind: "loading" });
+  const [swapStatus, setSwapStatus] = useState<NeutralStatus | null>(null);
+
+  const asset = assets.find((a) => a.key === sel);
+  const sourceChainNum = asset ? numericChainId(asset.chainId) : null;
+  const sourceToken = useMemo(
+    () => (asset && sourceChainNum ? sendAssetToProviderToken(asset, sourceChainNum, tokensByChain) : null),
+    [asset, sourceChainNum, tokensByChain],
+  );
+  const targetTokens = targetChainId ? (tokensByChain.get(targetChainId) ?? []) : [];
+  const targetToken = targetTokens.find((tk) => tokenKeyOf(tk) === targetTokenKey) ?? null;
+  const targetChain = targetChainId
+    ? supportedChains.find((c) => c.chainId === targetChainId) ?? null
+    : null;
+  const sourceItems = useMemo<SwapPickerItem[]>(
+    () =>
+      assets
+        .flatMap((a) => {
+          const chainId = numericChainId(a.chainId);
+          if (!chainId) return [];
+          const token = sendAssetToProviderToken(a, chainId, tokensByChain);
+          return [{
+            chainId,
+            chainName: a.chainName,
+            chainLogo: a.logo,
+            chainSymbol: a.symbol,
+            key: a.key,
+            token,
+            balance: `${formatUnits(a.wei, a.decimals)} ${a.symbol}`,
+            providers: swapTokenProviders(token),
+            sourceAssetKey: a.key,
+          } satisfies SwapPickerItem];
+        }),
+    [assets, tokensByChain],
+  );
+  const targetItems = useMemo<SwapPickerItem[]>(() => {
+    const out: SwapPickerItem[] = [];
+    for (const chain of supportedChains) {
+      for (const token of tokensByChain.get(chain.chainId) ?? []) {
+        out.push({
+          chainId: chain.chainId,
+          chainName: chain.name,
+          chainLogo: chain.logo,
+          chainSymbol: chain.nativeSymbol,
+          key: `${chain.chainId}:${tokenKeyOf(token)}`,
+          token,
+          providers: token.providers,
+        });
+      }
+    }
+    return out;
+  }, [supportedChains, tokensByChain]);
+  const supportedChainsByProvider = useMemo(() => {
+    const map = new Map<ProviderId, Set<number>>();
+    for (const p of PROVIDERS) map.set(p.id, new Set());
+    for (const c of supportedChains) {
+      for (const id of c.providers) map.get(id)?.add(c.chainId);
+    }
+    return map;
+  }, [supportedChains]);
+  const selectedQuote = selectedProvider
+    ? (quoteSlots.find((s) => s.providerId === selectedProvider)?.quote ?? null)
+    : null;
+  const amountRaw = useMemo(() => {
+    if (!sourceToken) return null;
+    try {
+      return parseUnits(amount.trim() || "0", sourceToken.decimals);
+    } catch {
+      return null;
+    }
+  }, [amount, sourceToken]);
+  const insufficient =
+    !!asset && !!amountRaw && amountRaw > 0n && amountRaw > BigInt(asset.wei);
+  const approveKey =
+    asset && selectedQuote?.approvalSpender
+      ? `${asset.chainId}:${asset.address ?? NATIVE_TOKEN_ADDRESS}:${selectedQuote.approvalSpender}`.toLowerCase()
+      : "";
+  const needsApprove =
+    !!asset &&
+    !!selectedQuote?.approvalSpender &&
+    !isNativeAddress(sourceToken?.address ?? NATIVE_TOKEN_ADDRESS) &&
+    !approved.has(approveKey);
+  const anyQuoteLoading = quoteSlots.some((s) => s.loading);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStage({ kind: "loading" });
+    void loadSupportedSets()
+      .then((sets) => {
+        if (cancelled) return;
+        setSupportedChains(sets.chains);
+        setTokensByChain(sets.tokensByChain);
+        setStage({ kind: "idle" });
+      })
+      .catch((e) => {
+        if (!cancelled) setStage({ kind: "error", message: errText(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (supportedChains.length === 0 || tokensByChain.size === 0) return;
+    if (targetChainId && targetTokens.length > 0 && targetTokenKey) return;
+    const preferred =
+      supportedChains.find((c) => c.chainId !== sourceChainNum) ?? supportedChains[0];
+    if (!preferred) return;
+    const tokens = tokensByChain.get(preferred.chainId) ?? [];
+    const native = tokens.find((tk) => isNativeAddress(tk.address)) ?? tokens[0];
+    setTargetChainId(preferred.chainId);
+    setTargetTokenKey(native ? tokenKeyOf(native) : "");
+  }, [sourceChainNum, supportedChains, targetChainId, targetTokenKey, targetTokens.length, tokensByChain]);
+
+  useEffect(() => {
+    setUserPickedProvider(false);
+  }, [sel, targetChainId, targetTokenKey]);
+
+  useEffect(() => {
+    if (!sourceToken || !targetToken || !sourceChainNum || !targetChainId || !amount.trim()) {
+      setQuoteSlots(swapInitialSlots());
+      setSelectedProvider(null);
+      return;
+    }
+    if (!amountRaw || amountRaw <= 0n) {
+      setQuoteSlots(swapInitialSlots());
+      setSelectedProvider(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const params: QuoteParams = {
+        fromChainId: sourceChainNum,
+        toChainId: targetChainId,
+        fromToken: sourceToken,
+        toToken: targetToken,
+        fromAddress: activeAddress,
+        toAddress: activeAddress,
+        fromAmount: amount.trim(),
+        slippage,
+      };
+      setQuoteSlots(swapLoadingSlots());
+      try {
+        const slots = await fetchAllQuotes(params, supportedChainsByProvider);
+        if (cancelled) return;
+        setQuoteSlots(slots);
+        if (!userPickedProvider) {
+          setSelectedProvider(pickBestSlot(slots)?.providerId ?? null);
+        }
+      } catch (e) {
+        if (!cancelled) setStage({ kind: "error", message: errText(e) });
+      }
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeAddress,
+    amount,
+    amountRaw,
+    slippage,
+    sourceChainNum,
+    sourceToken,
+    supportedChainsByProvider,
+    targetChainId,
+    targetToken,
+    userPickedProvider,
+  ]);
+
+  function setMax() {
+    if (!asset) return;
+    setAmount(formatUnits(asset.wei, asset.decimals, asset.decimals));
+  }
+
+  function pickAsset(item: SwapPickerItem) {
+    if (pickerMode === "source") {
+      if (item.sourceAssetKey) setSel(item.sourceAssetKey);
+    } else {
+      setTargetChainId(item.chainId);
+      setTargetTokenKey(tokenKeyOf(item.token));
+    }
+    setPickerMode(null);
+  }
+
+  async function approve() {
+    if (!asset || !selectedQuote?.approvalSpender || !sourceToken) return;
+    setStage({ kind: "approving" });
+    try {
+      const data = encodeErc20Approve(selectedQuote.approvalSpender, MAX_UINT256);
+      await walletSend(asset.chainId, {
+        to: sourceToken.address,
+        value: "0x0",
+        data,
+        activity: {
+          kind: "contract",
+          counterparty: selectedQuote.approvalSpender,
+          assetSymbol: sourceToken.symbol,
+          tokenAddress: sourceToken.address,
+        },
+      });
+      setApproved((prev) => new Set(prev).add(approveKey));
+      setStage({ kind: "idle" });
+    } catch (e) {
+      setStage({ kind: "error", message: errText(e) });
+    }
+  }
+
+  async function swap() {
+    if (!asset || !sourceToken || !targetToken || !sourceChainNum || !targetChainId || !selectedQuote || !selectedProvider) return;
+    if (!amountRaw || amountRaw <= 0n) return setStage({ kind: "error", message: t("wallet.invalidAmount") });
+    if (insufficient) return setStage({ kind: "error", message: t("wallet.insufficient") });
+    setStage({ kind: "swapping" });
+    setSwapStatus(null);
+    const params: QuoteParams = {
+      fromChainId: sourceChainNum,
+      toChainId: targetChainId,
+      fromToken: sourceToken,
+      toToken: targetToken,
+      fromAddress: activeAddress,
+      toAddress: activeAddress,
+      fromAmount: amount.trim(),
+      slippage,
+    };
+    try {
+      const provider = getProvider(selectedProvider);
+      const prepared = await provider.prepareSwap(params, selectedQuote);
+      const hash = await walletSend(numberToChainId(prepared.swapTx.chainId), {
+        to: prepared.swapTx.to,
+        data: prepared.swapTx.data || "0x",
+        value: normalizeTxValue(prepared.swapTx.value),
+        activity: {
+          kind: "contract",
+          counterparty: prepared.swapTx.to,
+          assetSymbol: `${sourceToken.symbol}->${targetToken.symbol}`,
+          assetDecimals: sourceToken.decimals,
+          amount: toHexQuantity(amountRaw),
+        },
+      });
+      setStage({ kind: "submitted", hash, providerId: selectedProvider, requestId: prepared.requestId });
+      void pollSwapStatus(params, hash, selectedProvider, prepared.requestId, setSwapStatus);
+    } catch (e) {
+      setStage({ kind: "error", message: errText(e) });
+    }
+  }
+
+  return (
+    <div className="scrim" onClick={onClose}>
+      <div className="modal swap-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <div className="modal-title">{t("wallet.swapBridge")}</div>
+            <div className="swap-provider-sub">XFlows · Relay</div>
+          </div>
+          <button className="icon-btn bare" onClick={onClose}>
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+        <div className="modal-body">
+          {assets.length === 0 ? (
+            <div className="add-note">{t("wallet.noSendable")}</div>
+          ) : (
+            <>
+          <div className="swap-box">
+            <div className="swap-side-label">{t("wallet.from")}</div>
+            <div className="swap-input-row">
+              <SwapAssetButton
+                token={sourceToken}
+                chainName={asset?.chainName}
+                chainLogo={asset?.logo}
+                balance={asset ? `${formatUnits(asset.wei, asset.decimals)} ${asset.symbol}` : undefined}
+                providers={swapTokenProviders(sourceToken)}
+                onClick={() => setPickerMode("source")}
+                placeholder={t("wallet.selectToken")}
+              />
+              <input
+                className="swap-amount-input"
+                inputMode="decimal"
+                placeholder="0.0"
+                value={amount}
+                onChange={(e) => setAmount(cleanDecimal(e.target.value))}
+              />
+            </div>
+            {asset && (
+              <div className="swap-side-meta">
+                <span>
+                  {t("wallet.available")}: {formatUnits(asset.wei, asset.decimals)} {asset.symbol}
+                </span>
+                <button className="swap-mini-btn" onClick={setMax}>{t("wallet.max")}</button>
+              </div>
+            )}
+          </div>
+
+          <div className="swap-flip-mark">
+            <Icon name="swap" size={17} />
+          </div>
+
+          <div className="swap-box">
+            <div className="swap-side-label">{t("wallet.to")}</div>
+            <div className="swap-input-row">
+              <SwapAssetButton
+                token={targetToken}
+                chainName={targetChain?.name}
+                chainLogo={targetChain?.logo}
+                providers={targetToken?.providers}
+                onClick={() => setPickerMode("target")}
+                placeholder={t("wallet.selectToken")}
+              />
+              <div className="swap-amount-readonly">
+                {anyQuoteLoading && !selectedQuote
+                  ? t("wallet.fetchingQuotes")
+                  : selectedQuote
+                    ? trimAmount(selectedQuote.amountOut, 8)
+                    : "—"}
+              </div>
+            </div>
+            {selectedQuote && targetToken && (
+              <div className="swap-side-meta muted">
+                {t("wallet.minReceived")}: {trimAmount(selectedQuote.amountOutMin, 8)} {targetToken.symbol}
+              </div>
+            )}
+          </div>
+
+          <QuoteChooser
+            slots={quoteSlots}
+            selectedProvider={selectedProvider}
+            toSymbol={targetToken?.symbol ?? ""}
+            onSelect={(id) => {
+              setUserPickedProvider(true);
+              setSelectedProvider(id);
+            }}
+          />
+
+          <div className="swap-summary-card">
+            <div className="swap-summary-row">
+              <span>{t("wallet.slippage")}</span>
+              <div className="swap-slippage">
+                {[0.005, 0.01, 0.03].map((v) => (
+                  <button
+                    key={v}
+                    className={`swap-mini-btn${slippage === v ? " on" : ""}`}
+                    onClick={() => setSlippage(v)}
+                  >
+                    {(v * 100).toFixed(v < 0.01 ? 1 : 0)}%
+                  </button>
+                ))}
+              </div>
+            </div>
+            {selectedQuote?.routeDescription && (
+              <div className="swap-summary-row">
+                <span>{t("wallet.route")}</span>
+                <b>{selectedQuote.routeDescription}</b>
+              </div>
+            )}
+            {selectedQuote?.priceImpact != null && (
+              <div className="swap-summary-row">
+                <span>{t("wallet.priceImpact")}</span>
+                <b>{selectedQuote.priceImpact.toFixed(2)}%</b>
+              </div>
+            )}
+          </div>
+
+          {stage.kind === "submitted" && (
+            <SwapStatusView status={swapStatus} hash={stage.hash} provider={stage.providerId} t={t} />
+          )}
+          {stage.kind === "error" && (
+            <div className="lock-err">
+              <Icon name="alert" size={16} /> {stage.message}
+            </div>
+          )}
+
+          <div className="swap-footer">
+            <button className="btn btn-ghost swap-footer-btn" onClick={onClose}>
+              {t("wallet.cancel")}
+            </button>
+            {needsApprove ? (
+              <button className="btn btn-aurora swap-footer-btn primary" disabled={stage.kind === "approving"} onClick={() => void approve()}>
+                {stage.kind === "approving" ? t("wallet.approving") : t("wallet.approveToken", { symbol: sourceToken?.symbol ?? "" })}
+              </button>
+            ) : (
+              <button
+                className="btn btn-aurora swap-footer-btn primary"
+                disabled={!selectedQuote || anyQuoteLoading || insufficient || stage.kind === "swapping"}
+                onClick={() => void swap()}
+              >
+                {stage.kind === "swapping"
+                  ? t("wallet.submitting")
+                  : selectedProvider
+                    ? t("wallet.swapVia", { provider: providerName(selectedProvider) })
+                    : t("wallet.swapBridge")}
+              </button>
+            )}
+          </div>
+            </>
+          )}
+        </div>
+        {pickerMode && (
+          <SwapAssetPicker
+            title={pickerMode === "source" ? t("wallet.selectFromAsset") : t("wallet.selectToAsset")}
+            items={pickerMode === "source" ? sourceItems : targetItems}
+            selectedKey={
+              pickerMode === "source"
+                ? sel
+                : targetChainId && targetToken
+                  ? `${targetChainId}:${tokenKeyOf(targetToken)}`
+                  : ""
+            }
+            t={t}
+            onPick={pickAsset}
+            onClose={() => setPickerMode(null)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SendModal({
   assets,
   initialAssetKey,
@@ -2430,7 +3632,7 @@ function SendModal({
       )
       .slice(0, 5);
   }, [accounts, recipient, recipientQuery]);
-  const resolvedRecipient = resolveRecipient(recipient, accounts);
+  const resolvedRecipient = resolveRecipient(recipient);
 
   function setMax() {
     if (asset)
@@ -2530,14 +3732,7 @@ function SendModal({
                     setError(null);
                   }}
                 />
-                {resolvedRecipient && !isAddress(recipient) && (
-                  <div className="recipient-match">
-                    <Icon name="check" size={14} />
-                    {t("wallet.recipientMatched")}:{" "}
-                    {shortAddress(resolvedRecipient, 10, 6)}
-                  </div>
-                )}
-                {!resolvedRecipient && recipientMatches.length > 0 && (
+                {recipientMatches.length > 0 && (
                   <div className="recipient-options">
                     {recipientMatches.map((a) => (
                       <button
