@@ -17,6 +17,7 @@
     "allow-get-active-chain",
     "allow-get-close-behavior",
     "allow-set-close-behavior",
+    "allow-check-for-update",
     "allow-get-activity",
     "allow-get-chains",
     "allow-add-chain",

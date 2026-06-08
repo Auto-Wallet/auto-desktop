@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::webview::WebviewBuilder;
 use tauri::window::WindowBuilder;
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent, Runtime, WebviewUrl};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl};
 
 // ---------------------------------------------------------------------------
 // Crypto helpers.
@@ -442,6 +442,29 @@ struct ActivityRecord {
     origin: String,
     kind: String,
     timestamp: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    html_url: String,
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInfo {
+    current_version: String,
+    latest_version: String,
+    available: bool,
+    release_url: String,
+    download_url: Option<String>,
 }
 
 fn builtin_chains() -> Vec<ChainCfg> {
@@ -1682,6 +1705,84 @@ fn set_close_behavior<R: Runtime>(app: AppHandle<R>, close_behavior: CloseBehavi
     Ok(close_behavior)
 }
 
+fn version_parts(version: &str) -> Vec<u64> {
+    version
+        .trim_start_matches('v')
+        .split('.')
+        .map(|part| {
+            part.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u64>()
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let mut l = version_parts(latest);
+    let mut c = version_parts(current);
+    let n = l.len().max(c.len());
+    l.resize(n, 0);
+    c.resize(n, 0);
+    l > c
+}
+
+fn matching_release_asset(assets: &[GithubAsset]) -> Option<&GithubAsset> {
+    #[cfg(target_os = "macos")]
+    {
+        let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x64" };
+        return assets.iter().find(|asset| {
+            let name = asset.name.to_ascii_lowercase();
+            name.contains("macos") && name.contains(arch) && name.ends_with(".dmg")
+        });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return assets.iter().find(|asset| {
+            let name = asset.name.to_ascii_lowercase();
+            name.contains("windows") && name.contains("x64") && name.ends_with(".zip")
+        });
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        assets.first()
+    }
+}
+
+#[tauri::command]
+async fn check_for_update() -> Result<UpdateInfo, String> {
+    const LATEST_URL: &str = "https://api.github.com/repos/Auto-Wallet/auto-desktop/releases/latest";
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let release: GithubRelease = reqwest::Client::new()
+        .get(LATEST_URL)
+        .header(reqwest::header::USER_AGENT, "AutoDesktop")
+        .send()
+        .await
+        .map_err(|e| format!("checking updates: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("checking updates: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("reading update response: {e}"))?;
+    let latest = release.tag_name.trim_start_matches('v').to_string();
+    let available = is_newer_version(&latest, &current);
+    let download_url = if available {
+        matching_release_asset(&release.assets)
+            .map(|asset| asset.browser_download_url.clone())
+            .or_else(|| Some(release.html_url.clone()))
+    } else {
+        None
+    };
+    Ok(UpdateInfo {
+        current_version: current,
+        latest_version: latest,
+        available,
+        release_url: release.html_url,
+        download_url,
+    })
+}
+
 /// Normalize a chain id (accept "0x.." or decimal) to canonical lowercase 0x-hex.
 fn normalize_chain_id(id: &str) -> Result<String, String> {
     let s = id.trim();
@@ -2490,6 +2591,7 @@ pub fn run() {
             get_active_chain,
             get_close_behavior,
             set_close_behavior,
+            check_for_update,
             get_activity,
             get_chains,
             add_chain,
@@ -2579,8 +2681,11 @@ pub fn run() {
         .build(build_context())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if let RunEvent::Reopen { .. } = event {
-                restore_main_window(app);
+            #[cfg(target_os = "macos")]
+            {
+                if let tauri::RunEvent::Reopen { .. } = event {
+                    restore_main_window(app);
+                }
             }
         });
 }

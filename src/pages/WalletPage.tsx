@@ -3,10 +3,10 @@ import "./WalletPage.css";
 import { chainLogo, findChain, useChains, type Chain } from "../lib/chains";
 import {
   loadActivity,
-  openExternalUrl,
   useActivity,
   type ActivityRecord,
 } from "../lib/activity";
+import { openExternalUrl } from "../lib/platform";
 import {
   fmtPct,
   fmtUsd,

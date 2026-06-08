@@ -22,7 +22,11 @@ export function dappLabel(tabId: string): string {
 
 /** Create-or-show the tab webview over `rect`. Navigates to `url` only on first
  *  creation, so switching back to a tab preserves its page. */
-export function openDapp(label: string, url: string, rect: Rect): Promise<void> {
+export function openDapp(
+  label: string,
+  url: string,
+  rect: Rect,
+): Promise<void> {
   return invoke("open_dapp", { label, url, ...rect });
 }
 
@@ -39,6 +43,14 @@ export function hideDapp(label: string): Promise<void> {
 /** Close (destroy) a tab webview when its tab is closed. */
 export function closeDapp(label: string): Promise<void> {
   return invoke("close_dapp", { label });
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!isTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  await invoke("open_external_url", { url });
 }
 
 /** Viewport-relative rect of an element = its position within the window, since

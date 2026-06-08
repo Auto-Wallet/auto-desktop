@@ -266,3 +266,12 @@ button.set-row:hover {
   align-items: center;
   gap: 5px;
 }
+.update-available {
+  font-size: 11.5px;
+  color: var(--brand-ink);
+  font-weight: 700;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}

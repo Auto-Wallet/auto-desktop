@@ -1,17 +1,25 @@
 import { useState } from "react";
 import "./SettingsPage.css";
 import mascot from "../assets/mascot.png";
-import { addChain, removeChain, updateChain, useChains, type Chain } from "../lib/chains";
+import {
+  addChain,
+  removeChain,
+  updateChain,
+  useChains,
+  type Chain,
+} from "../lib/chains";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
 import { lockVault } from "../lib/vault";
 import { useActiveWallet } from "../lib/accounts";
 import { setLang, useT, type Lang, type TFn } from "../lib/i18n";
 import { setThemePref, useThemePref, type ThemePref } from "../lib/theme";
 import { setCloseBehavior, useCloseBehavior } from "../lib/appPrefs";
+import { checkForUpdate, type UpdateInfo } from "../lib/updater";
+import { openExternalUrl } from "../lib/platform";
 import { Icon, type IconName } from "../lib/icons";
 import { toast } from "../lib/toast";
 
-const APP_VERSION = "0.1.0"; // mirrors src-tauri/tauri.conf.json
+const APP_VERSION = "0.1.1"; // mirrors src-tauri/tauri.conf.json
 
 function safeHost(rpc: string): string {
   try {
@@ -34,6 +42,8 @@ export default function SettingsPage() {
   const closeBehavior = useCloseBehavior();
   const activeWallet = useActiveWallet();
   const [updated, setUpdated] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [editing, setEditing] = useState<Chain | "new" | null>(null);
 
   const themeOpts: [ThemePref, IconName, string][] = [
@@ -41,6 +51,27 @@ export default function SettingsPage() {
     ["light", "sun", t("settings.light")],
     ["dark", "moon", t("settings.dark")],
   ];
+
+  async function handleCheckUpdates() {
+    setCheckingUpdate(true);
+    setUpdated(false);
+    try {
+      const info = await checkForUpdate();
+      setUpdateInfo(info);
+      if (!info.available) {
+        setUpdated(true);
+        toast(t("settings.upToDate"));
+        return;
+      }
+      const url = info.downloadUrl || info.releaseUrl;
+      await openExternalUrl(url);
+      toast(t("settings.updateOpened", { version: info.latestVersion }));
+    } catch (e) {
+      toast(t("settings.updateFailed", { error: errText(e) }), "warn");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
 
   return (
     <>
@@ -63,13 +94,23 @@ export default function SettingsPage() {
                 const on = c.id.toLowerCase() === activeChain.toLowerCase();
                 return (
                   <div key={c.id} className={`chain-row${on ? " on" : ""}`}>
-                    <button className="chain-pick" onClick={() => void setActiveChain(c.id)}>
+                    <button
+                      className="chain-pick"
+                      onClick={() => void setActiveChain(c.id)}
+                    >
                       <span className="chain-radio" />
-                      <span className="chain-dot" style={{ width: 26, height: 26, background: c.color }} />
+                      <span
+                        className="chain-dot"
+                        style={{ width: 26, height: 26, background: c.color }}
+                      />
                       <div className="chain-info">
                         <div className="chain-nm">
                           {c.name}
-                          {c.builtin && <span className="badge neutral">{t("settings.builtin")}</span>}
+                          {c.builtin && (
+                            <span className="badge neutral">
+                              {t("settings.builtin")}
+                            </span>
+                          )}
                         </div>
                         <div className="chain-meta">
                           {c.symbol} · {c.id} · {safeHost(c.rpc)}
@@ -77,7 +118,11 @@ export default function SettingsPage() {
                       </div>
                     </button>
                     <div className="chain-acts">
-                      <button className="icon-btn bare" title={t("settings.edit")} onClick={() => setEditing(c)}>
+                      <button
+                        className="icon-btn bare"
+                        title={t("settings.edit")}
+                        onClick={() => setEditing(c)}
+                      >
                         <Icon name="edit" size={16} />
                       </button>
                       {!c.builtin && (
@@ -100,7 +145,11 @@ export default function SettingsPage() {
               })}
             </div>
             {editing ? (
-              <NetworkForm t={t} initial={editing === "new" ? null : editing} onClose={() => setEditing(null)} />
+              <NetworkForm
+                t={t}
+                initial={editing === "new" ? null : editing}
+                onClose={() => setEditing(null)}
+              />
             ) : (
               <button className="add-net" onClick={() => setEditing("new")}>
                 <Icon name="plus" size={16} /> {t("settings.addNetwork")}
@@ -124,7 +173,11 @@ export default function SettingsPage() {
                 </div>
                 <div className="seg">
                   {themeOpts.map(([v, ic, lbl]) => (
-                    <button key={v} className={themePref === v ? "on" : ""} onClick={() => setThemePref(v)}>
+                    <button
+                      key={v}
+                      className={themePref === v ? "on" : ""}
+                      onClick={() => setThemePref(v)}
+                    >
                       <Icon name={ic} size={15} /> {lbl}
                     </button>
                   ))}
@@ -138,7 +191,11 @@ export default function SettingsPage() {
                 <button
                   className={`toggle${closeBehavior === "hide" ? " on" : ""}`}
                   aria-pressed={closeBehavior === "hide"}
-                  onClick={() => void setCloseBehavior(closeBehavior === "hide" ? "quit" : "hide")}
+                  onClick={() =>
+                    void setCloseBehavior(
+                      closeBehavior === "hide" ? "quit" : "hide",
+                    )
+                  }
                 >
                   <i />
                 </button>
@@ -162,7 +219,11 @@ export default function SettingsPage() {
                 </div>
                 <div className="seg">
                   {(["en", "zh"] as Lang[]).map((l) => (
-                    <button key={l} className={lang === l ? "on" : ""} onClick={() => setLang(l)}>
+                    <button
+                      key={l}
+                      className={lang === l ? "on" : ""}
+                      onClick={() => setLang(l)}
+                    >
                       {l === "en" ? "English" : "中文"}
                     </button>
                   ))}
@@ -202,24 +263,36 @@ export default function SettingsPage() {
                     <Icon name="chevronR" size={16} />
                   </button>
                   {activeWallet?.kind === "hd" && (
-                    <button className="set-row" onClick={() => toast(t("settings.soon"), "info")}>
+                    <button
+                      className="set-row"
+                      onClick={() => toast(t("settings.soon"), "info")}
+                    >
                       <span className="row-ic">
                         <Icon name="key" size={17} />
                       </span>
                       <div className="gr">
                         <div className="rl">{t("settings.revealPhrase")}</div>
-                        <div className="rs">{t("settings.revealPhraseHint")}</div>
+                        <div className="rs">
+                          {t("settings.revealPhraseHint")}
+                        </div>
                       </div>
-                      <span className="badge neutral">{t("settings.soon")}</span>
+                      <span className="badge neutral">
+                        {t("settings.soon")}
+                      </span>
                     </button>
                   )}
-                  <button className="set-row" onClick={() => toast(t("settings.soon"), "info")}>
+                  <button
+                    className="set-row"
+                    onClick={() => toast(t("settings.soon"), "info")}
+                  >
                     <span className="row-ic">
                       <Icon name="edit" size={17} />
                     </span>
                     <div className="gr">
                       <div className="rl">{t("settings.changePassword")}</div>
-                      <div className="rs">{t("settings.changePasswordHint")}</div>
+                      <div className="rs">
+                        {t("settings.changePasswordHint")}
+                      </div>
                     </div>
                     <span className="badge neutral">{t("settings.soon")}</span>
                   </button>
@@ -245,6 +318,13 @@ export default function SettingsPage() {
                     <div className="up-to-date">
                       <Icon name="check" size={13} /> {t("settings.upToDate")}
                     </div>
+                  ) : updateInfo?.available ? (
+                    <div className="update-available">
+                      <Icon name="download" size={13} />{" "}
+                      {t("settings.updateAvailable", {
+                        version: updateInfo.latestVersion,
+                      })}
+                    </div>
                   ) : (
                     <div className="about-ver">
                       {t("settings.version")} {APP_VERSION}
@@ -253,12 +333,12 @@ export default function SettingsPage() {
                 </div>
                 <button
                   className="btn btn-ghost btn-sm"
-                  onClick={() => {
-                    setUpdated(true);
-                    toast(t("settings.upToDate"));
-                  }}
+                  disabled={checkingUpdate}
+                  onClick={() => void handleCheckUpdates()}
                 >
-                  {t("settings.checkUpdates")}
+                  {checkingUpdate
+                    ? t("settings.checkingUpdates")
+                    : t("settings.checkUpdates")}
                 </button>
               </div>
             </div>
@@ -271,7 +351,15 @@ export default function SettingsPage() {
 
 // Add / edit a network. `initial === null` = add a custom network; otherwise edit
 // (the chain id + built-in flag are fixed for an existing network).
-function NetworkForm({ t, initial, onClose }: { t: TFn; initial: Chain | null; onClose: () => void }) {
+function NetworkForm({
+  t,
+  initial,
+  onClose,
+}: {
+  t: TFn;
+  initial: Chain | null;
+  onClose: () => void;
+}) {
   const editing = initial !== null;
   const [name, setName] = useState(initial?.name ?? "");
   const [id, setId] = useState(initial?.id ?? "");
@@ -305,13 +393,25 @@ function NetworkForm({ t, initial, onClose }: { t: TFn; initial: Chain | null; o
 
   return (
     <div className="net-form">
-      <div className="net-form-title">{editing ? t("settings.editNetwork") : t("settings.addNetwork")}</div>
+      <div className="net-form-title">
+        {editing ? t("settings.editNetwork") : t("settings.addNetwork")}
+      </div>
       <div className="net-grid">
         <div className="field net-wide">
           <label className="field-label">{t("settings.netName")}</label>
           <div className="net-name-row">
-            <input type="color" className="net-color" value={color} onChange={(e) => setColor(e.target.value)} />
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="My Network" />
+            <input
+              type="color"
+              className="net-color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+            />
+            <input
+              className="input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="My Network"
+            />
           </div>
         </div>
         <div className="field">
@@ -326,7 +426,12 @@ function NetworkForm({ t, initial, onClose }: { t: TFn; initial: Chain | null; o
         </div>
         <div className="field">
           <label className="field-label">{t("settings.netSymbol")}</label>
-          <input className="input" value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="ETH" />
+          <input
+            className="input"
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+            placeholder="ETH"
+          />
         </div>
         <div className="field net-wide">
           <label className="field-label">{t("settings.netRpc")}</label>
@@ -340,7 +445,12 @@ function NetworkForm({ t, initial, onClose }: { t: TFn; initial: Chain | null; o
         </div>
         <div className="field">
           <label className="field-label">{t("settings.netDecimals")}</label>
-          <input className="input mono" value={decimals} onChange={(e) => setDecimals(e.target.value)} placeholder="18" />
+          <input
+            className="input mono"
+            value={decimals}
+            onChange={(e) => setDecimals(e.target.value)}
+            placeholder="18"
+          />
         </div>
       </div>
       {error && <div className="net-error">{error}</div>}
@@ -348,7 +458,11 @@ function NetworkForm({ t, initial, onClose }: { t: TFn; initial: Chain | null; o
         <button className="btn btn-ghost btn-sm" onClick={onClose}>
           {t("settings.cancel")}
         </button>
-        <button className="btn btn-primary btn-sm" disabled={busy || !name || !id} onClick={submit}>
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={busy || !name || !id}
+          onClick={submit}
+        >
           {busy ? "…" : t("settings.save")}
         </button>
       </div>

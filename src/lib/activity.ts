@@ -48,11 +48,3 @@ export async function loadActivity(): Promise<void> {
     void listen("activity-changed", () => void loadActivity());
   }
 }
-
-export async function openExternalUrl(url: string): Promise<void> {
-  if (!isTauri()) {
-    window.open(url, "_blank", "noopener,noreferrer");
-    return;
-  }
-  await invoke("open_external_url", { url });
-}
