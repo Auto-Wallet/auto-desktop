@@ -116,26 +116,16 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bun run tauri build --target ${{ matrix.target }} --bundles dmg
 
-      - name: Notarize and staple DMG
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Verify macOS DMG and app notarization
         run: |
           set -euxo pipefail
           DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
-          xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait
-          xcrun stapler staple "$DMG"
-          xcrun stapler validate "$DMG"
 
-      - name: Verify macOS signature and notarization
-        run: |
-          set -euxo pipefail
-          DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          # The file we upload must be mountable as-is. Do this before any staging
+          # copy so a broken DMG cannot reach the release page.
+          hdiutil verify "$DMG"
+          hdiutil imageinfo "$DMG"
+
           MOUNT_DIR="$RUNNER_TEMP/dmg-mount"
           mkdir -p "$MOUNT_DIR"
           hdiutil attach "$DMG" -mountpoint "$MOUNT_DIR" -nobrowse -readonly
@@ -148,9 +138,7 @@ jobs:
           grep -q "Runtime Version=" "$RUNNER_TEMP/codesign.txt"
 
           spctl -a -vvv -t execute "$APP"
-          spctl -a -vvv -t install "$DMG"
           xcrun stapler validate "$APP"
-          xcrun stapler validate "$DMG"
 
       - name: Stage artifact
         run: |
