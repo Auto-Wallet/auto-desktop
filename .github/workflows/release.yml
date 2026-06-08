@@ -21,15 +21,17 @@ jobs:
   # ---------------------------------------------------------------------------
   build-macos:
     name: macOS (${{ matrix.arch }})
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
             arch: aarch64
+            runner: macos-26
           - target: x86_64-apple-darwin
             arch: x64
+            runner: macos-26-intel
     steps:
       - uses: actions/checkout@v4
         with:
@@ -185,14 +187,20 @@ jobs:
           hdiutil attach "$DMG" -mountpoint "$MOUNT_DIR" -nobrowse -readonly
           trap 'hdiutil detach "$MOUNT_DIR" || true' EXIT
           APP="$MOUNT_DIR/AutoDesktop.app"
+          INSTALL_COPY="$RUNNER_TEMP/AutoDesktop-installed-${{ matrix.arch }}.app"
 
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          codesign -dv --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
+          # Gatekeeper checks the copied app, not the bundle while it is still on
+          # the read-only DMG mount. Verify the same path users get after drag-install.
+          rm -rf "$INSTALL_COPY"
+          ditto "$APP" "$INSTALL_COPY"
+
+          codesign --verify --deep --strict --verbose=2 "$INSTALL_COPY"
+          codesign -dv --verbose=4 "$INSTALL_COPY" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
           grep -q "Authority=Developer ID Application" "$RUNNER_TEMP/codesign.txt"
           grep -q "Runtime Version=" "$RUNNER_TEMP/codesign.txt"
 
-          spctl -a -vvv -t execute "$APP"
-          xcrun stapler validate "$APP"
+          spctl -a -vvv -t execute "$INSTALL_COPY"
+          xcrun stapler validate "$INSTALL_COPY"
 
       - name: Stage artifact
         run: |
