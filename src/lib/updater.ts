@@ -12,8 +12,8 @@ export type UpdateInfo = {
 export async function checkForUpdate(): Promise<UpdateInfo> {
   if (!isTauri()) {
     return {
-      currentVersion: "0.1.2",
-      latestVersion: "0.1.2",
+      currentVersion: "0.1.3",
+      latestVersion: "0.1.3",
       available: false,
       releaseUrl: "https://github.com/Auto-Wallet/auto-desktop/releases",
       downloadUrl: null,
