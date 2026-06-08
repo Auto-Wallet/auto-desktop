@@ -120,6 +120,56 @@ jobs:
           security unlock-keychain -p "ci" "$APPLE_KEYCHAIN"
           bun run tauri build --target ${{ matrix.target }} --bundles dmg -v
 
+      - name: Re-sign and repackage macOS app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euxo pipefail
+          ORIGINAL_DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          WORK_DIR="$RUNNER_TEMP/macos-repackage-${{ matrix.arch }}"
+          MOUNT_DIR="$WORK_DIR/mount"
+          APP_DIR="$WORK_DIR/app"
+          DMG_STAGE="$WORK_DIR/dmg-stage"
+          APP_ZIP="$WORK_DIR/AutoDesktop.zip"
+
+          rm -rf "$WORK_DIR"
+          mkdir -p "$MOUNT_DIR" "$APP_DIR" "$DMG_STAGE"
+          hdiutil attach "$ORIGINAL_DMG" -mountpoint "$MOUNT_DIR" -nobrowse -readonly
+          trap 'hdiutil detach "$MOUNT_DIR" || true' EXIT
+
+          ditto "$MOUNT_DIR/AutoDesktop.app" "$APP_DIR/AutoDesktop.app"
+          hdiutil detach "$MOUNT_DIR"
+          trap - EXIT
+
+          # Drop Tauri's stapled ticket and produce a fresh system-codesign signature.
+          rm -f "$APP_DIR/AutoDesktop.app/Contents/CodeResources"
+          codesign --force --deep --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --entitlements src-tauri/Entitlements.plist \
+            "$APP_DIR/AutoDesktop.app"
+
+          ditto -c -k --keepParent "$APP_DIR/AutoDesktop.app" "$APP_ZIP"
+          xcrun notarytool submit "$APP_ZIP" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$APP_DIR/AutoDesktop.app"
+          xcrun stapler validate "$APP_DIR/AutoDesktop.app"
+          spctl -a -vvv -t execute "$APP_DIR/AutoDesktop.app"
+
+          ditto "$APP_DIR/AutoDesktop.app" "$DMG_STAGE/AutoDesktop.app"
+          ln -s /Applications "$DMG_STAGE/Applications"
+          rm -f "$ORIGINAL_DMG"
+          hdiutil create -volname "AutoDesktop" \
+            -srcfolder "$DMG_STAGE" \
+            -ov \
+            -format UDZO \
+            "$ORIGINAL_DMG"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" "$ORIGINAL_DMG"
+
       - name: Verify macOS DMG and app notarization
         run: |
           set -euxo pipefail
