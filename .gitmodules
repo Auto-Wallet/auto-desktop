@@ -1,0 +1,3 @@
+[submodule "auto-wallet-core"]
+	path = auto-wallet-core
+	url = https://github.com/Auto-Wallet/auto-wallet-core.git
