@@ -110,7 +110,7 @@ jobs:
           esac
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
-      - name: Build signed + notarized DMG
+      - name: Build signed + notarized macOS bundles
         env:
           # Signing identity exported above; notarization creds from repo secrets.
           APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain-db
@@ -122,7 +122,9 @@ jobs:
         run: |
           set -euxo pipefail
           security unlock-keychain -p "ci" "$APPLE_KEYCHAIN"
-          bun run tauri build --target ${{ matrix.target }} --bundles dmg -v
+          # The updater plugin creates macOS update artifacts only for the
+          # `app` bundle target; `dmg` is still built for manual installs.
+          bun run tauri build --target ${{ matrix.target }} --bundles app,dmg -v
 
       - name: Re-sign and repackage macOS app
         env:
@@ -211,7 +213,16 @@ jobs:
           SRC=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
           mkdir -p dist
           cp "$SRC" "dist/AutoDesktop_${VERSION}_macos_${{ matrix.arch }}.dmg"
-          UPDATER=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz | head -1)
+          UPDATER=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -type f -name "*.app.tar.gz" | sort | head -1)
+          if [ -z "$UPDATER" ]; then
+            echo "::error::Missing macOS updater artifact. The macOS release build must produce bundle/macos/*.app.tar.gz."
+            find "src-tauri/target/${{ matrix.target }}/release/bundle" -maxdepth 3 -type f | sort
+            exit 1
+          fi
+          if [ ! -f "$UPDATER.sig" ]; then
+            echo "::error::Missing updater signature for $UPDATER. Check TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD secrets."
+            exit 1
+          fi
           PLATFORM="darwin-${{ matrix.target == 'aarch64-apple-darwin' && 'aarch64' || 'x86_64' }}"
           ASSET="AutoDesktop_${VERSION}_${PLATFORM}.app.tar.gz"
           cp "$UPDATER" "dist/$ASSET"
