@@ -35,6 +35,11 @@ export function setDappBounds(label: string, rect: Rect): Promise<void> {
   return invoke("set_dapp_bounds", { label, ...rect });
 }
 
+/** Reload the native dApp tab webview. */
+export function reloadDapp(label: string): Promise<void> {
+  return invoke("reload_dapp", { label });
+}
+
 /** Hide a tab webview (switch to another tab / Wallet / dApps). */
 export function hideDapp(label: string): Promise<void> {
   return invoke("hide_dapp", { label });

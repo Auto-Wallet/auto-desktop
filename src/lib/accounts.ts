@@ -7,11 +7,13 @@
 //     persisted to localStorage. The backend never signs for these.
 //
 // The active address is tracked locally; selecting a signer account also tells the
-// backend to switch its active signing account (and pushes accountsChanged to dApps).
+// backend to switch its active signing account, while selecting a watch-only address
+// exposes that public address to dApps without changing the signing key.
 
 import { useEffect, useSyncExternalStore } from "react";
 import { isAddress } from "./format";
 import {
+  exposeDappAccount,
   getVaultAccounts,
   selectAccount,
   useVault,
@@ -111,24 +113,25 @@ export function useAccounts(): Account[] {
   return allAccounts(vault);
 }
 
-/** Keep the BACKEND's active signing account in lockstep with the account the shell
- *  shows. The shell remembers its selection in localStorage, but the backend resets
- *  to the first account on every `unlock_vault`; without this, `eth_accounts` (and so
- *  the address a dApp connects to) would lag behind the sidebar until the user
- *  re-clicked an account. Pushing the shell's choice down also fires accountsChanged
- *  to any open dApp, so switching wallets in the shell switches it inside the dApp.
- *  Mount once at the app root. Watch-only accounts can't sign, so they're left as-is. */
+/** Keep the backend's dApp-visible account in lockstep with the shell. Signers also
+ *  switch the backend signing account; watch-only addresses are exposed only as a
+ *  public account for read-only portfolio dApps. */
 export function useActiveAccountSync(): void {
   const vault = useVault();
   const active = useActiveAccount();
   useEffect(() => {
-    if (vault.phase !== "unlocked" || !active.signer) return;
-    if (
-      vault.active &&
-      vault.active.toLowerCase() === active.address.toLowerCase()
-    )
+    if (!isAddress(active.address)) return;
+    if (active.signer) {
+      if (vault.phase !== "unlocked") return;
+      if (
+        vault.active &&
+        vault.active.toLowerCase() === active.address.toLowerCase()
+      )
+        return;
+      void selectAccount(active.address);
       return;
-    void selectAccount(active.address);
+    }
+    void exposeDappAccount(active.address);
   }, [vault.phase, vault.active, active.address, active.signer]);
 }
 
@@ -143,17 +146,20 @@ export function useActiveWallet() {
   );
 }
 
-/** Switch the active account. If it's a vault signer account, also switch the
- *  backend's active signing account (so signing + dApps follow the selection). */
+/** Switch the active account. Signer accounts switch the backend signing key;
+ *  watch-only accounts only switch the public dApp account. */
 export function setActive(address: string) {
   activeAddress = address;
   localStorage.setItem(ACTIVE_KEY, address);
   emit();
 
-  if (
-    getVaultAccounts().some((a) => a.toLowerCase() === address.toLowerCase())
-  ) {
+  const signer = getVaultAccounts().some(
+    (a) => a.toLowerCase() === address.toLowerCase(),
+  );
+  if (signer) {
     void selectAccount(address);
+  } else {
+    void exposeDappAccount(address);
   }
 }
 

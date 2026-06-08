@@ -18,6 +18,7 @@ import { checkForUpdate, type UpdateInfo } from "../lib/updater";
 import { openExternalUrl } from "../lib/platform";
 import { Icon, type IconName } from "../lib/icons";
 import { toast } from "../lib/toast";
+import { ChainIcon } from "../lib/ChainIcon";
 
 const APP_VERSION = __APP_VERSION__;
 
@@ -63,9 +64,13 @@ export default function SettingsPage() {
         toast(t("settings.upToDate"));
         return;
       }
-      const url = info.downloadUrl || info.releaseUrl;
-      await openExternalUrl(url);
-      toast(t("settings.updateOpened", { version: info.latestVersion }));
+      if (info.manual) {
+        const url = info.downloadUrl || info.releaseUrl;
+        await openExternalUrl(url);
+        toast(t("settings.updateOpened", { version: info.latestVersion }));
+        return;
+      }
+      toast(t("settings.updateInstalled", { version: info.latestVersion }));
     } catch (e) {
       toast(t("settings.updateFailed", { error: errText(e) }), "warn");
     } finally {
@@ -99,10 +104,7 @@ export default function SettingsPage() {
                       onClick={() => void setActiveChain(c.id)}
                     >
                       <span className="chain-radio" />
-                      <span
-                        className="chain-dot"
-                        style={{ width: 26, height: 26, background: c.color }}
-                      />
+                      <ChainIcon chain={c} size={26} />
                       <div className="chain-info">
                         <div className="chain-nm">
                           {c.name}

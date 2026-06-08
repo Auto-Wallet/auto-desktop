@@ -50,7 +50,7 @@ If the dev server is killed, a stray `vite` may hold port 1420 — free it with 
 
 - **Ledger** (hardware wallet) — v1 requirement. WKWebView has no WebHID, so this needs a Rust `hidapi` transport behind the SDK's `HidTransport`. Presented in onboarding as an honest placeholder until wired.
 - **Multi-wallet** — currently a single vault; importing a private key is the *first* wallet, not multiple independent secrets coexisting.
-- Custom ERC-20 tokens on the Wallet page, collapsible sidebar / editable URL bar, a real updater.
+- Custom ERC-20 tokens on the Wallet page, collapsible sidebar / editable URL bar.
 
 See the project memory roadmap for live per-slice progress.
 

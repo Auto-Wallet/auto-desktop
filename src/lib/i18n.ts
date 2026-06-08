@@ -104,6 +104,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.checkingUpdates": "Checking…",
     "settings.updateAvailable": "Update {version} available",
     "settings.updateOpened": "Opened update {version} download.",
+    "settings.updateInstalled": "Installed update {version}. Restarting…",
     "settings.updateFailed": "Update check failed: {error}",
     "settings.upToDate": "You're on the latest version.",
     "settings.addNetwork": "Add network",
@@ -228,6 +229,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dapps.removed": "dApp removed",
     "dapps.added": "dApp added",
     "dapps.addHint": "Paste a dApp URL in the search box to add it.",
+    "dapps.noMatches": "No matches.",
+    "dapps.saveQuery": "Save “{query}”",
 
     "browser.reload": "Reload",
     "browser.reloaded": "Reloaded",
@@ -387,6 +390,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.checkingUpdates": "检查中…",
     "settings.updateAvailable": "发现新版本 {version}",
     "settings.updateOpened": "已打开 {version} 下载页面。",
+    "settings.updateInstalled": "已安装 {version}，正在重启…",
     "settings.updateFailed": "检查更新失败：{error}",
     "settings.upToDate": "已是最新版本。",
     "settings.addNetwork": "添加网络",
@@ -506,6 +510,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dapps.removed": "已移除 dApp",
     "dapps.added": "已添加 dApp",
     "dapps.addHint": "在搜索框粘贴 dApp 网址即可添加。",
+    "dapps.noMatches": "没有匹配结果。",
+    "dapps.saveQuery": "保存“{query}”",
 
     "browser.reload": "刷新",
     "browser.reloaded": "已刷新",

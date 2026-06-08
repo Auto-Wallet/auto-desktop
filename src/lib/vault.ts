@@ -277,8 +277,6 @@ export async function resetVault(): Promise<void> {
 /** Switch the active account by ADDRESS (across all wallets); pushes accountsChanged
  *  to dApps backend-side. */
 export async function selectAccount(address: string): Promise<void> {
-  // Already the active account → no backend call, no redundant accountsChanged push.
-  if (state.active && state.active.toLowerCase() === address.toLowerCase()) return;
   if (!isTauri()) {
     demoActive = address;
     set(demoStatus());
@@ -286,6 +284,13 @@ export async function selectAccount(address: string): Promise<void> {
   }
   await invoke<string>("select_account", { address });
   set({ active: address });
+}
+
+/** Expose a public watch-only address to dApps. This does not switch the backend
+ *  signing key, so write/sign requests still require a real signer account. */
+export async function exposeDappAccount(address: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke<string>("expose_dapp_account", { address });
 }
 
 /** Derive + persist the next HD account in wallet `walletId`. Returns its address. */

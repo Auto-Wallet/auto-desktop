@@ -12,6 +12,11 @@ description = "Allow the shell to reposition/resize a dapp tab webview on layout
 commands.allow = ["set_dapp_bounds"]
 
 [[permission]]
+identifier = "allow-reload-dapp"
+description = "Allow the shell to reload a dapp tab webview."
+commands.allow = ["reload_dapp"]
+
+[[permission]]
 identifier = "allow-hide-dapp"
 description = "Allow the shell to hide a dapp tab webview when switching tabs/pages."
 commands.allow = ["hide_dapp"]

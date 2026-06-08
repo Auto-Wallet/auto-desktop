@@ -7,6 +7,7 @@ import {
   type ActivityRecord,
 } from "../lib/activity";
 import { openExternalUrl } from "../lib/platform";
+import { ChainIcon } from "../lib/ChainIcon";
 import {
   fmtPct,
   fmtUsd,
@@ -359,10 +360,7 @@ export default function WalletPage() {
                     className={`cf-pill${filter === c.id ? " on" : ""}`}
                     onClick={() => setFilter(c.id)}
                   >
-                    <span
-                      className="chain-dot"
-                      style={{ width: 9, height: 9, background: c.color }}
-                    />
+                    <ChainIcon chain={c} size={12} />
                     {c.name}
                   </button>
                 ))}
@@ -445,6 +443,7 @@ type DisplayRow = {
   /** 0x-hex chain id this row lives on (for the network filter). */
   chainId: string;
   chainName: string;
+  chainSymbol: string;
   chainColor: string;
   kind: "native" | "erc20";
   symbol: string;
@@ -485,6 +484,7 @@ function buildRows(
       key: `native:${c.id}`,
       chainId: c.id,
       chainName: c.name,
+      chainSymbol: c.symbol,
       chainColor: c.color,
       kind: "native",
       symbol: c.symbol,
@@ -505,6 +505,7 @@ function buildRows(
         key: `erc20:${c.id}:${tk.address}`,
         chainId: c.id,
         chainName: c.name,
+        chainSymbol: c.symbol,
         chainColor: c.color,
         kind: "erc20",
         symbol: tk.symbol,
@@ -670,9 +671,14 @@ function HoldingRow({
           )}
         </div>
         <div className="token-sub">
-          <span
-            className="chain-dot"
-            style={{ width: 8, height: 8, background: row.chainColor }}
+          <ChainIcon
+            chain={{
+              id: row.chainId,
+              name: row.chainName,
+              symbol: row.chainSymbol,
+              color: row.chainColor,
+            }}
+            size={12}
           />
           {row.chainName}
           {row.price && (
@@ -741,6 +747,9 @@ function ActivityList({
         );
         const href = txExplorerUrl(chain, record);
         const isTokenSend = record.kind === "token_send";
+        const balanceChanges = record.balanceChanges?.filter(
+          (c) => c.formattedDelta && c.symbol,
+        ) ?? [];
         const amount = record.amount ?? record.value;
         const amountWei = safeHexToBigInt(amount);
         const decimals =
@@ -791,11 +800,24 @@ function ActivityList({
               </span>
             </span>
             <span className="activity-right">
-              <span className="activity-value">
-                {amountWei > 0n && decimals != null
-                  ? `${formatUnits(amount, decimals)} ${symbol}`
-                  : t("wallet.activityNoValue")}
-              </span>
+              {balanceChanges.length > 0 ? (
+                <span className="activity-changes">
+                  {balanceChanges.slice(0, 3).map((change, index) => (
+                    <span
+                      key={`${change.symbol}:${change.formattedDelta}:${index}`}
+                      className={`activity-change ${change.direction === "in" ? "in" : "out"}`}
+                    >
+                      {change.formattedDelta} {change.symbol}
+                    </span>
+                  ))}
+                </span>
+              ) : (
+                <span className="activity-value">
+                  {amountWei > 0n && decimals != null
+                    ? `${formatUnits(amount, decimals)} ${symbol}`
+                    : t("wallet.activityNoValue")}
+                </span>
+              )}
               <span className="activity-time">
                 {formatActivityTime(record.timestamp)}
               </span>

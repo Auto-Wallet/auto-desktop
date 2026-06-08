@@ -140,8 +140,19 @@ struct WalletStore {
     active: String,
 }
 
+#[derive(Clone)]
+enum ExposedAccount {
+    Signer(String),
+    WatchOnly(String),
+}
+
 fn store_state() -> &'static Mutex<Option<WalletStore>> {
     static V: OnceLock<Mutex<Option<WalletStore>>> = OnceLock::new();
+    V.get_or_init(|| Mutex::new(None))
+}
+
+fn exposed_account_state() -> &'static Mutex<Option<ExposedAccount>> {
+    static V: OnceLock<Mutex<Option<ExposedAccount>>> = OnceLock::new();
     V.get_or_init(|| Mutex::new(None))
 }
 
@@ -154,6 +165,32 @@ fn active_account_address() -> Option<String> {
         .flat_map(|w| &w.accounts)
         .find(|a| a.address == s.active)
         .map(|a| a.address.clone())
+}
+
+fn normalize_evm_address(address: &str) -> Result<String, String> {
+    let trimmed = address.trim();
+    let body = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .ok_or_else(|| format!("invalid address {trimmed}: expected 0x prefix"))?;
+    if body.len() != 40 || !body.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("invalid address {trimmed}"));
+    }
+    Ok(format!("0x{}", body.to_ascii_lowercase()))
+}
+
+/// The public address exposed through EIP-1193 account reads. Signer addresses
+/// still require an unlocked vault; watch-only addresses are public viewing
+/// targets and may be exposed without any signing key.
+fn dapp_account_address() -> Option<String> {
+    match exposed_account_state().lock().unwrap().clone() {
+        Some(ExposedAccount::WatchOnly(address)) => Some(address),
+        Some(ExposedAccount::Signer(address)) => {
+            let active = active_account_address()?;
+            (active == address).then_some(address)
+        }
+        None => active_account_address(),
+    }
 }
 
 /// Run `f` with the active account's *software* signing key. Errors clearly when
@@ -170,9 +207,7 @@ fn with_active_key<T>(f: impl FnOnce(&SigningKey) -> T) -> Result<T, String> {
         .ok_or("no active account")?;
     match &acct.signer {
         Signer::Local(key) => Ok(f(key)),
-        Signer::Ledger { .. } => {
-            Err("active account is a Ledger — sign on the device".to_string())
-        }
+        Signer::Ledger { .. } => Err("active account is a Ledger — sign on the device".to_string()),
     }
 }
 
@@ -204,8 +239,15 @@ fn derive_hd_accounts(
     let mut metas = Vec::with_capacity(count as usize);
     for index in 0..count {
         let (key, address) = vault::derive_account(mnemonic, index)?;
-        metas.push(vault::AccountMeta { index, address: address.clone() });
-        accounts.push(UnlockedAccount { index, address, signer: Signer::Local(key) });
+        metas.push(vault::AccountMeta {
+            index,
+            address: address.clone(),
+        });
+        accounts.push(UnlockedAccount {
+            index,
+            address,
+            signer: Signer::Local(key),
+        });
     }
     Ok((accounts, metas))
 }
@@ -223,12 +265,20 @@ fn build_hd_wallet_from_keystore(
         if address != meta.address {
             return Err("keystore integrity check failed".to_string());
         }
-        accounts.push(UnlockedAccount { index: meta.index, address, signer: Signer::Local(key) });
+        accounts.push(UnlockedAccount {
+            index: meta.index,
+            address,
+            signer: Signer::Local(key),
+        });
     }
     if accounts.is_empty() {
         // A legacy keystore may record no accounts — derive the first.
         let (key, address) = vault::derive_account(&mnemonic, 0)?;
-        accounts.push(UnlockedAccount { index: 0, address, signer: Signer::Local(key) });
+        accounts.push(UnlockedAccount {
+            index: 0,
+            address,
+            signer: Signer::Local(key),
+        });
     }
     Ok(UnlockedWallet {
         id: ks.id.clone(),
@@ -254,14 +304,21 @@ fn build_privkey_wallet_from_keystore(
         id: ks.id.clone(),
         label: ks.label.clone(),
         secret: VaultSecret::PrivateKey,
-        accounts: vec![UnlockedAccount { index: 0, address, signer: Signer::Local(key) }],
+        accounts: vec![UnlockedAccount {
+            index: 0,
+            address,
+            signer: Signer::Local(key),
+        }],
     })
 }
 
 /// Build an in-memory Ledger wallet from its keystore (path + public address only —
 /// no in-process key; signing goes to the device).
 fn build_ledger_wallet_from_keystore(ks: &vault::Keystore) -> Result<UnlockedWallet, String> {
-    let path = ks.path.as_deref().ok_or("ledger keystore missing derivation path")?;
+    let path = ks
+        .path
+        .as_deref()
+        .ok_or("ledger keystore missing derivation path")?;
     let address = ks
         .accounts
         .first()
@@ -274,7 +331,9 @@ fn build_ledger_wallet_from_keystore(ks: &vault::Keystore) -> Result<UnlockedWal
         accounts: vec![UnlockedAccount {
             index: 0,
             address,
-            signer: Signer::Ledger { path: path.to_string() },
+            signer: Signer::Ledger {
+                path: path.to_string(),
+            },
         }],
     })
 }
@@ -283,7 +342,11 @@ fn build_ledger_wallet_from_keystore(ks: &vault::Keystore) -> Result<UnlockedWal
 /// locked/absent), make its first account active, and — when adding the first
 /// software wallet — record the app password. Returns the new active address.
 fn store_push_wallet(wallet: UnlockedWallet, password: Option<Zeroizing<String>>) -> String {
-    let first = wallet.accounts.first().map(|a| a.address.clone()).unwrap_or_default();
+    let first = wallet
+        .accounts
+        .first()
+        .map(|a| a.address.clone())
+        .unwrap_or_default();
     let mut guard = store_state().lock().unwrap();
     match guard.as_mut() {
         Some(store) => {
@@ -294,8 +357,15 @@ fn store_push_wallet(wallet: UnlockedWallet, password: Option<Zeroizing<String>>
             store.active = first.clone();
         }
         None => {
-            *guard = Some(WalletStore { password, wallets: vec![wallet], active: first.clone() });
+            *guard = Some(WalletStore {
+                password,
+                wallets: vec![wallet],
+                active: first.clone(),
+            });
         }
+    }
+    if !first.is_empty() {
+        *exposed_account_state().lock().unwrap() = Some(ExposedAccount::Signer(first.clone()));
     }
     first
 }
@@ -305,7 +375,10 @@ fn store_push_wallet(wallet: UnlockedWallet, password: Option<Zeroizing<String>>
 #[cfg(test)]
 fn install_unlocked_vault(mnemonic: &str, count: u32) -> Result<Vec<vault::AccountMeta>, String> {
     let (accounts, metas) = derive_hd_accounts(mnemonic, count)?;
-    let active = accounts.first().map(|a| a.address.clone()).unwrap_or_default();
+    let active = accounts
+        .first()
+        .map(|a| a.address.clone())
+        .unwrap_or_default();
     *store_state().lock().unwrap() = Some(WalletStore {
         password: None,
         wallets: vec![UnlockedWallet {
@@ -324,14 +397,21 @@ fn install_unlocked_vault(mnemonic: &str, count: u32) -> Result<Vec<vault::Accou
 fn install_privkey_vault(privkey_hex: &str) -> Result<Vec<vault::AccountMeta>, String> {
     let key = vault::parse_private_key(privkey_hex)?;
     let address = address_from_verifying_key(key.verifying_key());
-    let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
+    let metas = vec![vault::AccountMeta {
+        index: 0,
+        address: address.clone(),
+    }];
     *store_state().lock().unwrap() = Some(WalletStore {
         password: None,
         wallets: vec![UnlockedWallet {
             id: "w-privkey".to_string(),
             label: "Wallet 1".to_string(),
             secret: VaultSecret::PrivateKey,
-            accounts: vec![UnlockedAccount { index: 0, address: address.clone(), signer: Signer::Local(key) }],
+            accounts: vec![UnlockedAccount {
+                index: 0,
+                address: address.clone(),
+                signer: Signer::Local(key),
+            }],
         }],
         active: address,
     });
@@ -341,7 +421,10 @@ fn install_privkey_vault(privkey_hex: &str) -> Result<Vec<vault::AccountMeta>, S
 /// Install a single Ledger account as THE session store (test helper).
 #[cfg(test)]
 fn install_ledger_vault(path: &str, address: &str) -> Result<Vec<vault::AccountMeta>, String> {
-    let metas = vec![vault::AccountMeta { index: 0, address: address.to_string() }];
+    let metas = vec![vault::AccountMeta {
+        index: 0,
+        address: address.to_string(),
+    }];
     *store_state().lock().unwrap() = Some(WalletStore {
         password: None,
         wallets: vec![UnlockedWallet {
@@ -351,7 +434,9 @@ fn install_ledger_vault(path: &str, address: &str) -> Result<Vec<vault::AccountM
             accounts: vec![UnlockedAccount {
                 index: 0,
                 address: address.to_string(),
-                signer: Signer::Ledger { path: path.to_string() },
+                signer: Signer::Ledger {
+                    path: path.to_string(),
+                },
             }],
         }],
         active: address.to_string(),
@@ -362,7 +447,9 @@ fn install_ledger_vault(path: &str, address: &str) -> Result<Vec<vault::AccountM
 /// Decode a `personal_sign` message param. dApps usually send 0x-hex; some send a
 /// raw UTF-8 string. EIP-191 hashes the *bytes*, so we just need the byte form.
 fn decode_message_param(param: &Value) -> Result<Vec<u8>, String> {
-    let s = param.as_str().ok_or("personal_sign: message param must be a string")?;
+    let s = param
+        .as_str()
+        .ok_or("personal_sign: message param must be a string")?;
     match s.strip_prefix("0x") {
         Some(hex_body) => hex::decode(hex_body)
             .map_err(|e| format!("personal_sign: message is not valid hex: {e}")),
@@ -451,9 +538,19 @@ struct ActivityRecord {
     amount: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    balance_changes: Vec<ActivityBalanceChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     status: Option<String>,
     timestamp: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivityBalanceChange {
+    symbol: String,
+    formatted_delta: String,
+    direction: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -481,28 +578,138 @@ struct UpdateInfo {
 
 fn builtin_chains() -> Vec<ChainCfg> {
     fn c(id: &str, name: &str, symbol: &str, rpc: &str, color: &str) -> ChainCfg {
-        ChainCfg { id: id.into(), name: name.into(), symbol: symbol.into(), rpc: rpc.into(), decimals: 18, color: color.into(), builtin: true }
+        ChainCfg {
+            id: id.into(),
+            name: name.into(),
+            symbol: symbol.into(),
+            rpc: rpc.into(),
+            decimals: 18,
+            color: color.into(),
+            builtin: true,
+        }
     }
     vec![
-        c("0x1",     "Ethereum",      "ETH",   "https://ethereum-rpc.publicnode.com",            "#627EEA"),
-        c("0x2105",  "Base",          "ETH",   "https://base-rpc.publicnode.com",                "#0052FF"),
-        c("0xa",     "OP Mainnet",    "ETH",   "https://optimism-rpc.publicnode.com",            "#FF0420"),
-        c("0xa4b1",  "Arbitrum One",  "ETH",   "https://arbitrum-one-rpc.publicnode.com",        "#28A0F0"),
-        c("0x89",    "Polygon",       "POL",   "https://polygon-bor-rpc.publicnode.com",         "#8247E5"),
+        c(
+            "0x1",
+            "Ethereum",
+            "ETH",
+            "https://ethereum-rpc.publicnode.com",
+            "#627EEA",
+        ),
+        c(
+            "0x2105",
+            "Base",
+            "ETH",
+            "https://base-rpc.publicnode.com",
+            "#0052FF",
+        ),
+        c(
+            "0xa",
+            "OP Mainnet",
+            "ETH",
+            "https://optimism-rpc.publicnode.com",
+            "#FF0420",
+        ),
+        c(
+            "0xa4b1",
+            "Arbitrum One",
+            "ETH",
+            "https://arbitrum-one-rpc.publicnode.com",
+            "#28A0F0",
+        ),
+        c(
+            "0x89",
+            "Polygon",
+            "POL",
+            "https://polygon-bor-rpc.publicnode.com",
+            "#8247E5",
+        ),
         // Extended default set (EVM subset of the xflows supported-chains snapshot).
-        c("0x38",    "BNB Chain",     "BNB",   "https://bsc-rpc.publicnode.com",                 "#F3BA2F"),
-        c("0xa86a",  "Avalanche",     "AVAX",  "https://avalanche-c-chain-rpc.publicnode.com",   "#E84142"),
-        c("0xe708",  "Linea",         "ETH",   "https://linea-rpc.publicnode.com",               "#61DFFF"),
-        c("0x13e31", "Blast",         "ETH",   "https://blast-rpc.publicnode.com",               "#FCD000"),
-        c("0x144",   "zkSync Era",    "ETH",   "https://mainnet.era.zksync.io",                  "#8C8DFC"),
-        c("0x44d",   "Polygon zkEVM", "ETH",   "https://zkevm-rpc.com",                          "#7B3FE4"),
-        c("0x92",    "Sonic",         "S",     "https://rpc.soniclabs.com",                      "#1969FF"),
-        c("0xc4",    "X Layer",       "OKB",   "https://rpc.xlayer.tech",                        "#1A1A1A"),
-        c("0x1e0",   "World Chain",   "ETH",   "https://worldchain-mainnet.g.alchemy.com/public", "#1A1A1A"),
-        c("0x250",   "Astar",         "ASTR",  "https://evm.astar.network",                      "#1B6DC1"),
-        c("0x378",   "Wanchain",      "WAN",   "https://gwan-ssl.wandevs.org:56891",             "#2A6BE9"),
-        c("0x440",   "Metis",         "METIS", "https://andromeda.metis.io/?owner=1088",         "#00DACC"),
-        c("0xa4ec",  "Celo",          "CELO",  "https://forno.celo.org",                         "#FCB728"),
+        c(
+            "0x38",
+            "BNB Chain",
+            "BNB",
+            "https://bsc-rpc.publicnode.com",
+            "#F3BA2F",
+        ),
+        c(
+            "0xa86a",
+            "Avalanche",
+            "AVAX",
+            "https://avalanche-c-chain-rpc.publicnode.com",
+            "#E84142",
+        ),
+        c(
+            "0xe708",
+            "Linea",
+            "ETH",
+            "https://linea-rpc.publicnode.com",
+            "#61DFFF",
+        ),
+        c(
+            "0x13e31",
+            "Blast",
+            "ETH",
+            "https://blast-rpc.publicnode.com",
+            "#FCD000",
+        ),
+        c(
+            "0x144",
+            "zkSync Era",
+            "ETH",
+            "https://mainnet.era.zksync.io",
+            "#8C8DFC",
+        ),
+        c(
+            "0x44d",
+            "Polygon zkEVM",
+            "ETH",
+            "https://zkevm-rpc.com",
+            "#7B3FE4",
+        ),
+        c("0x92", "Sonic", "S", "https://rpc.soniclabs.com", "#1969FF"),
+        c(
+            "0xc4",
+            "X Layer",
+            "OKB",
+            "https://rpc.xlayer.tech",
+            "#1A1A1A",
+        ),
+        c(
+            "0x1e0",
+            "World Chain",
+            "ETH",
+            "https://worldchain-mainnet.g.alchemy.com/public",
+            "#1A1A1A",
+        ),
+        c(
+            "0x250",
+            "Astar",
+            "ASTR",
+            "https://evm.astar.network",
+            "#1B6DC1",
+        ),
+        c(
+            "0x378",
+            "Wanchain",
+            "WAN",
+            "https://gwan-ssl.wandevs.org:56891",
+            "#2A6BE9",
+        ),
+        c(
+            "0x440",
+            "Metis",
+            "METIS",
+            "https://andromeda.metis.io/?owner=1088",
+            "#00DACC",
+        ),
+        c(
+            "0xa4ec",
+            "Celo",
+            "CELO",
+            "https://forno.celo.org",
+            "#FCB728",
+        ),
     ]
 }
 
@@ -514,7 +721,12 @@ fn chains_state() -> &'static Mutex<Vec<ChainCfg>> {
 }
 
 fn find_chain(id: &str) -> Option<ChainCfg> {
-    chains_state().lock().unwrap().iter().find(|c| c.id.eq_ignore_ascii_case(id)).cloned()
+    chains_state()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|c| c.id.eq_ignore_ascii_case(id))
+        .cloned()
 }
 
 /// The wallet's currently selected chain (EIP-155 hex). dApps read it via
@@ -545,15 +757,25 @@ enum Route {
 /// treated as a read-only node call (the long tail of `eth_*` getters).
 fn route_method(method: &str) -> Route {
     match method {
-        "eth_accounts" | "eth_requestAccounts" | "eth_coinbase" | "eth_chainId"
-        | "net_version" | "wallet_switchEthereumChain" | "wallet_addEthereumChain"
-        | "wallet_requestPermissions" | "wallet_getPermissions"
-        | "wallet_revokePermissions" | "wallet_watchAsset" => Route::Wallet,
+        "eth_accounts"
+        | "eth_requestAccounts"
+        | "eth_coinbase"
+        | "eth_chainId"
+        | "net_version"
+        | "wallet_switchEthereumChain"
+        | "wallet_addEthereumChain"
+        | "wallet_requestPermissions"
+        | "wallet_getPermissions"
+        | "wallet_revokePermissions"
+        | "wallet_watchAsset" => Route::Wallet,
 
-        "eth_sendTransaction" | "eth_sign" | "personal_sign" | "eth_signTypedData"
-        | "eth_signTypedData_v1" | "eth_signTypedData_v3" | "eth_signTypedData_v4" => {
-            Route::Signing
-        }
+        "eth_sendTransaction"
+        | "eth_sign"
+        | "personal_sign"
+        | "eth_signTypedData"
+        | "eth_signTypedData_v1"
+        | "eth_signTypedData_v3"
+        | "eth_signTypedData_v4" => Route::Signing,
 
         _ => Route::Forward,
     }
@@ -621,7 +843,9 @@ fn handle_wallet_method(
                 return Ok(WalletOutcome::SwitchChain(chain.id));
             }
             // New chain → build a ChainCfg from the EIP-3085 params and add it.
-            let p = params.first().ok_or_else(|| format!("{method}: missing params"))?;
+            let p = params
+                .first()
+                .ok_or_else(|| format!("{method}: missing params"))?;
             let id = normalize_chain_id(target)?;
             let name = p
                 .get("chainName")
@@ -659,9 +883,9 @@ fn handle_wallet_method(
             }))
         }
         // Minimal EIP-2255: we only ever grant eth_accounts.
-        "wallet_requestPermissions" | "wallet_getPermissions" => {
-            Ok(WalletOutcome::Reply(json!([{ "parentCapability": "eth_accounts" }])))
-        }
+        "wallet_requestPermissions" | "wallet_getPermissions" => Ok(WalletOutcome::Reply(
+            json!([{ "parentCapability": "eth_accounts" }]),
+        )),
         "wallet_revokePermissions" => Ok(WalletOutcome::Reply(Value::Null)),
         "wallet_watchAsset" => Ok(WalletOutcome::Reply(json!(true))),
         other => Err(format!("wallet method not handled: {other}")),
@@ -690,7 +914,10 @@ async fn node_rpc_call(chain: &ChainCfg, method: &str, params: &[Value]) -> Resu
 
     if let Some(err) = body.get("error") {
         let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
-        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown RPC error");
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown RPC error");
         return Err(format!("{msg} (code {code})"));
     }
     body.get("result")
@@ -700,8 +927,8 @@ async fn node_rpc_call(chain: &ChainCfg, method: &str, params: &[Value]) -> Resu
 
 async fn forward_to_node(method: &str, params: &[Value]) -> Result<Value, String> {
     let chain_id = current_chain().lock().unwrap().clone();
-    let chain = find_chain(&chain_id)
-        .ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
+    let chain =
+        find_chain(&chain_id).ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
     node_rpc_call(&chain, method, params).await
 }
 
@@ -731,11 +958,16 @@ fn is_read_method(method: &str) -> bool {
 /// the active one). Server-side, so it works on chains whose public RPC doesn't
 /// allow browser CORS. Shell-only (capabilities/default.json); read methods only.
 #[tauri::command]
-async fn node_rpc(chain_id: String, method: String, params: Option<Vec<Value>>) -> Result<Value, String> {
+async fn node_rpc(
+    chain_id: String,
+    method: String,
+    params: Option<Vec<Value>>,
+) -> Result<Value, String> {
     if !is_read_method(&method) {
         return Err(format!("node_rpc: method not allowed: {method}"));
     }
-    let chain = find_chain(&chain_id).ok_or_else(|| format!("node_rpc: unknown chain {chain_id}"))?;
+    let chain =
+        find_chain(&chain_id).ok_or_else(|| format!("node_rpc: unknown chain {chain_id}"))?;
     node_rpc_call(&chain, &method, &params.unwrap_or_default()).await
 }
 
@@ -839,6 +1071,7 @@ struct ApprovalDecision {
     approved: bool,
     max_fee_per_gas: Option<String>,
     max_priority_fee_per_gas: Option<String>,
+    balance_changes: Vec<ActivityBalanceChange>,
 }
 
 struct PendingEntry {
@@ -869,7 +1102,10 @@ fn preview_message(bytes: &[u8]) -> String {
 async fn request_approval<R: Runtime>(app: &AppHandle<R>, req: PendingRequest) -> ApprovalDecision {
     let id = req.id.clone();
     let (tx, rx) = tokio::sync::oneshot::channel::<ApprovalDecision>();
-    pending().lock().unwrap().insert(id.clone(), PendingEntry { req, responder: tx });
+    pending()
+        .lock()
+        .unwrap()
+        .insert(id.clone(), PendingEntry { req, responder: tx });
 
     // Best-effort: bring up the approval window. If it can't open we still wait —
     // an already-open window (or, in tests, a direct approve_request) resolves it.
@@ -892,11 +1128,15 @@ fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         let _ = win.set_focus();
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(app, "approval", WebviewUrl::App("index.html?view=approval".into()))
-        .title("Confirm request — AutoDesktop")
-        .inner_size(420.0, 600.0)
-        .resizable(false)
-        .build()?;
+    tauri::WebviewWindowBuilder::new(
+        app,
+        "approval",
+        WebviewUrl::App("index.html?view=approval".into()),
+    )
+    .title("Confirm request — AutoDesktop")
+    .inner_size(420.0, 600.0)
+    .resizable(false)
+    .build()?;
     Ok(())
 }
 
@@ -937,8 +1177,11 @@ async fn handle_signing<R: Runtime>(
 
     match method {
         "personal_sign" => {
-            let message =
-                decode_message_param(params.first().ok_or("personal_sign: missing message param")?)?;
+            let message = decode_message_param(
+                params
+                    .first()
+                    .ok_or("personal_sign: missing message param")?,
+            )?;
             let req = PendingRequest {
                 id: next_request_id(),
                 method: method.to_string(),
@@ -1016,7 +1259,10 @@ fn sign_typed_data(typed: &Value) -> Result<Value, String> {
 
 /// A human-readable summary of typed data for the approval window.
 fn preview_typed_data(typed: &Value) -> String {
-    let primary = typed.get("primaryType").and_then(|v| v.as_str()).unwrap_or("typed data");
+    let primary = typed
+        .get("primaryType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("typed data");
     let domain = typed
         .get("domain")
         .and_then(|d| d.get("name"))
@@ -1045,9 +1291,15 @@ fn hex_to_u128(hex: &str) -> Result<u128, String> {
 /// only — `prepare_tx` resolves the real fields and `finalize_tx` signs them.
 fn preview_tx(tx: &Value) -> String {
     let to = tx_field(tx, "to").unwrap_or("new contract");
-    let short_to = if to.len() > 12 { format!("{}…{}", &to[..6], &to[to.len() - 4..]) } else { to.to_string() };
+    let short_to = if to.len() > 12 {
+        format!("{}…{}", &to[..6], &to[to.len() - 4..])
+    } else {
+        to.to_string()
+    };
     let eth = hex_to_u128(tx_field(tx, "value").unwrap_or("0x0")).unwrap_or(0) as f64 / 1e18;
-    let has_data = tx_field(tx, "data").or_else(|| tx_field(tx, "input")).map_or(false, |d| d.len() > 2);
+    let has_data = tx_field(tx, "data")
+        .or_else(|| tx_field(tx, "input"))
+        .map_or(false, |d| d.len() > 2);
     if has_data {
         format!("Contract interaction → {short_to} ({eth:.4} ETH)")
     } else {
@@ -1059,17 +1311,26 @@ fn preview_tx(tx: &Value) -> String {
 /// are given, else suggest `maxPriorityFeePerGas` from the node (1 gwei fallback)
 /// and `maxFeePerGas = 2*baseFee + priority` from the pending block's base fee.
 async fn resolve_fees_on(chain: &ChainCfg, tx: &Value) -> Result<(String, String), String> {
-    if let (Some(prio), Some(max)) =
-        (tx_field(tx, "maxPriorityFeePerGas"), tx_field(tx, "maxFeePerGas"))
-    {
+    if let (Some(prio), Some(max)) = (
+        tx_field(tx, "maxPriorityFeePerGas"),
+        tx_field(tx, "maxFeePerGas"),
+    ) {
         return Ok((prio.to_string(), max.to_string()));
     }
     let priority = match node_rpc_call(chain, "eth_maxPriorityFeePerGas", &[]).await {
-        Ok(v) => v.as_str().map(str::to_string).unwrap_or_else(|| "0x3b9aca00".into()),
+        Ok(v) => v
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| "0x3b9aca00".into()),
         Err(_) => "0x3b9aca00".to_string(), // 1 gwei
     };
     let priority_wei = hex_to_u128(&priority)?;
-    let block = node_rpc_call(chain, "eth_getBlockByNumber", &[json!("pending"), json!(false)]).await?;
+    let block = node_rpc_call(
+        chain,
+        "eth_getBlockByNumber",
+        &[json!("pending"), json!(false)],
+    )
+    .await?;
     let base_wei = block
         .get("baseFeePerGas")
         .and_then(|v| v.as_str())
@@ -1083,25 +1344,35 @@ async fn resolve_fees_on(chain: &ChainCfg, tx: &Value) -> Result<(String, String
 /// nonce / gas / fees from the node. Pure preparation — no signing, no broadcast —
 /// so the approval window can show the user exactly what they're about to sign.
 async fn prepare_tx(chain_id: &str, tx: &Value) -> Result<PreparedTx, String> {
-    let chain = find_chain(chain_id).ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
+    let chain =
+        find_chain(chain_id).ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
     let from = active_account_address().ok_or("wallet is locked")?;
     if let Some(req_from) = tx_field(tx, "from") {
         if !req_from.eq_ignore_ascii_case(&from) {
-            return Err(format!("transaction 'from' {req_from} is not the active account {from}"));
+            return Err(format!(
+                "transaction 'from' {req_from} is not the active account {from}"
+            ));
         }
     }
 
     let to = tx_field(tx, "to").unwrap_or("").to_string();
     let value = tx_field(tx, "value").unwrap_or("0x0").to_string();
-    let data = tx_field(tx, "data").or_else(|| tx_field(tx, "input")).unwrap_or("0x").to_string();
+    let data = tx_field(tx, "data")
+        .or_else(|| tx_field(tx, "input"))
+        .unwrap_or("0x")
+        .to_string();
 
     let nonce = match tx_field(tx, "nonce") {
         Some(n) => n.to_string(),
-        None => node_rpc_call(&chain, "eth_getTransactionCount", &[json!(from), json!("pending")])
-            .await?
-            .as_str()
-            .ok_or("node returned a non-string nonce")?
-            .to_string(),
+        None => node_rpc_call(
+            &chain,
+            "eth_getTransactionCount",
+            &[json!(from), json!("pending")],
+        )
+        .await?
+        .as_str()
+        .ok_or("node returned a non-string nonce")?
+        .to_string(),
     };
 
     let gas = match tx_field(tx, "gas") {
@@ -1202,7 +1473,7 @@ async fn approve_and_send<R: Runtime>(
     }
     let hash = finalize_tx(&p).await?;
     if let Some(hash_str) = hash.as_str() {
-        record_activity(app, &p, origin, hash_str, tx);
+        record_activity(app, &p, origin, hash_str, tx, decision.balance_changes);
     }
     Ok(hash)
 }
@@ -1236,7 +1507,7 @@ async fn handle_rpc<R: Runtime>(
     match route_method(method) {
         Route::Wallet => {
             let current = current_chain().lock().unwrap().clone();
-            let account = active_account_address();
+            let account = dapp_account_address();
             match handle_wallet_method(method, params, &current, account.as_deref())? {
                 WalletOutcome::Reply(v) => Ok(v),
                 WalletOutcome::SwitchChain(new_id) => {
@@ -1296,24 +1567,42 @@ fn approve_request<R: Runtime>(
     id: String,
     max_fee_per_gas: Option<String>,
     max_priority_fee_per_gas: Option<String>,
+    balance_changes: Option<Vec<ActivityBalanceChange>>,
 ) -> Result<(), String> {
     resolve_request(
         &app,
         &id,
-        ApprovalDecision { approved: true, max_fee_per_gas, max_priority_fee_per_gas },
+        ApprovalDecision {
+            approved: true,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            balance_changes: balance_changes.unwrap_or_default(),
+        },
     )
 }
 
 /// Reject a pending request. Scoped to the "approval" webview (ACL).
 #[tauri::command]
 fn reject_request<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
-    resolve_request(&app, &id, ApprovalDecision { approved: false, ..Default::default() })
+    resolve_request(
+        &app,
+        &id,
+        ApprovalDecision {
+            approved: false,
+            ..Default::default()
+        },
+    )
 }
 
 /// List requests awaiting approval, for the approval window to render.
 #[tauri::command]
 fn get_pending_requests() -> Vec<PendingRequest> {
-    pending().lock().unwrap().values().map(|e| e.req.clone()).collect()
+    pending()
+        .lock()
+        .unwrap()
+        .values()
+        .map(|e| e.req.clone())
+        .collect()
 }
 
 /// Local IPC command — the entire attack surface exposed to untrusted dApps
@@ -1460,8 +1749,10 @@ fn open_dapp<R: Runtime>(
         None => create_dapp_webview(&app, &label, parsed, x, y, w, h)?,
     };
     let (fx, fy) = content_to_frame(&dapp, x, y);
-    dapp.set_position(LogicalPosition::new(fx, fy)).map_err(|e| e.to_string())?;
-    dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0))).map_err(|e| e.to_string())?;
+    dapp.set_position(LogicalPosition::new(fx, fy))
+        .map_err(|e| e.to_string())?;
+    dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
+        .map_err(|e| e.to_string())?;
     dapp.show().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1480,8 +1771,20 @@ fn set_dapp_bounds<R: Runtime>(
     validate_dapp_label(&label)?;
     if let Some(dapp) = app.get_webview(&label) {
         let (fx, fy) = content_to_frame(&dapp, x, y);
-        dapp.set_position(LogicalPosition::new(fx, fy)).map_err(|e| e.to_string())?;
-        dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0))).map_err(|e| e.to_string())?;
+        dapp.set_position(LogicalPosition::new(fx, fy))
+            .map_err(|e| e.to_string())?;
+        dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Reload a tab webview. Shell-only; dApps are never granted this command.
+#[tauri::command]
+fn reload_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String> {
+    validate_dapp_label(&label)?;
+    if let Some(dapp) = app.get_webview(&label) {
+        dapp.reload().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1534,7 +1837,8 @@ fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), S
 /// dapp webviews any event capability — they keep ONLY allow-wallet-request.
 fn push_chain_changed<R: Runtime>(app: &AppHandle<R>, chain_id: &str) {
     let payload = serde_json::to_string(chain_id).unwrap_or_else(|_| "\"0x1\"".into());
-    let js = format!("window.__autoWalletPush && window.__autoWalletPush('chainChanged', {payload});");
+    let js =
+        format!("window.__autoWalletPush && window.__autoWalletPush('chainChanged', {payload});");
     let mut pushed = 0;
     for (label, webview) in app.webviews() {
         if label.starts_with("dapp-") {
@@ -1549,7 +1853,8 @@ fn push_chain_changed<R: Runtime>(app: &AppHandle<R>, chain_id: &str) {
 /// `eth_chainId`/forwarded reads and pushes `chainChanged` to all open dApps.
 #[tauri::command]
 fn set_active_chain<R: Runtime>(app: AppHandle<R>, chain_id: String) -> Result<(), String> {
-    let chain = find_chain(&chain_id).ok_or_else(|| format!("set_active_chain: unknown chain {chain_id}"))?;
+    let chain = find_chain(&chain_id)
+        .ok_or_else(|| format!("set_active_chain: unknown chain {chain_id}"))?;
     *current_chain().lock().unwrap() = chain.id.clone();
     push_chain_changed(&app, &chain.id);
     Ok(())
@@ -1570,7 +1875,11 @@ fn get_active_chain() -> String {
 const CHAINS_FILE: &str = "chains.json";
 
 fn chains_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(CHAINS_FILE))
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(CHAINS_FILE))
 }
 
 /// Load the persisted chain list (built-ins + user edits) at startup, if present.
@@ -1610,7 +1919,9 @@ struct AppPrefs {
 
 impl Default for AppPrefs {
     fn default() -> Self {
-        Self { close_behavior: default_close_behavior() }
+        Self {
+            close_behavior: default_close_behavior(),
+        }
     }
 }
 
@@ -1628,12 +1939,20 @@ fn default_close_behavior() -> CloseBehavior {
 const APP_PREFS_FILE: &str = "app-prefs.json";
 
 fn app_prefs_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(APP_PREFS_FILE))
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(APP_PREFS_FILE))
 }
 
 fn load_app_prefs<R: Runtime>(app: &AppHandle<R>) -> AppPrefs {
-    let Ok(path) = app_prefs_path(app) else { return AppPrefs::default() };
-    let Ok(bytes) = std::fs::read(path) else { return AppPrefs::default() };
+    let Ok(path) = app_prefs_path(app) else {
+        return AppPrefs::default();
+    };
+    let Ok(bytes) = std::fs::read(path) else {
+        return AppPrefs::default();
+    };
     serde_json::from_slice::<AppPrefs>(&bytes).unwrap_or_default()
 }
 
@@ -1649,16 +1968,27 @@ fn save_app_prefs<R: Runtime>(app: &AppHandle<R>, prefs: &AppPrefs) -> Result<()
 const ACTIVITY_FILE: &str = "activity.json";
 
 fn activity_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(ACTIVITY_FILE))
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(ACTIVITY_FILE))
 }
 
 fn load_activity_records<R: Runtime>(app: &AppHandle<R>) -> Vec<ActivityRecord> {
-    let Ok(path) = activity_path(app) else { return Vec::new() };
-    let Ok(bytes) = std::fs::read(path) else { return Vec::new() };
+    let Ok(path) = activity_path(app) else {
+        return Vec::new();
+    };
+    let Ok(bytes) = std::fs::read(path) else {
+        return Vec::new();
+    };
     serde_json::from_slice::<Vec<ActivityRecord>>(&bytes).unwrap_or_default()
 }
 
-fn save_activity_records<R: Runtime>(app: &AppHandle<R>, records: &[ActivityRecord]) -> Result<(), String> {
+fn save_activity_records<R: Runtime>(
+    app: &AppHandle<R>,
+    records: &[ActivityRecord],
+) -> Result<(), String> {
     let path = activity_path(app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -1682,7 +2012,10 @@ fn tx_activity_meta(tx: &Value) -> ActivityMeta {
         return ActivityMeta::default();
     };
     ActivityMeta {
-        kind: meta.get("kind").and_then(|v| v.as_str()).map(str::to_string),
+        kind: meta
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         counterparty: meta
             .get("counterparty")
             .and_then(|v| v.as_str())
@@ -1715,7 +2048,14 @@ fn parse_erc20_transfer(data: &str) -> Option<(String, String)> {
     let amount_word = &hex[72..136];
     let to = format!("0x{}", &to_word[24..64]);
     let amount = format!("0x{}", amount_word.trim_start_matches('0'));
-    Some((to, if amount == "0x" { "0x0".to_string() } else { amount }))
+    Some((
+        to,
+        if amount == "0x" {
+            "0x0".to_string()
+        } else {
+            amount
+        },
+    ))
 }
 
 fn record_activity<R: Runtime>(
@@ -1724,6 +2064,7 @@ fn record_activity<R: Runtime>(
     origin: &str,
     hash: &str,
     tx: &Value,
+    balance_changes: Vec<ActivityBalanceChange>,
 ) {
     let has_data = prepared.data.trim() != "0x" && !prepared.data.trim().is_empty();
     let mut meta = tx_activity_meta(tx);
@@ -1748,7 +2089,11 @@ fn record_activity<R: Runtime>(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let record = ActivityRecord {
-        id: format!("{}:{}", prepared.chain_id.to_lowercase(), hash.to_lowercase()),
+        id: format!(
+            "{}:{}",
+            prepared.chain_id.to_lowercase(),
+            hash.to_lowercase()
+        ),
         hash: hash.to_string(),
         chain_id: prepared.chain_id.clone(),
         chain_name: prepared.chain_name.clone(),
@@ -1773,13 +2118,9 @@ fn record_activity<R: Runtime>(
                 Some(prepared.symbol.clone())
             }
         }),
-        asset_decimals: meta.asset_decimals.or_else(|| {
-            if has_data {
-                None
-            } else {
-                Some(18)
-            }
-        }),
+        asset_decimals: meta
+            .asset_decimals
+            .or_else(|| if has_data { None } else { Some(18) }),
         amount: meta.amount.or_else(|| {
             if prepared.value != "0x0" {
                 Some(prepared.value.clone())
@@ -1788,12 +2129,15 @@ fn record_activity<R: Runtime>(
             }
         }),
         token_address: meta.token_address,
+        balance_changes,
         status: Some("submitted".to_string()),
         timestamp: now,
     };
 
     let mut records = load_activity_records(app);
-    records.retain(|r| !r.hash.eq_ignore_ascii_case(hash) || !r.chain_id.eq_ignore_ascii_case(&prepared.chain_id));
+    records.retain(|r| {
+        !r.hash.eq_ignore_ascii_case(hash) || !r.chain_id.eq_ignore_ascii_case(&prepared.chain_id)
+    });
     records.insert(0, record);
     records.truncate(500);
     if let Err(e) = save_activity_records(app, &records) {
@@ -1815,7 +2159,10 @@ fn get_close_behavior<R: Runtime>(app: AppHandle<R>) -> CloseBehavior {
 }
 
 #[tauri::command]
-fn set_close_behavior<R: Runtime>(app: AppHandle<R>, close_behavior: CloseBehavior) -> Result<CloseBehavior, String> {
+fn set_close_behavior<R: Runtime>(
+    app: AppHandle<R>,
+    close_behavior: CloseBehavior,
+) -> Result<CloseBehavior, String> {
     let prefs = AppPrefs { close_behavior };
     save_app_prefs(&app, &prefs)?;
     Ok(close_behavior)
@@ -1847,7 +2194,11 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 fn matching_release_asset(assets: &[GithubAsset]) -> Option<&GithubAsset> {
     #[cfg(target_os = "macos")]
     {
-        let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x64" };
+        let arch = if cfg!(target_arch = "aarch64") {
+            "aarch64"
+        } else {
+            "x64"
+        };
         return assets.iter().find(|asset| {
             let name = asset.name.to_ascii_lowercase();
             name.contains("macos") && name.contains(arch) && name.ends_with(".dmg")
@@ -1868,7 +2219,8 @@ fn matching_release_asset(assets: &[GithubAsset]) -> Option<&GithubAsset> {
 
 #[tauri::command]
 async fn check_for_update() -> Result<UpdateInfo, String> {
-    const LATEST_URL: &str = "https://api.github.com/repos/Auto-Wallet/auto-desktop/releases/latest";
+    const LATEST_URL: &str =
+        "https://api.github.com/repos/Auto-Wallet/auto-desktop/releases/latest";
     let current = env!("CARGO_PKG_VERSION").to_string();
     let release: GithubRelease = reqwest::Client::new()
         .get(LATEST_URL)
@@ -1904,7 +2256,9 @@ fn normalize_chain_id(id: &str) -> Result<String, String> {
     let s = id.trim();
     let value = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         Some(h) => u64::from_str_radix(h, 16).map_err(|_| format!("invalid chain id '{id}'"))?,
-        None => s.parse::<u64>().map_err(|_| format!("invalid chain id '{id}'"))?,
+        None => s
+            .parse::<u64>()
+            .map_err(|_| format!("invalid chain id '{id}'"))?,
     };
     if value == 0 {
         return Err("chain id must be non-zero".to_string());
@@ -1971,7 +2325,11 @@ fn update_chain<R: Runtime>(app: AppHandle<R>, chain: ChainCfg) -> Result<Vec<Ch
             .ok_or_else(|| format!("network {id} not found"))?;
         existing.name = chain.name;
         existing.rpc = chain.rpc;
-        existing.decimals = if chain.decimals == 0 { 18 } else { chain.decimals };
+        existing.decimals = if chain.decimals == 0 {
+            18
+        } else {
+            chain.decimals
+        };
         if !chain.symbol.trim().is_empty() {
             existing.symbol = chain.symbol;
         }
@@ -2030,7 +2388,11 @@ const WALLETS_DIR: &str = "wallets";
 const LEGACY_KEYSTORE_FILE: &str = "vault.json";
 
 fn wallets_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(WALLETS_DIR))
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(WALLETS_DIR))
 }
 
 /// Path to one wallet's keystore. `id` is our own random hex; still validate it so
@@ -2044,7 +2406,10 @@ fn wallet_file<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<PathBuf, Stri
 
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn read_keystore(path: &Path) -> Result<Option<vault::Keystore>, String> {
@@ -2127,7 +2492,12 @@ fn resolve_app_password<R: Runtime>(
     app: &AppHandle<R>,
     provided: Option<String>,
 ) -> Result<(Zeroizing<String>, Option<Zeroizing<String>>), String> {
-    if let Some(pw) = store_state().lock().unwrap().as_ref().and_then(|s| s.password.clone()) {
+    if let Some(pw) = store_state()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|s| s.password.clone())
+    {
         return Ok((pw, None));
     }
     let pw = provided.ok_or("a password is required to add this wallet")?;
@@ -2225,7 +2595,9 @@ fn vault_status<R: Runtime>(app: AppHandle<R>) -> Result<VaultStatus, String> {
         ),
         None => (
             disk_wallet_infos(&disk),
-            disk.iter().find_map(|k| k.accounts.first()).map(|a| a.address.clone()),
+            disk.iter()
+                .find_map(|k| k.accounts.first())
+                .map(|a| a.address.clone()),
         ),
     };
     Ok(VaultStatus {
@@ -2265,7 +2637,11 @@ fn create_vault<R: Runtime>(
     };
     let address = store_push_wallet(wallet, store_pw);
     push_accounts_changed(&app, Some(&address));
-    Ok(NewVault { id, address, mnemonic })
+    Ok(NewVault {
+        id,
+        address,
+        mnemonic,
+    })
 }
 
 /// Add a wallet from a recovery phrase. Returns the new wallet's id + active address.
@@ -2312,7 +2688,10 @@ fn import_private_key<R: Runtime>(
     let (pw, store_pw) = resolve_app_password(&app, password)?;
     let id = vault::new_wallet_id();
     let label = next_wallet_label(&app)?;
-    let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
+    let metas = vec![vault::AccountMeta {
+        index: 0,
+        address: address.clone(),
+    }];
     let mut ks = vault::seal(&pw, &key_hex, "privkey", metas)?;
     ks.id = id.clone();
     ks.label = label.clone();
@@ -2322,7 +2701,11 @@ fn import_private_key<R: Runtime>(
         id: id.clone(),
         label,
         secret: VaultSecret::PrivateKey,
-        accounts: vec![UnlockedAccount { index: 0, address, signer: Signer::Local(key) }],
+        accounts: vec![UnlockedAccount {
+            index: 0,
+            address,
+            signer: Signer::Local(key),
+        }],
     };
     let address = store_push_wallet(wallet, store_pw);
     push_accounts_changed(&app, Some(&address));
@@ -2350,7 +2733,11 @@ fn boot_load_ledger_only<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .next()
         .map(|a| a.address.clone())
         .unwrap_or_default();
-    *store_state().lock().unwrap() = Some(WalletStore { password: None, wallets, active });
+    *store_state().lock().unwrap() = Some(WalletStore {
+        password: None,
+        wallets,
+        active,
+    });
     Ok(())
 }
 
@@ -2391,7 +2778,11 @@ fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<Strin
         .map(|a| a.address.clone())
         .unwrap_or_default();
     let password = used_password.then(|| Zeroizing::new(password));
-    *store_state().lock().unwrap() = Some(WalletStore { password, wallets, active: active.clone() });
+    *store_state().lock().unwrap() = Some(WalletStore {
+        password,
+        wallets,
+        active: active.clone(),
+    });
     if active.is_empty() {
         return Err("unlock failed".to_string());
     }
@@ -2447,7 +2838,11 @@ fn ledger_addresses(start: u32, count: u32) -> Result<Vec<LedgerAccount>, String
     let rows = ledger::get_addresses(&indices)?;
     Ok(rows
         .into_iter()
-        .map(|(index, path, address)| LedgerAccount { index, path, address })
+        .map(|(index, path, address)| LedgerAccount {
+            index,
+            path,
+            address,
+        })
         .collect())
 }
 
@@ -2459,7 +2854,10 @@ fn connect_ledger<R: Runtime>(app: AppHandle<R>, path: String) -> Result<WalletR
     let address = ledger::get_address(&path)?;
     let id = vault::new_wallet_id();
     let label = next_wallet_label(&app)?;
-    let metas = vec![vault::AccountMeta { index: 0, address: address.clone() }];
+    let metas = vec![vault::AccountMeta {
+        index: 0,
+        address: address.clone(),
+    }];
     let mut ks = vault::ledger_keystore(&path, metas);
     ks.id = id.clone();
     ks.label = label.clone();
@@ -2485,16 +2883,32 @@ fn connect_ledger<R: Runtime>(app: AppHandle<R>, path: String) -> Result<WalletR
 /// wallets. Pushes EIP-1193 `accountsChanged` to open dApps. Returns the address.
 #[tauri::command]
 fn select_account<R: Runtime>(app: AppHandle<R>, address: String) -> Result<String, String> {
-    let address = address.to_lowercase();
+    let address = normalize_evm_address(&address)?;
     {
         let mut guard = store_state().lock().unwrap();
         let store = guard.as_mut().ok_or("wallet is locked")?;
-        let known = store.wallets.iter().flat_map(|w| &w.accounts).any(|a| a.address == address);
+        let known = store
+            .wallets
+            .iter()
+            .flat_map(|w| &w.accounts)
+            .any(|a| a.address == address);
         if !known {
             return Err(format!("unknown account {address}"));
         }
         store.active = address.clone();
     }
+    *exposed_account_state().lock().unwrap() = Some(ExposedAccount::Signer(address.clone()));
+    push_accounts_changed(&app, Some(&address));
+    Ok(address)
+}
+
+/// Expose a public address to dApps without making it a signer. This is used for
+/// watch-only accounts so portfolio dApps (DeBank, scanners, dashboards) can read
+/// the selected address while signing still fails unless the active signer matches.
+#[tauri::command]
+fn expose_dapp_account<R: Runtime>(app: AppHandle<R>, address: String) -> Result<String, String> {
+    let address = normalize_evm_address(&address)?;
+    *exposed_account_state().lock().unwrap() = Some(ExposedAccount::WatchOnly(address.clone()));
     push_accounts_changed(&app, Some(&address));
     Ok(address)
 }
@@ -2521,7 +2935,12 @@ fn add_account<R: Runtime>(app: AppHandle<R>, wallet_id: String) -> Result<Strin
                 return Err("Ledger accounts are added by connecting the device".to_string())
             }
         };
-        let next_index = w.accounts.iter().map(|a| a.index).max().map_or(0, |m| m + 1);
+        let next_index = w
+            .accounts
+            .iter()
+            .map(|a| a.index)
+            .max()
+            .map_or(0, |m| m + 1);
         let (key, address) = vault::derive_account(&mnemonic, next_index)?;
         w.accounts.push(UnlockedAccount {
             index: next_index,
@@ -2531,7 +2950,10 @@ fn add_account<R: Runtime>(app: AppHandle<R>, wallet_id: String) -> Result<Strin
         let metas = w
             .accounts
             .iter()
-            .map(|a| vault::AccountMeta { index: a.index, address: a.address.clone() })
+            .map(|a| vault::AccountMeta {
+                index: a.index,
+                address: a.address.clone(),
+            })
             .collect::<Vec<_>>();
         (address, metas)
     };
@@ -2614,7 +3036,9 @@ fn delete_wallet<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String
 fn push_accounts_changed<R: Runtime>(app: &AppHandle<R>, address: Option<&str>) {
     let accounts = address.map(|a| vec![a]).unwrap_or_default();
     let payload = serde_json::to_string(&accounts).unwrap_or_else(|_| "[]".into());
-    let js = format!("window.__autoWalletPush && window.__autoWalletPush('accountsChanged', {payload});");
+    let js = format!(
+        "window.__autoWalletPush && window.__autoWalletPush('accountsChanged', {payload});"
+    );
     for (label, webview) in app.webviews() {
         if label.starts_with("dapp-") {
             let _ = webview.eval(js.clone());
@@ -2671,6 +3095,8 @@ fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Diagnostic beacon endpoint only. The wallet bridge does NOT use this
         // scheme: WebKit blocks cross-origin `fetch()` to custom schemes (one-way
         // subresource loads only), so dApps talk to the `wallet_request` command
@@ -2682,7 +3108,10 @@ pub fn run() {
                 .get("origin")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("<none>");
-            println!("[AutoDesktop] adipc beacon: {}  origin={origin}", request.uri());
+            println!(
+                "[AutoDesktop] adipc beacon: {}  origin={origin}",
+                request.uri()
+            );
             tauri::http::Response::builder()
                 .status(200)
                 .header("Access-Control-Allow-Origin", "*")
@@ -2697,6 +3126,7 @@ pub fn run() {
             get_pending_requests,
             open_dapp,
             set_dapp_bounds,
+            reload_dapp,
             hide_dapp,
             close_dapp,
             open_external_url,
@@ -2723,6 +3153,7 @@ pub fn run() {
             ledger_addresses,
             connect_ledger,
             select_account,
+            expose_dapp_account,
             add_account,
             rename_wallet,
             delete_wallet
@@ -2751,11 +3182,8 @@ pub fn run() {
 
             // Shell webview (local, trusted): our React UI, fills the whole window.
             let shell_builder = WebviewBuilder::new("shell", WebviewUrl::App("index.html".into()));
-            let shell = window.add_child(
-                shell_builder,
-                LogicalPosition::new(0.0, 0.0),
-                startup_size,
-            )?;
+            let shell =
+                window.add_child(shell_builder, LogicalPosition::new(0.0, 0.0), startup_size)?;
 
             // dApp tab webviews (remote, untrusted) are created on demand, one per
             // open tab, by `open_dapp` (see create_dapp_webview). Each is labeled
@@ -2771,25 +3199,20 @@ pub fn run() {
             let shell_for_resize = shell.clone();
             let window_for_close = window.clone();
             let app_for_close = app.handle().clone();
-            window.on_window_event(move |event| {
-                match event {
-                    tauri::WindowEvent::Resized(size) => {
-                        let scale = shell_for_resize
-                            .window()
-                            .scale_factor()
-                            .unwrap_or(1.0);
-                        let logical = size.to_logical::<f64>(scale);
-                        let _ = shell_for_resize
-                            .set_size(LogicalSize::new(logical.width, logical.height));
-                    }
-                    tauri::WindowEvent::CloseRequested { api, .. } => {
-                        if load_app_prefs(&app_for_close).close_behavior == CloseBehavior::Hide {
-                            api.prevent_close();
-                            let _ = window_for_close.hide();
-                        }
-                    }
-                    _ => {}
+            window.on_window_event(move |event| match event {
+                tauri::WindowEvent::Resized(size) => {
+                    let scale = shell_for_resize.window().scale_factor().unwrap_or(1.0);
+                    let logical = size.to_logical::<f64>(scale);
+                    let _ =
+                        shell_for_resize.set_size(LogicalSize::new(logical.width, logical.height));
                 }
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if load_app_prefs(&app_for_close).close_behavior == CloseBehavior::Hide {
+                        api.prevent_close();
+                        let _ = window_for_close.hide();
+                    }
+                }
+                _ => {}
             });
 
             Ok(())
@@ -3069,6 +3492,7 @@ mod e2e {
                 get_pending_requests,
                 open_dapp,
                 set_dapp_bounds,
+                reload_dapp,
                 hide_dapp,
                 close_dapp,
                 open_external_url,
@@ -3090,6 +3514,7 @@ mod e2e {
                 ledger_addresses,
                 connect_ledger,
                 select_account,
+                expose_dapp_account,
                 add_account,
                 rename_wallet,
                 delete_wallet
@@ -3122,7 +3547,11 @@ mod e2e {
     /// The trusted *approval* webview (local) — granted the approve/reject/list
     /// commands by capabilities/approval.json.
     fn approval_webview(app: &'static tauri::App<MockRuntime>) -> WebviewWindow<MockRuntime> {
-        webview(app, "approval", tauri::WebviewUrl::App("index.html?view=approval".into()))
+        webview(
+            app,
+            "approval",
+            tauri::WebviewUrl::App("index.html?view=approval".into()),
+        )
     }
 
     /// Drive any command through the real IPC pipeline from a given webview.
@@ -3149,7 +3578,11 @@ mod e2e {
 
     /// Convenience for the dApp bridge command specifically.
     fn call(wv: &WebviewWindow<MockRuntime>, method: &str, params: Value) -> Result<Value, Value> {
-        invoke(wv, "wallet_request", json!({ "method": method, "params": params }))
+        invoke(
+            wv,
+            "wallet_request",
+            json!({ "method": method, "params": params }),
+        )
     }
 
     /// Serialize every test that touches process-global wallet state and reset to a
@@ -3160,6 +3593,7 @@ mod e2e {
         static LOCK: Mutex<()> = Mutex::new(());
         let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         pending().lock().unwrap().clear();
+        *exposed_account_state().lock().unwrap() = None;
         *current_chain().lock().unwrap() = "0x1".into();
         super::install_unlocked_vault(TEST_MNEMONIC, 2).expect("unlock test vault");
         g
@@ -3178,8 +3612,7 @@ mod e2e {
 
     /// Recover the signer address from an EIP-191 personal_sign signature.
     fn recover_personal_sign(message: &[u8], sig65: &[u8]) -> String {
-        let mut preimage =
-            format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
+        let mut preimage = format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
         preimage.extend_from_slice(message);
         let digest = Keccak256::digest(&preimage);
         let signature = k256::ecdsa::Signature::from_slice(&sig65[..64]).expect("valid sig");
@@ -3195,7 +3628,10 @@ mod e2e {
 
         // Wallet-routed reads come back through the full invoke→command→handler path.
         // eth_accounts now returns the UNLOCKED vault's active account (Anvil #0).
-        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([SPIKE_ACCOUNT]));
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([SPIKE_ACCOUNT])
+        );
         assert_eq!(call(&wv, "eth_chainId", json!([])).unwrap(), json!("0x1"));
         assert_eq!(call(&wv, "net_version", json!([])).unwrap(), json!("1"));
 
@@ -3212,15 +3648,31 @@ mod e2e {
         // Switching chain is reflected by a subsequent eth_chainId — proving the
         // command actually mutated the shared current-chain state.
         assert_eq!(
-            call(&wv, "wallet_switchEthereumChain", json!([{ "chainId": "0x2105" }])).unwrap(),
+            call(
+                &wv,
+                "wallet_switchEthereumChain",
+                json!([{ "chainId": "0x2105" }])
+            )
+            .unwrap(),
             Value::Null
         );
-        assert_eq!(call(&wv, "eth_chainId", json!([])).unwrap(), json!("0x2105"));
+        assert_eq!(
+            call(&wv, "eth_chainId", json!([])).unwrap(),
+            json!("0x2105")
+        );
         assert_eq!(call(&wv, "net_version", json!([])).unwrap(), json!("8453"));
 
         // Unknown chain is rejected, current chain unchanged.
-        assert!(call(&wv, "wallet_switchEthereumChain", json!([{ "chainId": "0xbadbad" }])).is_err());
-        assert_eq!(call(&wv, "eth_chainId", json!([])).unwrap(), json!("0x2105"));
+        assert!(call(
+            &wv,
+            "wallet_switchEthereumChain",
+            json!([{ "chainId": "0xbadbad" }])
+        )
+        .is_err());
+        assert_eq!(
+            call(&wv, "eth_chainId", json!([])).unwrap(),
+            json!("0x2105")
+        );
     }
 
     /// A LOCKED wallet exposes no account and refuses to sign UP-FRONT — no approval
@@ -3260,7 +3712,10 @@ mod e2e {
 
         let app = build_app();
         let wv = dapp_webview(app);
-        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([SPIKE_ACCOUNT]));
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([SPIKE_ACCOUNT])
+        );
 
         // add_account returns its refusal BEFORE any keystore I/O, so this stays
         // disk-free. The error must name the real cause, not a silent no-op.
@@ -3304,19 +3759,27 @@ mod e2e {
         );
 
         // The new wallet's account is active, and dApps see exactly that address.
-        assert_eq!(super::active_account_address().as_deref(), Some(addr3.as_str()));
+        assert_eq!(
+            super::active_account_address().as_deref(),
+            Some(addr3.as_str())
+        );
         let wv = dapp_webview(app);
-        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([addr3]));
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([addr3])
+        );
         // The active signing key recovers to Anvil #3 (the second wallet's key).
         let active_addr =
-            super::with_active_key(|k| super::address_from_verifying_key(k.verifying_key())).unwrap();
+            super::with_active_key(|k| super::address_from_verifying_key(k.verifying_key()))
+                .unwrap();
         assert_eq!(active_addr, addr3);
 
         // Switch back to the FIRST wallet's account (Anvil #0) by address — the active
         // key must now be Anvil #0's, proving selection spans wallets.
         super::select_account(app.handle().clone(), SPIKE_ACCOUNT.to_string()).unwrap();
         let active_addr =
-            super::with_active_key(|k| super::address_from_verifying_key(k.verifying_key())).unwrap();
+            super::with_active_key(|k| super::address_from_verifying_key(k.verifying_key()))
+                .unwrap();
         assert_eq!(active_addr, SPIKE_ACCOUNT);
 
         // Deleting the second wallet (its keystore file doesn't exist → disk no-op)
@@ -3324,7 +3787,59 @@ mod e2e {
         super::delete_wallet(app.handle().clone(), "w-2".to_string()).unwrap();
         let active = super::active_account_address().expect("an account remains active");
         assert_eq!(active, SPIKE_ACCOUNT);
-        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([SPIKE_ACCOUNT]));
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([SPIKE_ACCOUNT])
+        );
+    }
+
+    /// Watch-only addresses can be exposed to dApps for read-only portfolio views
+    /// (DeBank, explorers, dashboards), but they never become the active signer.
+    #[test]
+    fn e2e_watch_only_account_is_visible_to_dapps_without_signing_key() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let shell = shell_webview(app);
+        let wv = dapp_webview(app);
+        let watch = "0x2222222222222222222222222222222222222222";
+
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([SPIKE_ACCOUNT])
+        );
+        invoke(&shell, "expose_dapp_account", json!({ "address": watch }))
+            .expect("shell can expose a watch-only address");
+
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([watch])
+        );
+        assert_eq!(call(&wv, "eth_coinbase", json!([])).unwrap(), json!(watch));
+
+        let active_addr =
+            super::with_active_key(|k| super::address_from_verifying_key(k.verifying_key()))
+                .unwrap();
+        assert_eq!(active_addr, SPIKE_ACCOUNT);
+
+        invoke(&shell, "select_account", json!({ "address": SPIKE_ACCOUNT }))
+            .expect("shell can switch back to a signer");
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([SPIKE_ACCOUNT])
+        );
+        invoke(&shell, "expose_dapp_account", json!({ "address": watch }))
+            .expect("shell can expose the watch-only address again");
+
+        super::lock_vault();
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([watch])
+        );
+        let err = call(&wv, "personal_sign", json!(["0x48656c6c6f", watch])).unwrap_err();
+        assert!(
+            err.as_str().unwrap_or_default().contains("locked"),
+            "expected signing to remain unavailable, got: {err}"
+        );
     }
 
     /// A Ledger account exposes its address to dApps WITHOUT any in-process key, and
@@ -3339,7 +3854,10 @@ mod e2e {
 
         let wv = dapp_webview(build_app());
         // The device address is exposed to dApps exactly like a software account.
-        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([ledger_addr]));
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([ledger_addr])
+        );
 
         // There is NO in-process key: the software-signing path must refuse loudly
         // (the real signing path routes to the device, which needs hardware).
@@ -3375,14 +3893,25 @@ mod e2e {
             json!(["0x0000000000000000000000000000000000000000", "latest"]),
         )
         .unwrap();
-        assert!(bal.as_str().unwrap().starts_with("0x"), "balance not hex: {bal}");
+        assert!(
+            bal.as_str().unwrap().starts_with("0x"),
+            "balance not hex: {bal}"
+        );
 
         // Switch to Base, then the SAME method forwards to a DIFFERENT node.
-        call(&wv, "wallet_switchEthereumChain", json!([{ "chainId": "0x2105" }])).unwrap();
+        call(
+            &wv,
+            "wallet_switchEthereumChain",
+            json!([{ "chainId": "0x2105" }]),
+        )
+        .unwrap();
         let base_bn = call(&wv, "eth_blockNumber", json!([])).unwrap();
         let bs = base_bn.as_str().expect("hex string");
         let bnum = u64::from_str_radix(bs.trim_start_matches("0x"), 16).expect("hex");
-        assert!(bnum > 10_000_000, "base block implausibly low: {bnum} ({bs})");
+        assert!(
+            bnum > 10_000_000,
+            "base block implausibly low: {bnum} ({bs})"
+        );
 
         *current_chain().lock().unwrap() = "0x1".into();
     }
@@ -3406,7 +3935,11 @@ mod e2e {
         // personal_sign blocks on approval → run it on a worker thread.
         let dapp_for_thread = dapp.clone();
         let signer = std::thread::spawn(move || {
-            call(&dapp_for_thread, "personal_sign", json!([message_hex, account]))
+            call(
+                &dapp_for_thread,
+                "personal_sign",
+                json!([message_hex, account]),
+            )
         });
 
         // Approve from the approval webview once the request is registered.
@@ -3415,7 +3948,10 @@ mod e2e {
         let pending_list = invoke(&approval, "get_pending_requests", json!({})).unwrap();
         assert_eq!(pending_list.as_array().unwrap().len(), 1);
         assert_eq!(pending_list[0]["summary"], json!(message_text)); // decoded for display
-        assert_eq!(pending_list[0]["origin"], json!("https://metamask.github.io"));
+        assert_eq!(
+            pending_list[0]["origin"],
+            json!("https://metamask.github.io")
+        );
         // …then approves.
         invoke(&approval, "approve_request", json!({ "id": id })).expect("approve ok");
 
@@ -3440,7 +3976,11 @@ mod e2e {
 
         let dapp_for_thread = dapp.clone();
         let signer = std::thread::spawn(move || {
-            call(&dapp_for_thread, "personal_sign", json!(["0x48656c6c6f", SPIKE_ACCOUNT]))
+            call(
+                &dapp_for_thread,
+                "personal_sign",
+                json!(["0x48656c6c6f", SPIKE_ACCOUNT]),
+            )
         });
 
         let id = wait_for_pending_id();
@@ -3496,7 +4036,11 @@ mod e2e {
 
         let dapp_for_thread = dapp.clone();
         let signer = std::thread::spawn(move || {
-            call(&dapp_for_thread, "eth_signTypedData_v4", json!([SPIKE_ACCOUNT, typed_str]))
+            call(
+                &dapp_for_thread,
+                "eth_signTypedData_v4",
+                json!([SPIKE_ACCOUNT, typed_str]),
+            )
         });
 
         let id = wait_for_pending_id();
@@ -3612,11 +4156,22 @@ mod e2e {
         let dapp = dapp_webview(app);
 
         for (cmd, args) in [
-            ("open_dapp", json!({ "label": "dapp-9", "url": "https://evil.example", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 })),
-            ("set_dapp_bounds", json!({ "label": "dapp-9", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 })),
+            (
+                "open_dapp",
+                json!({ "label": "dapp-9", "url": "https://evil.example", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }),
+            ),
+            (
+                "set_dapp_bounds",
+                json!({ "label": "dapp-9", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }),
+            ),
+            ("reload_dapp", json!({ "label": "dapp-9" })),
             ("hide_dapp", json!({ "label": "dapp-9" })),
             ("close_dapp", json!({ "label": "dapp-9" })),
             ("set_active_chain", json!({ "chainId": "0x1" })),
+            (
+                "expose_dapp_account",
+                json!({ "address": "0x2222222222222222222222222222222222222222" }),
+            ),
         ] {
             let err = invoke(&dapp, cmd, args).unwrap_err();
             let msg = err.as_str().unwrap_or_default();
@@ -3635,7 +4190,11 @@ mod e2e {
         let app = build_app();
         let shell = shell_webview(app);
 
-        for bad in ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x"] {
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,x",
+        ] {
             let err = invoke(
                 &shell,
                 "open_dapp",
@@ -3643,13 +4202,15 @@ mod e2e {
             )
             .unwrap_err();
             assert!(
-                err.as_str().unwrap_or_default().contains("refusing non-http"),
+                err.as_str()
+                    .unwrap_or_default()
+                    .contains("refusing non-http"),
                 "expected scheme rejection for {bad}, got: {err}"
             );
         }
     }
 
-    /// open_dapp / hide_dapp / close_dapp reject labels that aren't `dapp-<id>`,
+    /// open_dapp / reload_dapp / hide_dapp / close_dapp reject labels that aren't `dapp-<id>`,
     /// so these shell commands can never target the trusted shell/approval webviews.
     #[test]
     fn e2e_dapp_controls_reject_foreign_labels() {
@@ -3663,7 +4224,9 @@ mod e2e {
             )
             .unwrap_err();
             assert!(
-                err.as_str().unwrap_or_default().contains("invalid dapp label"),
+                err.as_str()
+                    .unwrap_or_default()
+                    .contains("invalid dapp label"),
                 "expected label rejection for {label:?}, got: {err}"
             );
         }
@@ -3708,6 +4271,9 @@ mod e2e {
             json!({ "label": "dapp-0", "x": 232.0, "y": 52.0, "w": 1200.0, "h": 800.0 }),
         )
         .expect("shell set_dapp_bounds should succeed");
+
+        invoke(&shell, "reload_dapp", json!({ "label": "dapp-0" }))
+            .expect("shell reload_dapp should succeed");
 
         invoke(&shell, "hide_dapp", json!({ "label": "dapp-0" }))
             .expect("shell hide_dapp should succeed");

@@ -82,12 +82,34 @@ function deriveName(url: string): string {
   return core.charAt(0).toUpperCase() + core.slice(1);
 }
 
+function isIpHost(hostname: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":");
+}
+
+export function isDappUrlInput(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) return false;
+  try {
+    const withScheme = /^https?:\/\//i.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+    const u = new URL(withScheme);
+    return (
+      u.hostname === "localhost" ||
+      u.hostname.includes(".") ||
+      isIpHost(u.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Normalize user input to a URL; throws on something that isn't a web address. */
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   const u = new URL(withScheme); // throws on garbage
-  if (!u.hostname.includes(".")) throw new Error(`Not a valid URL: ${input}`);
+  if (!isDappUrlInput(input)) throw new Error(`Not a valid URL: ${input}`);
   return u.origin + (u.pathname === "/" ? "" : u.pathname);
 }
 

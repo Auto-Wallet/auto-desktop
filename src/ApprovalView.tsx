@@ -166,7 +166,20 @@ function ApprovalView() {
           setPrioError(true);
           return;
         }
-        args = { id: req.id, maxFeePerGas, maxPriorityFeePerGas };
+        const balanceChanges =
+          sim?.status === "success" && sim.changes.length > 0
+            ? sim.changes.map((c) => ({
+                symbol: c.symbol,
+                formattedDelta: c.formattedDelta,
+                direction: c.direction,
+              }))
+            : undefined;
+        args = {
+          id: req.id,
+          maxFeePerGas,
+          maxPriorityFeePerGas,
+          balanceChanges,
+        };
       }
       setBusy(true);
       try {
@@ -176,7 +189,7 @@ function ApprovalView() {
         setBusy(false);
       }
     },
-    [refresh, maxFeeGwei, maxPrioGwei],
+    [refresh, maxFeeGwei, maxPrioGwei, sim],
   );
 
   if (!current) {

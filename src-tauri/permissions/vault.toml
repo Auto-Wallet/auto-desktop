@@ -53,6 +53,11 @@ description = "Allow the shell to switch the active HD account and push accounts
 commands.allow = ["select_account"]
 
 [[permission]]
+identifier = "allow-expose-dapp-account"
+description = "Allow the shell to expose a public watch-only address to dApps without signing."
+commands.allow = ["expose_dapp_account"]
+
+[[permission]]
 identifier = "allow-add-account"
 description = "Allow the shell to derive and persist the next HD account."
 commands.allow = ["add_account"]

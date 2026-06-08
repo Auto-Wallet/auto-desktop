@@ -20,6 +20,11 @@ export type ActivityRecord = {
   assetDecimals?: number | null;
   amount?: string | null;
   tokenAddress?: string | null;
+  balanceChanges?: {
+    symbol: string;
+    formattedDelta: string;
+    direction: "in" | "out" | string;
+  }[];
   status?: "submitted" | "confirmed" | "failed" | string | null;
   timestamp: number;
 };

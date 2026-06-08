@@ -8,8 +8,17 @@ import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
 import { Avatar } from "../lib/ui";
 import { toast } from "../lib/toast";
+import { ChainIcon } from "../lib/ChainIcon";
 import { faviconOf, hostOf, type Dapp } from "../lib/dapps";
-import { dappLabel, hideDapp, isTauri, openDapp, rectOf, setDappBounds } from "../lib/platform";
+import {
+  dappLabel,
+  hideDapp,
+  isTauri,
+  openDapp,
+  rectOf,
+  reloadDapp,
+  setDappBounds,
+} from "../lib/platform";
 
 export type Tab = { id: string; dapp: Dapp };
 
@@ -32,6 +41,8 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
 
   const [focus, setFocus] = useState(false);
   const [url, setUrl] = useState(dapp.url);
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [reloading, setReloading] = useState(false);
 
   // A topbar dropdown (chain / account) is drawn by the SHELL, but the dApp's
   // native child webview renders ON TOP of the shell within the content rect — so a
@@ -67,8 +78,9 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   }, [native, label, dapp.url]);
 
   // Native child webviews render above the shell, so a shell dropdown cannot truly
-  // float over the dApp webview. While a menu is open, keep the page visible below
-  // the menu by cropping only the top strip that the menu occupies.
+  // float over the dApp webview. While a top-right menu is open, keep the dApp at
+  // its original vertical position and crop only the right strip behind the menu.
+  // Cropping the top strip made the page look like it had been pushed downward.
   useEffect(() => {
     if (!native) return;
     const el = contentRef.current;
@@ -79,13 +91,33 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
         return;
       }
       const full = rectOf(el);
-      const menu = document.querySelector(".chain-menu") as HTMLElement | null;
-      const menuBottom = menu?.getBoundingClientRect().bottom ?? full.y;
-      const top = Math.min(full.y + full.h - 1, Math.max(full.y, menuBottom + 8));
-      void setDappBounds(label, { x: full.x, y: top, w: full.w, h: full.y + full.h - top });
+      const menus = Array.from(document.querySelectorAll<HTMLElement>(".chain-menu"));
+      const overlappingMenus = menus
+        .map((menu) => menu.getBoundingClientRect())
+        .filter((menu) => menu.bottom > full.y && menu.left < full.x + full.w);
+      const menuLeft = overlappingMenus.length
+        ? Math.min(...overlappingMenus.map((menu) => menu.left))
+        : full.x + full.w;
+      const width = Math.max(1, Math.min(full.w, menuLeft - full.x - 8));
+      void setDappBounds(label, { x: full.x, y: full.y, w: width, h: full.h });
     });
     return () => cancelAnimationFrame(id);
   }, [menuOpen, native, label, dapp.url]);
+
+  async function handleReload() {
+    if (reloading) return;
+    setReloading(true);
+    try {
+      if (native) {
+        await reloadDapp(label);
+      } else {
+        setReloadNonce((n) => n + 1);
+      }
+      window.setTimeout(() => setReloading(false), 800);
+    } catch {
+      setReloading(false);
+    }
+  }
 
   return (
     <div className="browser">
@@ -93,7 +125,12 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
         <button className="icon-btn" onClick={onBack} title={t("browser.back")}>
           <Icon name="arrowLeft" size={18} />
         </button>
-        <button className="icon-btn" onClick={() => toast(t("browser.reloaded"))} title={t("browser.reload")}>
+        <button
+          className={`icon-btn browser-reload${reloading ? " loading" : ""}`}
+          onClick={() => void handleReload()}
+          title={t("browser.reload")}
+          disabled={reloading}
+        >
           <Icon name="refresh" size={17} />
         </button>
 
@@ -129,7 +166,13 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
           <div className="native-placeholder" />
         ) : (
           <>
-            <iframe className="dapp-frame" src={dapp.url} title={dapp.name} />
+            <iframe
+              key={reloadNonce}
+              className="dapp-frame"
+              src={dapp.url}
+              title={dapp.name}
+              onLoad={() => setReloading(false)}
+            />
             <div className="frame-note">
               <Icon name="shieldCheck" size={15} /> In the desktop app, <b>{hostOf(dapp.url)}</b> loads in a
               native webview with <code>window.ethereum</code> injected.
@@ -228,7 +271,7 @@ function ChainChip({ chain, chains, onMenu }: { chain: Chain; chains: Chain[]; o
   return (
     <div className="chain-wrap">
       <button className="chain-chip" onClick={() => setOpen((o) => !o)}>
-        <span className="chain-dot" style={{ width: 11, height: 11, background: chain.color }} />
+        <ChainIcon chain={chain} size={16} />
         {chain.name}
         <Icon name="chevronD" size={14} />
       </button>
@@ -245,7 +288,7 @@ function ChainChip({ chain, chains, onMenu }: { chain: Chain; chains: Chain[]; o
                   setOpen(false);
                 }}
               >
-                <span className="chain-dot" style={{ width: 18, height: 18, background: c.color }} />
+                <ChainIcon chain={c} size={20} />
                 <span className="nm">{c.name}</span>
                 {c.id === chain.id && (
                   <span className="check">

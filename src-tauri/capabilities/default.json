@@ -6,8 +6,12 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "process:allow-restart",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
     "allow-open-dapp",
     "allow-set-dapp-bounds",
+    "allow-reload-dapp",
     "allow-hide-dapp",
     "allow-close-dapp",
     "allow-open-external-url",
@@ -33,6 +37,7 @@
     "allow-ledger-addresses",
     "allow-connect-ledger",
     "allow-select-account",
+    "allow-expose-dapp-account",
     "allow-add-account",
     "allow-rename-wallet",
     "allow-delete-wallet"

@@ -41,9 +41,9 @@ The hard technical risks are retired (multi-webview, provider injection, scoped 
 - **Ledger done (hardware-verified)** — the v1 non-negotiable. A Rust `hidapi` transport speaks the Ledger Ethereum-app APDUs directly (no WebHID, no `@ledgerhq` JS); a Ledger account needs no password and signs on the device. Connecting and an on-device `eth_sendTransaction` were confirmed end-to-end on a real device.
 - **Feature ② mostly done** — the dApps page has cards, search, pin, and manual add.
 - **Feature ③ working** — the embedded browser loads real dApps with live RPC forwarding (URL bar is read-only / not yet editable).
-- **Feature ⑥ partly done** — Settings has full network management (built-in + custom chains, editable RPC/params, persisted), language, and about; the updater is still a stub.
+- **Feature ⑥ mostly done** — Settings has full network management (built-in + custom chains, editable RPC/params, persisted), language, about, and a Tauri updater-backed manual check/install flow.
 - **Feature ① partly done** — the Wallet page shows multi-chain balances and switches addresses; **custom tokens** and the **collapsible sidebar** are not built yet.
 
-**Biggest remaining gaps for v1:** **custom ERC-20 tokens** on the Wallet page, the **collapsible sidebar / editable URL bar**, **multi-wallet** (multiple independent secrets coexisting — today it's a single vault), and a **real updater** (the Settings check is a stub). Keep weighing every addition against the small-installer / minimal-features principle.
+**Biggest remaining gaps for v1:** **custom ERC-20 tokens** on the Wallet page, the **collapsible sidebar / editable URL bar**, and **multi-wallet** (multiple independent secrets coexisting — today it's a single vault). Keep weighing every addition against the small-installer / minimal-features principle.
 
 (Live build status / per-slice progress lives in the project memory roadmap, not here.)

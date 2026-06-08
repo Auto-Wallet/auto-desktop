@@ -27,6 +27,14 @@
   transition: border-color 0.13s, box-shadow 0.13s;
   cursor: text;
 }
+.browser-reload.loading svg {
+  animation: browser-spin 0.8s linear infinite;
+}
+@keyframes browser-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .url-bar:hover {
   border-color: var(--line-3);
 }

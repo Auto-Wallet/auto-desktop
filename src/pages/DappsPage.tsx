@@ -4,6 +4,7 @@ import {
   addDapp,
   faviconOf,
   hostOf,
+  isDappUrlInput,
   removeDapp,
   renameDapp,
   togglePin,
@@ -31,7 +32,7 @@ export default function DappsPage({ onOpen }: { onOpen?: (dapp: Dapp) => void })
 
   const pinned = filtered.filter((d) => d.pinned).sort((a, b) => a.name.localeCompare(b.name));
   const rest = filtered.filter((d) => !d.pinned).sort((a, b) => a.name.localeCompare(b.name));
-  const looksLikeUrl = /\.[a-z]{2,}/i.test(query) && filtered.length === 0;
+  const canAddQuery = isDappUrlInput(query) && filtered.length === 0;
 
   function submitAdd() {
     const value = query.trim();
@@ -61,10 +62,10 @@ export default function DappsPage({ onOpen }: { onOpen?: (dapp: Dapp) => void })
               setAddError(null);
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && looksLikeUrl) submitAdd();
+              if (e.key === "Enter" && canAddQuery) submitAdd();
             }}
           />
-          {looksLikeUrl && (
+          {canAddQuery && (
             <button className="btn btn-primary btn-sm" onClick={submitAdd}>
               {t("dapps.add")}
             </button>
@@ -95,9 +96,15 @@ export default function DappsPage({ onOpen }: { onOpen?: (dapp: Dapp) => void })
           {rest.length === 0 && pinned.length === 0 ? (
             <div className="empty">
               {query ? (
-                <>
-                  No matches. Press <b>{t("dapps.add")}</b> to save “{query}”.
-                </>
+                <div className="empty-add">
+                  <span>{t("dapps.noMatches")}</span>
+                  {canAddQuery && (
+                    <button className="btn btn-primary btn-sm" onClick={submitAdd}>
+                      <Icon name="plus" size={14} />
+                      {t("dapps.saveQuery", { query })}
+                    </button>
+                  )}
+                </div>
               ) : (
                 t("dapps.empty")
               )}
