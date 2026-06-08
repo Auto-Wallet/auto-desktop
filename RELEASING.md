@@ -8,7 +8,6 @@ tag is pushed. Each release publishes standalone clients with OS/arch in the nam
 | macOS   | `AutoDesktop_<ver>_macos_aarch64.dmg`  | Apple Silicon, signed + notarized       |
 | macOS   | `AutoDesktop_<ver>_macos_x64.dmg`      | Intel, signed + notarized               |
 | Windows | `AutoDesktop_<ver>_windows_x64.zip`    | Standalone `.exe` (WebView2 from system)|
-| Linux   | `AutoDesktop_<ver>_linux_amd64.deb`    | Debian/Ubuntu package                   |
 
 ## Cut a release
 

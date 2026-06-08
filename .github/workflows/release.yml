@@ -1,10 +1,9 @@
 name: Release
 
-# Push a `v*` tag (e.g. `v0.1.0`) to build standalone clients for every OS and
-# publish them to the matching GitHub Release:
+# Push a `v*` tag (e.g. `v0.1.0`) to build standalone clients and publish them to
+# the matching GitHub Release:
 #   - macOS : signed + notarized .dmg for Apple Silicon (aarch64) and Intel (x64)
 #   - Windows: standalone .zip (WebView2 runtime is bootstrapped from the system)
-#   - Linux : .deb (amd64)
 # Asset names embed the OS + arch so they are unambiguous on the release page.
 on:
   push:
@@ -154,62 +153,9 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  build-linux:
-    name: Linux (amd64)
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            librsvg2-dev \
-            libayatana-appindicator3-dev \
-            patchelf
-
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
-
-      - name: Install dependencies
-        run: |
-          set -euxo pipefail
-          (cd auto-wallet-core && bun link)
-          bun install
-          test -e node_modules/auto-wallet-core/package.json
-
-      - name: Build .deb
-        run: bun run tauri build --bundles deb
-
-      - name: Stage artifact
-        run: |
-          set -euxo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          SRC=$(ls src-tauri/target/release/bundle/deb/*.deb | head -1)
-          mkdir -p dist
-          cp "$SRC" "dist/AutoDesktop_${VERSION}_linux_amd64.deb"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-amd64
-          path: dist/*.deb
-          if-no-files-found: error
-
-  # ---------------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -225,6 +171,5 @@ jobs:
           files: |
             dist/*.dmg
             dist/*.zip
-            dist/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
