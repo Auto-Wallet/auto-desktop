@@ -553,6 +553,14 @@ struct ActivityBalanceChange {
     direction: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PortfolioSnapshot {
+    address: String,
+    total_usd: f64,
+    timestamp: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubRelease {
     tag_name: String,
@@ -1833,22 +1841,85 @@ fn close_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String
     Ok(())
 }
 
-/// Open an http(s) URL in the OS default browser. Granted to the dapp webview so
-/// that "open in a new window" links (window.open / target=_blank) — which
-/// WKWebView can't satisfy in-app — land in the user's real browser. SECURITY:
-/// only http/https is honored; a dApp can't coerce us into file://, custom
-/// schemes, or shell execution.
+#[derive(Serialize, Clone)]
+struct DappNavigationEvent {
+    label: String,
+    url: String,
+}
+
+fn registrable_site(host: &str) -> String {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host == "localhost" || host.parse::<std::net::IpAddr>().is_ok() {
+        return host;
+    }
+    let parts: Vec<&str> = host.split('.').filter(|part| !part.is_empty()).collect();
+    if parts.len() <= 2 {
+        return host;
+    }
+    let second_last = parts[parts.len() - 2];
+    let last = parts[parts.len() - 1];
+    let public_second_level = matches!(second_last, "co" | "com" | "net" | "org" | "gov" | "edu");
+    if public_second_level && last.len() == 2 && parts.len() >= 3 {
+        parts[parts.len() - 3..].join(".")
+    } else {
+        parts[parts.len() - 2..].join(".")
+    }
+}
+
+fn is_same_registrable_site(a: &tauri::Url, b: &tauri::Url) -> bool {
+    match (a.host_str(), b.host_str()) {
+        (Some(a_host), Some(b_host)) => registrable_site(a_host) == registrable_site(b_host),
+        _ => false,
+    }
+}
+
+/// Open an http(s) URL from a webview. For dApp-initiated "new window" intents,
+/// same-site subdomains (e.g. www.pendle.finance -> app.pendle.finance) navigate
+/// in the current dApp webview so the injected wallet stays available. Cross-site
+/// links still land in the OS default browser. SECURITY: only http/https is
+/// honored; a dApp can't coerce us into file://, custom schemes, or shell
+/// execution.
 #[tauri::command]
-fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
+fn open_external_url<R: Runtime>(
+    app: AppHandle<R>,
+    webview: tauri::Webview<R>,
+    url: String,
+) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let u = url.trim();
-    let lower = u.to_ascii_lowercase();
-    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+    let u: tauri::Url = url
+        .trim()
+        .parse()
+        .map_err(|e| format!("invalid url {url}: {e}"))?;
+    if !matches!(u.scheme(), "http" | "https") {
         return Err(format!("refusing to open non-http(s) url: {u}"));
     }
+
+    let label = webview.label().to_string();
+    if label.starts_with("dapp-") {
+        if let Ok(current) = webview.url() {
+            if is_same_registrable_site(&current, &u) {
+                let target = u.to_string();
+                let js_target =
+                    serde_json::to_string(&target).map_err(|e| format!("encode url: {e}"))?;
+                webview
+                    .eval(format!("window.location.assign({js_target});"))
+                    .map_err(|e| e.to_string())?;
+                let _ = app.emit(
+                    "dapp-navigated",
+                    DappNavigationEvent {
+                        label,
+                        url: target,
+                    },
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    let u = u.to_string();
     println!("[AutoDesktop] open external -> {u}");
     app.opener()
-        .open_url(u.to_string(), None::<&str>)
+        .open_url(u, None::<&str>)
         .map_err(|e| e.to_string())
 }
 
@@ -2019,6 +2090,106 @@ fn save_activity_records<R: Runtime>(
     }
     let json = serde_json::to_vec_pretty(records).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("writing activity: {e}"))
+}
+
+const PORTFOLIO_HISTORY_FILE: &str = "portfolio-history.json";
+const PORTFOLIO_HISTORY_MAX_AGE_SECS: u64 = 90 * 24 * 60 * 60;
+const PORTFOLIO_HISTORY_REPLACE_WINDOW_SECS: u64 = 10 * 60;
+
+fn portfolio_history_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(PORTFOLIO_HISTORY_FILE))
+}
+
+fn load_portfolio_snapshots<R: Runtime>(app: &AppHandle<R>) -> Vec<PortfolioSnapshot> {
+    let Ok(path) = portfolio_history_path(app) else {
+        return Vec::new();
+    };
+    let Ok(bytes) = std::fs::read(path) else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<Vec<PortfolioSnapshot>>(&bytes).unwrap_or_default()
+}
+
+fn save_portfolio_snapshots<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshots: &[PortfolioSnapshot],
+) -> Result<(), String> {
+    let path = portfolio_history_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(snapshots).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("writing portfolio history: {e}"))
+}
+
+fn normalized_address(address: &str) -> Result<String, String> {
+    let address = address.trim();
+    if address.len() == 42
+        && address.starts_with("0x")
+        && address[2..].chars().all(|c| c.is_ascii_hexdigit())
+    {
+        Ok(address.to_lowercase())
+    } else {
+        Err("invalid address".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_portfolio_history<R: Runtime>(
+    app: AppHandle<R>,
+    address: String,
+) -> Result<Vec<PortfolioSnapshot>, String> {
+    let address = normalized_address(&address)?;
+    let mut snapshots: Vec<PortfolioSnapshot> = load_portfolio_snapshots(&app)
+        .into_iter()
+        .filter(|s| s.address.eq_ignore_ascii_case(&address))
+        .collect();
+    snapshots.sort_by_key(|s| s.timestamp);
+    Ok(snapshots)
+}
+
+#[tauri::command]
+fn record_portfolio_snapshot<R: Runtime>(
+    app: AppHandle<R>,
+    address: String,
+    total_usd: f64,
+) -> Result<Vec<PortfolioSnapshot>, String> {
+    if !total_usd.is_finite() || total_usd < 0.0 {
+        return Err("invalid total".to_string());
+    }
+    let address = normalized_address(&address)?;
+    let now = now_secs();
+    let cutoff = now.saturating_sub(PORTFOLIO_HISTORY_MAX_AGE_SECS);
+    let mut snapshots: Vec<PortfolioSnapshot> = load_portfolio_snapshots(&app)
+        .into_iter()
+        .filter(|s| s.timestamp >= cutoff)
+        .collect();
+
+    if let Some(last) = snapshots
+        .iter_mut()
+        .filter(|s| s.address.eq_ignore_ascii_case(&address))
+        .max_by_key(|s| s.timestamp)
+    {
+        if now.saturating_sub(last.timestamp) < PORTFOLIO_HISTORY_REPLACE_WINDOW_SECS {
+            last.total_usd = total_usd;
+            last.timestamp = now;
+            save_portfolio_snapshots(&app, &snapshots)?;
+            return get_portfolio_history(app, address);
+        }
+    }
+
+    snapshots.push(PortfolioSnapshot {
+        address: address.clone(),
+        total_usd,
+        timestamp: now,
+    });
+    snapshots.sort_by_key(|s| s.timestamp);
+    save_portfolio_snapshots(&app, &snapshots)?;
+    get_portfolio_history(app, address)
 }
 
 #[derive(Default)]
@@ -2723,6 +2894,14 @@ fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn now_secs() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
@@ -3453,6 +3632,8 @@ pub fn run() {
             set_close_behavior,
             check_for_update,
             get_activity,
+            get_portfolio_history,
+            record_portfolio_snapshot,
             get_defi_positions,
             get_chains,
             add_chain,

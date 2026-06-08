@@ -1,0 +1,11 @@
+# Permissions for local portfolio history snapshots. Granted only to the trusted
+# shell webview; remote dApps must never be able to read or write wallet history.
+[[permission]]
+identifier = "allow-get-portfolio-history"
+description = "Allow the shell to read locally stored portfolio value snapshots."
+commands.allow = ["get_portfolio_history"]
+
+[[permission]]
+identifier = "allow-record-portfolio-snapshot"
+description = "Allow the shell to append or update a local portfolio value snapshot."
+commands.allow = ["record_portfolio_snapshot"]

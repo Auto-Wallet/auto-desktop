@@ -85,9 +85,15 @@ console.log('[AutoDesktop] Auto Wallet provider injected');
 // scheme. Normal in-page navigation (target=_self) is untouched.
 function installLinkInterceptor() {
   const openExternal = (url: string): boolean => {
-    if (!/^https?:\/\//i.test(url)) return false;
+    let target: string;
+    try {
+      target = new URL(url, location.href).toString();
+    } catch {
+      return false;
+    }
+    if (!/^https?:\/\//i.test(target)) return false;
     void getInvoke()
-      .then((invoke) => invoke('open_external_url', { url }))
+      .then((invoke) => invoke('open_external_url', { url: target }))
       .catch((e) => console.error('[AutoDesktop] open_external_url failed', e));
     return true;
   };

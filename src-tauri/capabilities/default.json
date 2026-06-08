@@ -23,6 +23,8 @@
     "allow-set-close-behavior",
     "allow-check-for-update",
     "allow-get-activity",
+    "allow-get-portfolio-history",
+    "allow-record-portfolio-snapshot",
     "allow-get-defi-positions",
     "allow-get-chains",
     "allow-add-chain",

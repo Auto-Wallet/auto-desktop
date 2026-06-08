@@ -205,9 +205,15 @@
   console.log("[AutoDesktop] Auto Wallet provider injected");
   function installLinkInterceptor() {
     const openExternal = (url) => {
-      if (!/^https?:\/\//i.test(url))
+      let target;
+      try {
+        target = new URL(url, location.href).toString();
+      } catch {
         return false;
-      getInvoke().then((invoke) => invoke("open_external_url", { url })).catch((e) => console.error("[AutoDesktop] open_external_url failed", e));
+      }
+      if (!/^https?:\/\//i.test(target))
+        return false;
+      getInvoke().then((invoke) => invoke("open_external_url", { url: target })).catch((e) => console.error("[AutoDesktop] open_external_url failed", e));
       return true;
     };
     const nativeOpen = window.open.bind(window);

@@ -6,8 +6,8 @@ import {
   hostOf,
   isDappUrlInput,
   removeDapp,
-  renameDapp,
   togglePin,
+  updateDapp,
   useDapps,
   type Dapp,
 } from "../lib/dapps";
@@ -129,12 +129,34 @@ export default function DappsPage({ onOpen }: { onOpen?: (dapp: Dapp) => void })
 }
 
 function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) {
+  const { t } = useT();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(dapp.name);
+  const [url, setUrl] = useState(dapp.url);
+  const [error, setError] = useState<string | null>(null);
 
-  function commitName() {
-    renameDapp(dapp.id, name);
+  function startEdit() {
+    setName(dapp.name);
+    setUrl(dapp.url);
+    setError(null);
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setName(dapp.name);
+    setUrl(dapp.url);
+    setError(null);
     setEditing(false);
+  }
+
+  function saveEdit() {
+    try {
+      updateDapp(dapp.id, url, name);
+      setError(null);
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (
@@ -150,47 +172,83 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
         >
           <Icon name="star" size={16} fill={dapp.pinned ? "currentColor" : "none"} />
         </button>
-        <button
-          className="dapp-icobtn rm"
-          title="Remove"
-          onClick={(e) => {
-            e.stopPropagation();
-            removeDapp(dapp.id);
-          }}
-        >
-          <Icon name="close" size={15} />
-        </button>
+        <div className="dapp-actions">
+          <button
+            className="dapp-icobtn edit"
+            title={t("settings.edit")}
+            onClick={(e) => {
+              e.stopPropagation();
+              startEdit();
+            }}
+          >
+            <Icon name="edit" size={14} />
+          </button>
+          <button
+            className="dapp-icobtn rm"
+            title={t("settings.remove")}
+            onClick={(e) => {
+              e.stopPropagation();
+              removeDapp(dapp.id);
+            }}
+          >
+            <Icon name="close" size={15} />
+          </button>
+        </div>
       </div>
 
       <Favicon dapp={dapp} />
 
       {editing ? (
-        <input
-          autoFocus
-          className="dapp-name-edit"
-          value={name}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitName();
-            if (e.key === "Escape") setEditing(false);
-          }}
-          onBlur={commitName}
-        />
+        <div className="dapp-edit-form" onClick={(e) => e.stopPropagation()}>
+          <input
+            autoFocus
+            className="dapp-name-edit"
+            aria-label={t("dapps.displayName")}
+            placeholder={t("dapps.displayName")}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveEdit();
+              if (e.key === "Escape") cancelEdit();
+            }}
+          />
+          <input
+            className="dapp-url-edit"
+            aria-label={t("dapps.url")}
+            placeholder={t("dapps.url")}
+            value={url}
+            onChange={(e) => {
+              setUrl(e.target.value);
+              setError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveEdit();
+              if (e.key === "Escape") cancelEdit();
+            }}
+          />
+          {error && <div className="dapp-edit-error">{error}</div>}
+          <div className="dapp-edit-actions">
+            <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>
+              {t("settings.cancel")}
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={saveEdit}>
+              {t("settings.save")}
+            </button>
+          </div>
+        </div>
       ) : (
         <div
           className="dapp-name"
           title={dapp.name}
           onDoubleClick={(e) => {
             e.stopPropagation();
-            setName(dapp.name);
-            setEditing(true);
+            startEdit();
           }}
         >
           {dapp.name}
         </div>
       )}
-      <div className="dapp-host">{hostOf(dapp.url)}</div>
+      {!editing && <div className="dapp-host">{hostOf(dapp.url)}</div>}
     </div>
   );
 }

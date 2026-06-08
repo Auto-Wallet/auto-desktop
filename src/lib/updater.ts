@@ -34,6 +34,47 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
         downloadUrl: null,
       };
     }
+    return {
+      currentVersion: __APP_VERSION__,
+      latestVersion: update.version,
+      available: true,
+      releaseUrl: "https://github.com/Auto-Wallet/auto-desktop/releases/latest",
+      downloadUrl: null,
+    };
+  } catch {
+    const fallback = await invoke<UpdateInfo>("check_for_update");
+    return fallback.available ? { ...fallback, manual: true } : fallback;
+  }
+}
+
+export async function installUpdate(info?: UpdateInfo | null): Promise<UpdateInfo> {
+  if (!isTauri()) {
+    return (
+      info ?? {
+        currentVersion: __APP_VERSION__,
+        latestVersion: __APP_VERSION__,
+        available: false,
+        releaseUrl: "https://github.com/Auto-Wallet/auto-desktop/releases",
+        downloadUrl: null,
+      }
+    );
+  }
+
+  if (info?.manual) {
+    return info;
+  }
+
+  try {
+    const update = await check();
+    if (!update) {
+      return {
+        currentVersion: __APP_VERSION__,
+        latestVersion: __APP_VERSION__,
+        available: false,
+        releaseUrl: "https://github.com/Auto-Wallet/auto-desktop/releases",
+        downloadUrl: null,
+      };
+    }
     await update.downloadAndInstall();
     await relaunch();
     return {

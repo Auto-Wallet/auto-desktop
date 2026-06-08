@@ -158,6 +158,25 @@ export function renameDapp(id: string, name: string) {
   commit(state.map((d) => (d.id === id ? { ...d, name: clean } : d)));
 }
 
+export function updateDapp(id: string, input: string, name: string): Dapp {
+  const url = normalizeUrl(input);
+  const host = hostOf(url);
+  if (state.some((d) => d.id !== id && hostOf(d.url) === host)) {
+    throw new Error(`Already added: ${host}`);
+  }
+  let updated: Dapp | null = null;
+  const cleanName = name.trim();
+  commit(
+    state.map((d) => {
+      if (d.id !== id) return d;
+      updated = { ...d, url, name: cleanName || deriveName(url) };
+      return updated;
+    }),
+  );
+  if (!updated) throw new Error(`dApp not found: ${id}`);
+  return updated;
+}
+
 export function useDapps(): Dapp[] {
   return useSyncExternalStore(subscribe, () => state);
 }

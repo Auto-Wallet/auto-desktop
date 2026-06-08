@@ -49,6 +49,7 @@ import {
   type PriceState,
   type PricedToken,
 } from "../lib/prices";
+import { usePortfolioHistory, type PortfolioTrend } from "../lib/portfolioHistory";
 import {
   addCustomToken,
   encodeErc20Transfer,
@@ -211,9 +212,15 @@ export default function WalletPage() {
     [allRows, filter],
   );
   const portfolio = useMemo(
-    () => computePortfolio(allRows, prices.status === "loading"),
-    [allRows, prices.status],
+    () => computePortfolio(allRows, prices.status === "loading", defi),
+    [allRows, prices.status, defi],
   );
+  const trend = usePortfolioHistory(
+    active.address,
+    portfolio.total,
+    portfolio.loading,
+  );
+  const trendPercent = trend.percent;
 
   function copyAddress() {
     navigator.clipboard.writeText(active.address);
@@ -227,6 +234,28 @@ export default function WalletPage() {
     defi.refresh();
     toast(t("common.refreshed"));
   }
+
+  useEffect(() => {
+    if (portfolio.total == null || portfolio.loading) return;
+    void trend.recordNow();
+  }, [active.address, portfolio.loading, portfolio.total]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      refreshAll();
+      window.setTimeout(() => void trend.recordNow(), 20 * 1000);
+    }, 60 * 60 * 1000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [
+    refresh,
+    refreshTokens,
+    refreshPrices,
+    refreshTokenPrices,
+    defi.refresh,
+    trend.recordNow,
+  ]);
 
   return (
     <div className="page scroll">
@@ -259,16 +288,18 @@ export default function WalletPage() {
                   <div className="hero-total disp tnum">
                     <HeroAmount n={portfolio.total} />
                   </div>
-                  {portfolio.change != null && (
+                  {portfolio.total != null && (
                     <div className="hero-change">
                       <span className="pill">
                         <Icon
-                          name={portfolio.change >= 0 ? "arrowUp" : "arrowDown"}
+                          name={(trendPercent ?? 0) >= 0 ? "arrowUp" : "arrowDown"}
                           size={13}
                         />
-                        {fmtPct(portfolio.change)}
+                        {trendPercent == null
+                          ? t("wallet.trendCollecting")
+                          : fmtPct(trendPercent)}
                       </span>
-                      <span style={{ opacity: 0.9 }}>· 24h</span>
+                      <span style={{ opacity: 0.9 }}>· {trend.label}</span>
                     </div>
                   )}
                 </>
@@ -282,6 +313,7 @@ export default function WalletPage() {
                 </>
               )}
             </div>
+            <PortfolioSparkline trend={trend} />
             {/* Refresh balances + prices (the eye/hide-balance toggle was dropped). */}
             <button
               className="hero-eye"
@@ -669,9 +701,12 @@ function rowUsdValue(row: DisplayRow): number | null {
 function computePortfolio(
   rows: DisplayRow[],
   pricesLoading: boolean,
+  defi: DefiState,
 ): Portfolio {
   const loading =
-    pricesLoading || rows.some((r) => !r.state || r.state.status === "loading");
+    pricesLoading ||
+    rows.some((r) => !r.state || r.state.status === "loading") ||
+    (defi.status === "loading" && defi.positions.length === 0);
   let total = 0;
   let delta = 0;
   let priced = false;
@@ -680,6 +715,11 @@ function computePortfolio(
     const v = weiToUsd(r.state.wei, r.decimals, r.price.usd);
     total += v;
     delta += v * (r.price.change24h / 100);
+    priced = true;
+  }
+  const defiTotal = defi.positions.reduce((sum, p) => sum + p.balanceUsd, 0);
+  if (defiTotal > 0) {
+    total += defiTotal;
     priced = true;
   }
   if (!priced) return { total: null, change: null, loading };
@@ -695,6 +735,29 @@ function HeroAmount({ n }: { n: number }) {
       ${whole}
       <span className="cents">.{cents}</span>
     </>
+  );
+}
+
+function PortfolioSparkline({ trend }: { trend: PortfolioTrend }) {
+  return (
+    <div className="hero-chart" aria-hidden="true">
+      <svg viewBox="0 0 320 118" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="portfolioLineFade" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0" />
+            <stop offset="15%" stopColor="currentColor" stopOpacity="0.72" />
+            <stop offset="82%" stopColor="currentColor" stopOpacity="0.88" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="portfolioAreaFade" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path className="hero-chart-area" d={trend.areaPath} />
+        <path className="hero-chart-line" d={trend.path} />
+      </svg>
+    </div>
   );
 }
 

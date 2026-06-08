@@ -87,6 +87,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dapps.add": "Add",
     "dapps.empty": "No dApps yet — paste a URL above to add one.",
     "dapps.rename": "Double-click to rename",
+    "dapps.displayName": "Display name",
+    "dapps.url": "URL",
 
     "browser.back": "Back to dApps",
 
@@ -102,6 +104,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.version": "Version",
     "settings.checkUpdates": "Check for updates",
     "settings.checkingUpdates": "Checking…",
+    "settings.installUpdate": "Click to install update",
+    "settings.installingUpdate": "Installing…",
     "settings.updateAvailable": "Update {version} available",
     "settings.updateOpened": "Opened update {version} download.",
     "settings.updateInstalled": "Installed update {version}. Restarting…",
@@ -132,6 +136,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.tokens": "Tokens",
     "wallet.tokenHoldings": "Tokens",
     "wallet.tokenHoldingsHint": "Native coins and ERC-20 balances",
+    "wallet.trendCollecting": "Collecting",
     "wallet.defiHoldings": "DeFi positions",
     "wallet.defiHoldingsHint": "Deposits, lending, staking, and LP positions",
     "wallet.defiEmpty": "No DeFi positions detected",
@@ -381,6 +386,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dapps.add": "添加",
     "dapps.empty": "还没有 dApp —— 在上方粘贴网址即可添加。",
     "dapps.rename": "双击重命名",
+    "dapps.displayName": "显示名称",
+    "dapps.url": "网址",
 
     "browser.back": "返回 dApps",
 
@@ -396,6 +403,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.version": "版本",
     "settings.checkUpdates": "检查更新",
     "settings.checkingUpdates": "检查中…",
+    "settings.installUpdate": "点击安装更新",
+    "settings.installingUpdate": "安装中…",
     "settings.updateAvailable": "发现新版本 {version}",
     "settings.updateOpened": "已打开 {version} 下载页面。",
     "settings.updateInstalled": "已安装 {version}，正在重启…",
@@ -426,6 +435,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.tokens": "代币",
     "wallet.tokenHoldings": "代币",
     "wallet.tokenHoldingsHint": "原生币与 ERC-20 余额",
+    "wallet.trendCollecting": "收集中",
     "wallet.defiHoldings": "DeFi 持仓",
     "wallet.defiHoldingsHint": "存款、借贷、质押和 LP 仓位",
     "wallet.defiEmpty": "暂无 DeFi 持仓",

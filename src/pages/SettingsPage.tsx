@@ -14,7 +14,7 @@ import { useActiveWallet } from "../lib/accounts";
 import { setLang, useT, type Lang, type TFn } from "../lib/i18n";
 import { setThemePref, useThemePref, type ThemePref } from "../lib/theme";
 import { setCloseBehavior, useCloseBehavior } from "../lib/appPrefs";
-import { checkForUpdate, type UpdateInfo } from "../lib/updater";
+import { checkForUpdate, installUpdate, type UpdateInfo } from "../lib/updater";
 import { openExternalUrl } from "../lib/platform";
 import { Icon, type IconName } from "../lib/icons";
 import { toast } from "../lib/toast";
@@ -52,12 +52,42 @@ export default function SettingsPage() {
     ["light", "sun", t("settings.light")],
     ["dark", "moon", t("settings.dark")],
   ];
+  const updateButtonLabel = checkingUpdate
+    ? updateInfo?.available
+      ? t("settings.installingUpdate")
+      : t("settings.checkingUpdates")
+    : updateInfo?.available
+      ? t("settings.installUpdate")
+      : t("settings.checkUpdates");
 
   async function handleCheckUpdates() {
+    if (updateInfo?.available) {
+      await handleInstallUpdate();
+      return;
+    }
     setCheckingUpdate(true);
     setUpdated(false);
     try {
       const info = await checkForUpdate();
+      setUpdateInfo(info);
+      if (!info.available) {
+        setUpdated(true);
+        toast(t("settings.upToDate"));
+        return;
+      }
+      toast(t("settings.updateAvailable", { version: info.latestVersion }));
+    } catch (e) {
+      toast(t("settings.updateFailed", { error: errText(e) }), "warn");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (!updateInfo?.available) return;
+    setCheckingUpdate(true);
+    try {
+      const info = await installUpdate(updateInfo);
       setUpdateInfo(info);
       if (!info.available) {
         setUpdated(true);
@@ -338,9 +368,7 @@ export default function SettingsPage() {
                   disabled={checkingUpdate}
                   onClick={() => void handleCheckUpdates()}
                 >
-                  {checkingUpdate
-                    ? t("settings.checkingUpdates")
-                    : t("settings.checkUpdates")}
+                  {updateButtonLabel}
                 </button>
               </div>
             </div>

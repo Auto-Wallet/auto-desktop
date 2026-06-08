@@ -1,5 +1,6 @@
 import "./BrowserView.css";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useChains, type Chain } from "../lib/chains";
 import { shortAddress } from "../lib/format";
 import { setActive, useAccounts, useActiveAccount } from "../lib/accounts";
@@ -40,6 +41,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   const native = isTauri();
 
   const [focus, setFocus] = useState(false);
+  const [currentUrl, setCurrentUrl] = useState(dapp.url);
   const [url, setUrl] = useState(dapp.url);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [reloading, setReloading] = useState(false);
@@ -55,6 +57,29 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     [],
   );
   const menuOpen = openMenus > 0;
+
+  useEffect(() => {
+    setCurrentUrl(dapp.url);
+    setUrl(dapp.url);
+  }, [dapp.url]);
+
+  useEffect(() => {
+    if (!native) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ label: string; url: string }>("dapp-navigated", (event) => {
+      if (event.payload?.label !== label) return;
+      setCurrentUrl(event.payload.url);
+      setUrl(event.payload.url);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [native, label]);
 
   // Show this tab's native webview over the content rect, track resizes, and hide
   // it (NOT close — the tab persists) when this view unmounts/switches away.
@@ -149,7 +174,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
             }}
             onBlur={() => {
               setFocus(false);
-              setUrl(dapp.url);
+              setUrl(currentUrl);
             }}
           />
           <Icon name="external" size={15} />
