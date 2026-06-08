@@ -11,7 +11,13 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { isAddress } from "./format";
-import { getVaultAccounts, selectAccount, useVault, type VaultKind, type VaultState } from "./vault";
+import {
+  getVaultAccounts,
+  selectAccount,
+  useVault,
+  type VaultKind,
+  type VaultState,
+} from "./vault";
 
 export type Account = {
   address: string;
@@ -84,10 +90,18 @@ export function useActiveAccount(): Account {
   const local = useSyncExternalStore(subscribe, () => activeAddress);
   const all = allAccounts(vault);
   const pick = (addr: string | null | undefined) =>
-    addr ? all.find((a) => a.address.toLowerCase() === addr.toLowerCase()) : undefined;
-  const fallback =
-    pick(vault.active) ??
-    all[0] ?? { address: "0x", label: "—", signer: false, kind: "watch" as const, walletId: "", index: 0 };
+    addr
+      ? all.find((a) => a.address.toLowerCase() === addr.toLowerCase())
+      : undefined;
+  const fallback = pick(vault.active) ??
+    all[0] ?? {
+      address: "0x",
+      label: "—",
+      signer: false,
+      kind: "watch" as const,
+      walletId: "",
+      index: 0,
+    };
   return pick(local) ?? fallback;
 }
 
@@ -109,7 +123,11 @@ export function useActiveAccountSync(): void {
   const active = useActiveAccount();
   useEffect(() => {
     if (vault.phase !== "unlocked" || !active.signer) return;
-    if (vault.active && vault.active.toLowerCase() === active.address.toLowerCase()) return;
+    if (
+      vault.active &&
+      vault.active.toLowerCase() === active.address.toLowerCase()
+    )
+      return;
     void selectAccount(active.address);
   }, [vault.phase, vault.active, active.address, active.signer]);
 }
@@ -132,7 +150,9 @@ export function setActive(address: string) {
   localStorage.setItem(ACTIVE_KEY, address);
   emit();
 
-  if (getVaultAccounts().some((a) => a.toLowerCase() === address.toLowerCase())) {
+  if (
+    getVaultAccounts().some((a) => a.toLowerCase() === address.toLowerCase())
+  ) {
     void selectAccount(address);
   }
 }
@@ -149,7 +169,10 @@ export function addWatchAccount(address: string, label?: string) {
     setActive(existing);
     return;
   }
-  watch = [...watch, { address: addr, label: label?.trim() || `Watch ${watch.length + 1}` }];
+  watch = [
+    ...watch,
+    { address: addr, label: label?.trim() || `Watch ${watch.length + 1}` },
+  ];
   localStorage.setItem(WATCH_KEY, JSON.stringify(watch));
   emit();
   setActive(addr);
@@ -164,5 +187,17 @@ export function removeWatchAccount(address: string) {
     activeAddress = null;
     localStorage.removeItem(ACTIVE_KEY);
   }
+  emit();
+}
+
+/** Rename a watch-only address. Signer wallet labels are renamed via renameWallet. */
+export function renameWatchAccount(address: string, label: string) {
+  const lower = address.toLowerCase();
+  const next = label.trim();
+  if (!next) return;
+  watch = watch.map((w) =>
+    w.address.toLowerCase() === lower ? { ...w, label: next } : w,
+  );
+  localStorage.setItem(WATCH_KEY, JSON.stringify(watch));
   emit();
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import mascot from "./assets/mascot.png";
 import WalletPage from "./pages/WalletPage";
@@ -7,7 +8,7 @@ import BrowserView from "./pages/BrowserView";
 import SettingsPage from "./pages/SettingsPage";
 import LockScreen from "./pages/LockScreen";
 import { faviconOf, type Dapp } from "./lib/dapps";
-import { closeDapp, dappLabel } from "./lib/platform";
+import { closeDapp, dappLabel, isTauri } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
 import { useActiveAccount, useActiveAccountSync } from "./lib/accounts";
 import { loadChains } from "./lib/chains";
@@ -16,6 +17,8 @@ import { Icon } from "./lib/icons";
 import { setThemePref, useEffectiveTheme } from "./lib/theme";
 import { shortAddress } from "./lib/format";
 import { Avatar, ToastHost } from "./lib/ui";
+import { toast } from "./lib/toast";
+import type { ActivityRecord } from "./lib/activity";
 
 type Page = "wallet" | "dapps" | "browser" | "settings";
 type Tab = { id: string; dapp: Dapp };
@@ -24,6 +27,7 @@ const SIDEBAR_KEY = "autodesktop.sidebarCollapsed";
 
 function App() {
   const vault = useVault();
+  const { t, lang } = useT();
   // Reconcile the backend's active signer with the shell's remembered selection so a
   // dApp always connects to the account shown in the sidebar (and follows wallet
   // switches). Backend resets to the first account on every unlock; this re-syncs it.
@@ -42,8 +46,27 @@ function App() {
     });
   }, []);
   useEffect(() => {
-    if (vault.phase === "locked" || vault.phase === "absent") setSessionUnlocked(false);
+    if (vault.phase === "locked" || vault.phase === "absent")
+      setSessionUnlocked(false);
   }, [vault.phase]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<ActivityRecord>("activity-recorded", (event) => {
+      const hash = event.payload?.hash;
+      toast(
+        t("wallet.txSubmitted", { hash: hash ? shortAddress(hash, 8, 6) : "" }),
+      );
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [lang]);
 
   const [page, setPage] = useState<Page>("wallet");
   const [collapsed, setCollapsed] = useState<boolean>(
@@ -63,7 +86,11 @@ function App() {
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
 
   function openTab(dapp: Dapp) {
-    setTabs((prev) => (prev.some((t) => t.id === dapp.id) ? prev : [...prev, { id: dapp.id, dapp }]));
+    setTabs((prev) =>
+      prev.some((t) => t.id === dapp.id)
+        ? prev
+        : [...prev, { id: dapp.id, dapp }],
+    );
     setActiveId(dapp.id);
     setPage("browser");
   }
@@ -115,7 +142,11 @@ function App() {
         {page === "wallet" && <WalletPage />}
         {page === "dapps" && <DappsPage onOpen={openTab} />}
         {page === "browser" && activeTab && (
-          <BrowserView key={activeTab.id} tab={activeTab} onBack={() => setPage("dapps")} />
+          <BrowserView
+            key={activeTab.id}
+            tab={activeTab}
+            onBack={() => setPage("dapps")}
+          />
         )}
         {page === "settings" && <SettingsPage />}
       </main>
@@ -148,7 +179,11 @@ function Sidebar({
   const account = useActiveAccount();
   const theme = useEffectiveTheme();
 
-  const nav: { key: "wallet" | "dapps"; i18n: string; icon: "wallet" | "compass" }[] = [
+  const nav: {
+    key: "wallet" | "dapps";
+    i18n: string;
+    icon: "wallet" | "compass";
+  }[] = [
     { key: "wallet", i18n: "nav.wallet", icon: "wallet" },
     { key: "dapps", i18n: "nav.explore", icon: "compass" },
   ];
@@ -263,7 +298,9 @@ function Sidebar({
           {!collapsed && (
             <div className="acct-foot-meta">
               <div className="acct-foot-name">{account.label}</div>
-              <div className="acct-foot-addr">{shortAddress(account.address, 6, 4)}</div>
+              <div className="acct-foot-addr">
+                {shortAddress(account.address, 6, 4)}
+              </div>
             </div>
           )}
         </button>

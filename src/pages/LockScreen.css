@@ -31,7 +31,7 @@
 }
 /* Roomier card for the Ledger address picker (a page of 20 + pagination). */
 .lock-card.wide {
-  max-width: 560px;
+  max-width: 860px;
 }
 
 .lock-brand {
@@ -380,8 +380,8 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 .ledger-acct {
@@ -392,7 +392,8 @@
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   background: var(--surface);
-  padding: 12px 14px;
+  min-height: 40px;
+  padding: 9px 12px;
   cursor: pointer;
   font: inherit;
   transition: border-color 0.14s, background 0.14s;
@@ -415,16 +416,11 @@
   color: var(--ink);
 }
 
-/* paginated picker (20 per page, scrollable, streaming) */
+/* paginated picker (20 per page, no inner scroll on desktop) */
 .ledger-pick {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-.ledger-list.scroll {
-  max-height: 320px;
-  overflow-y: auto;
-  padding-right: 2px;
 }
 .ledger-acct:disabled {
   opacity: 0.55;
@@ -446,4 +442,16 @@
   font-weight: 600;
   color: var(--ink-3);
   white-space: nowrap;
+}
+
+@media (max-width: 720px), (max-height: 760px) {
+  .lock-card.wide {
+    max-width: 560px;
+  }
+  .ledger-list {
+    grid-template-columns: 1fr;
+    max-height: min(56vh, 520px);
+    overflow-y: auto;
+    padding-right: 2px;
+  }
 }

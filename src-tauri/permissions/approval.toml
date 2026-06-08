@@ -15,3 +15,8 @@ commands.allow = ["reject_request"]
 identifier = "allow-get-pending-requests"
 description = "Allow the approval window to list pending signing requests."
 commands.allow = ["get_pending_requests"]
+
+[[permission]]
+identifier = "allow-simulate-tx"
+description = "Allow the approval window to request a server-side balance-change simulation."
+commands.allow = ["simulate_tx"]

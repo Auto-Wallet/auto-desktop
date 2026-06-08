@@ -3,7 +3,9 @@
 // this before signing so the user sees the estimated balance changes. The shell is
 // trusted local code, so it may call the public API directly (like prices.ts/rpc.ts).
 
+import { invoke } from "@tauri-apps/api/core";
 import { formatUnits } from "./format";
+import { isTauri } from "./platform";
 
 const BCS_API_URL = "https://balance-change-simulate-api.wanscan.org";
 const BCS_TIMEOUT_MS = 8_000;
@@ -36,6 +38,12 @@ export type SimulateArgs = {
   value: bigint;
   gas: bigint;
   nativeSymbol?: string;
+};
+
+type SimulationApiResponse = {
+  ok: boolean;
+  status: number;
+  data: any;
 };
 
 function formatDelta(raw: bigint, decimals: number): string {
@@ -92,27 +100,21 @@ export async function simulateTx(args: SimulateArgs): Promise<SimulationPreview>
   const url = BCS_API_URL.replace(/\/+$/, "") + "/simulate";
   const cappedGas = args.gas > MAX_SAFE_GAS ? MAX_SAFE_GAS : args.gas;
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), BCS_TIMEOUT_MS);
-    const res = await fetch(url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chain_id: args.chainId,
-        from: args.from,
-        to: args.to,
-        data: args.data ?? "0x",
-        value: args.value.toString(),
-        gas: Number(cappedGas),
-      }),
-    });
-    clearTimeout(timer);
-    const text = await res.text();
-    const data = text ? safeJson(text) : {};
-    if (!res.ok) {
-      const msg = pickErrorMessage(data, `Simulation API error (${res.status})`);
-      return { status: "unavailable", error: friendlyUnavailable(res.status, msg), changes: [] };
+    const request = {
+      chain_id: args.chainId,
+      from: args.from,
+      to: args.to,
+      data: args.data ?? "0x",
+      value: args.value.toString(),
+      gas: Number(cappedGas),
+    };
+    const api = isTauri()
+      ? await invoke<SimulationApiResponse>("simulate_tx", { req: request })
+      : await fetchSimulation(url, request);
+    const data = api.data ?? {};
+    if (!api.ok) {
+      const msg = pickErrorMessage(data, `Simulation API error (${api.status})`);
+      return { status: "unavailable", error: friendlyUnavailable(api.status, msg), changes: [] };
     }
     const status: "success" | "failed" = data?.success ? "success" : "failed";
     const gasUsed = typeof data?.gas_used === "string" ? data.gas_used : undefined;
@@ -124,6 +126,23 @@ export async function simulateTx(args: SimulateArgs): Promise<SimulationPreview>
     return { status, error, gasUsed, changes };
   } catch (e: any) {
     return { status: "unavailable", error: e?.message ?? String(e), changes: [] };
+  }
+}
+
+async function fetchSimulation(url: string, request: Record<string, unknown>): Promise<SimulationApiResponse> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BCS_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, data: text ? safeJson(text) : {} };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

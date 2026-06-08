@@ -19,13 +19,28 @@ const SEED: Dapp[] = [
   { id: "curve", url: "https://curve.fi", name: "Curve", pinned: false },
   { id: "1inch", url: "https://app.1inch.io", name: "1inch", pinned: false },
   { id: "opensea", url: "https://opensea.io", name: "OpenSea", pinned: false },
+  { id: "xflows", url: "https://xflows.wanchain.org", name: "XFlows", pinned: false },
+  { id: "wanchain-bridge", url: "https://bridge.wanchain.org", name: "Wanchain Bridge", pinned: false },
+  { id: "relay", url: "https://relay.link", name: "Relay", pinned: false },
+  { id: "pendle", url: "https://app.pendle.finance", name: "Pendle", pinned: false },
+  { id: "benqi", url: "https://app.benqi.fi", name: "Benqi", pinned: false },
 ];
+
+const ADDED_BUILTIN_HOSTS = new Set([
+  "xflows.wanchain.org",
+  "bridge.wanchain.org",
+  "relay.link",
+  "app.pendle.finance",
+  "app.benqi.fi",
+]);
 
 const KEY = "autodesktop.dapps";
 
 function load(): Dapp[] {
   const raw = localStorage.getItem(KEY);
-  return raw ? (JSON.parse(raw) as Dapp[]) : SEED;
+  if (!raw) return SEED;
+  const saved = JSON.parse(raw) as Dapp[];
+  return mergeAddedBuiltins(saved);
 }
 
 let state: Dapp[] = load();
@@ -35,6 +50,12 @@ function commit(next: Dapp[]) {
   state = next;
   localStorage.setItem(KEY, JSON.stringify(state));
   for (const l of listeners) l();
+}
+
+function mergeAddedBuiltins(saved: Dapp[]): Dapp[] {
+  const hosts = new Set(saved.map((d) => hostOf(d.url)));
+  const missing = SEED.filter((d) => ADDED_BUILTIN_HOSTS.has(hostOf(d.url)) && !hosts.has(hostOf(d.url)));
+  return missing.length ? [...saved, ...missing] : saved;
 }
 
 function subscribe(cb: () => void) {

@@ -92,7 +92,8 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "settings.title": "Settings",
     "settings.network": "Network",
-    "settings.networkHint": "The chain dApps see. Switching pushes chainChanged to open dApps.",
+    "settings.networkHint":
+      "The chain dApps see. Switching pushes chainChanged to open dApps.",
     "settings.active": "Active",
     "settings.language": "Language",
     "settings.languageHint": "Applies to the app interface.",
@@ -133,7 +134,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.wallets": "Wallets",
     "wallet.createImport": "Create or import wallet",
     "wallet.lockWallet": "Lock wallet",
-    "wallet.watchOnly": "Watch-only account — you can view balances but not sign.",
+    "wallet.watchOnly":
+      "Watch-only account — you can view balances but not sign.",
     "wallet.pricesUnavailable": "USD prices unavailable right now.",
     "wallet.addToken": "Add a custom token",
     "wallet.custom": "Custom",
@@ -145,14 +147,26 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.tokenAdded": "Token added",
     "wallet.customTokens": "Your custom tokens",
     "wallet.removeToken": "Remove token",
-    "wallet.tokensSoon": "Custom ERC-20 tokens are coming soon — native balances shown.",
+    "wallet.tokensSoon":
+      "Custom ERC-20 tokens are coming soon — native balances shown.",
     "wallet.activitySoon": "Transaction history is coming soon.",
+    "wallet.activityEmpty": "No transactions yet.",
+    "wallet.activitySend": "Send",
+    "wallet.activityContract": "Contract interaction",
+    "wallet.activityNoValue": "No value",
+    "wallet.openExplorer": "Open in block explorer",
+    "wallet.noExplorer": "No block explorer configured",
     "wallet.hideBalance": "Hide balance",
     "wallet.showBalance": "Show balance",
-    "wallet.receiveHint": "Send only Ethereum & EVM assets to this address, on any supported network.",
-    "wallet.sendSoon": "Send from the wallet is coming soon — use a dApp for now.",
+    "wallet.receiveHint":
+      "Send only Ethereum & EVM assets to this address, on any supported network.",
+    "wallet.sendSoon":
+      "Send from the wallet is coming soon — use a dApp for now.",
     "wallet.sendAsset": "Asset",
     "wallet.recipient": "Recipient",
+    "wallet.recipientPlaceholder": "Address or saved name",
+    "wallet.recipientMatched": "Matched",
+    "wallet.chooseRecipient": "Choose a matching recipient.",
     "wallet.amount": "Amount",
     "wallet.max": "Max",
     "wallet.available": "Available",
@@ -160,14 +174,20 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.invalidAmount": "Enter a valid amount.",
     "wallet.insufficient": "Insufficient balance.",
     "wallet.sent": "Transaction submitted",
+    "wallet.txSubmitted": "Transaction submitted: {hash}",
     "wallet.noSendable": "No tokens with a balance to send.",
     "wallet.sending": "Confirm in window…",
-    "wallet.sendApprovalHint": "You'll review the network fee and confirm in a separate window.",
+    "wallet.sendApprovalHint":
+      "You'll review the network fee and confirm in a separate window.",
     "wallet.swapSoon": "Swap is coming soon — open a DEX from Explore.",
     "wallet.bridge": "Cross-chain",
     "wallet.bridgeSoon": "Cross-chain bridging is coming soon.",
 
     "wallet.account": "Account",
+    "wallet.searchAccounts": "Search wallets or addresses",
+    "wallet.pinAccount": "Pin address",
+    "wallet.unpinAccount": "Unpin address",
+    "wallet.noAccountMatches": "No matching addresses",
     "wallet.addWallet": "Add wallet",
     "wallet.addWalletTitle": "Add a wallet",
     "wallet.createWallet": "Create a new wallet",
@@ -207,16 +227,21 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.appearanceHint": "Light, dark, or follow the system.",
     "settings.theme": "Theme",
     "settings.themeHint": "Switch the whole app between light and dark.",
+    "settings.closeBehavior": "Hide on close",
+    "settings.closeBehaviorHint":
+      "When clicking the red close button, hide the window instead of quitting.",
     "settings.system": "System",
     "settings.light": "Light",
     "settings.dark": "Dark",
     "settings.security": "Security",
     "settings.lockNow": "Lock now",
-    "settings.lockNowHint": "Drop keys from memory; require the password to unlock again.",
+    "settings.lockNowHint":
+      "Drop keys from memory; require the password to unlock again.",
     "settings.revealPhrase": "Reveal recovery phrase",
     "settings.revealPhraseHint": "Show your backup phrase. Never share it.",
     "settings.changePassword": "Change password",
-    "settings.changePasswordHint": "Update the password that encrypts your vault.",
+    "settings.changePasswordHint":
+      "Update the password that encrypts your vault.",
     "settings.soon": "Coming soon",
 
     "approval.title": "Signature request",
@@ -224,13 +249,17 @@ const DICT: Record<Lang, Record<string, string>> = {
     "approval.signMessage": "Sign message",
     "approval.signTyped": "Sign typed data",
     "approval.sendTx": "Send transaction",
+    "approval.addNetwork": "Add network",
     "approval.signData": "Sign data",
     "approval.reject": "Reject",
     "approval.approve": "Approve",
     "approval.signingWith": "Signing with",
     "approval.message": "Message",
     "approval.details": "Details",
-    "approval.warn": "Signing proves you control this account. Only approve requests from sites you trust.",
+    "approval.warn":
+      "Signing proves you control this account. Only approve requests from sites you trust.",
+    "approval.addNetworkWarn":
+      "Only add networks from sites you trust. A malicious RPC can lie about balances and transactions.",
     "approval.ledgerConfirm": "Confirm on your Ledger device…",
     "approval.waiting": "Waiting…",
     "approval.queue": "{i} of {n}",
@@ -337,7 +366,8 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "settings.title": "设置",
     "settings.network": "网络",
-    "settings.networkHint": "dApp 看到的链。切换会向已打开的 dApp 推送 chainChanged。",
+    "settings.networkHint":
+      "dApp 看到的链。切换会向已打开的 dApp 推送 chainChanged。",
     "settings.active": "当前",
     "settings.language": "语言",
     "settings.languageHint": "应用于软件界面。",
@@ -392,12 +422,21 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.removeToken": "移除代币",
     "wallet.tokensSoon": "自定义 ERC-20 代币即将推出 —— 当前显示原生币余额。",
     "wallet.activitySoon": "交易记录即将推出。",
+    "wallet.activityEmpty": "暂无交易记录。",
+    "wallet.activitySend": "发送",
+    "wallet.activityContract": "合约交互",
+    "wallet.activityNoValue": "无转账金额",
+    "wallet.openExplorer": "在区块浏览器中打开",
+    "wallet.noExplorer": "未配置区块浏览器",
     "wallet.hideBalance": "隐藏余额",
     "wallet.showBalance": "显示余额",
     "wallet.receiveHint": "仅向此地址发送以太坊及 EVM 资产（任意受支持网络）。",
     "wallet.sendSoon": "钱包内发送即将推出 —— 目前请通过 dApp 操作。",
     "wallet.sendAsset": "资产",
     "wallet.recipient": "接收地址",
+    "wallet.recipientPlaceholder": "地址或已保存名称",
+    "wallet.recipientMatched": "已匹配",
+    "wallet.chooseRecipient": "请选择一个匹配的接收方。",
     "wallet.amount": "金额",
     "wallet.max": "全部",
     "wallet.available": "可用",
@@ -405,6 +444,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.invalidAmount": "请输入有效的金额。",
     "wallet.insufficient": "余额不足。",
     "wallet.sent": "交易已提交",
+    "wallet.txSubmitted": "交易已提交：{hash}",
     "wallet.noSendable": "没有可发送的余额。",
     "wallet.sending": "请在窗口中确认…",
     "wallet.sendApprovalHint": "你将在单独的窗口中查看网络费用并确认。",
@@ -413,6 +453,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.bridgeSoon": "跨链桥即将推出。",
 
     "wallet.account": "账户",
+    "wallet.searchAccounts": "搜索钱包或地址",
+    "wallet.pinAccount": "置顶地址",
+    "wallet.unpinAccount": "取消置顶",
+    "wallet.noAccountMatches": "没有匹配的地址",
     "wallet.addWallet": "添加钱包",
     "wallet.addWalletTitle": "添加钱包",
     "wallet.createWallet": "创建新钱包",
@@ -422,7 +466,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.watchGroup": "仅观察",
     "wallet.rename": "重命名",
     "wallet.delete": "删除钱包",
-    "wallet.deleteConfirm": "删除这个钱包？请确认其助记词或私钥已备份 —— 此操作无法撤销。",
+    "wallet.deleteConfirm":
+      "删除这个钱包？请确认其助记词或私钥已备份 —— 此操作无法撤销。",
     "wallet.deleteWatchConfirm": "移除这个观察地址？",
     "wallet.removeWatch": "移除",
     "wallet.walletName": "钱包名称",
@@ -451,6 +496,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.appearanceHint": "明亮、暗色或跟随系统。",
     "settings.theme": "主题",
     "settings.themeHint": "在明亮与暗色之间切换整个应用。",
+    "settings.closeBehavior": "关闭时隐藏窗口",
+    "settings.closeBehaviorHint":
+      "点击红色关闭按钮时隐藏窗口，而不是退出应用。",
     "settings.system": "系统",
     "settings.light": "明亮",
     "settings.dark": "暗色",
@@ -468,6 +516,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "approval.signMessage": "签名消息",
     "approval.signTyped": "签名结构化数据",
     "approval.sendTx": "发送交易",
+    "approval.addNetwork": "添加网络",
     "approval.signData": "签名数据",
     "approval.reject": "拒绝",
     "approval.approve": "批准",
@@ -475,6 +524,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "approval.message": "消息",
     "approval.details": "详情",
     "approval.warn": "签名即证明你控制此账户。仅批准来自你信任站点的请求。",
+    "approval.addNetworkWarn":
+      "仅添加来自可信站点的网络。恶意 RPC 可能伪造余额和交易信息。",
     "approval.ledgerConfirm": "请在 Ledger 设备上确认…",
     "approval.waiting": "等待中…",
     "approval.queue": "第 {i} / {n} 个",
@@ -504,7 +555,10 @@ const KEY = "autodesktop.lang";
 function initialLang(): Lang {
   const saved = localStorage.getItem(KEY);
   if (saved === "en" || saved === "zh") return saved;
-  return typeof navigator !== "undefined" && navigator.language?.startsWith("zh") ? "zh" : "en";
+  return typeof navigator !== "undefined" &&
+    navigator.language?.startsWith("zh")
+    ? "zh"
+    : "en";
 }
 
 let lang: Lang = initialLang();
@@ -517,11 +571,20 @@ export function setLang(next: Lang) {
   for (const l of listeners) l();
 }
 
-export type TFn = (key: string, vars?: Record<string, string | number>) => string;
+export type TFn = (
+  key: string,
+  vars?: Record<string, string | number>,
+) => string;
 
-function translate(l: Lang, key: string, vars?: Record<string, string | number>): string {
+function translate(
+  l: Lang,
+  key: string,
+  vars?: Record<string, string | number>,
+): string {
   let s = DICT[l][key] ?? DICT.en[key] ?? key;
-  if (vars) for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, String(v));
+  if (vars)
+    for (const [k, v] of Object.entries(vars))
+      s = s.replace(`{${k}}`, String(v));
   return s;
 }
 

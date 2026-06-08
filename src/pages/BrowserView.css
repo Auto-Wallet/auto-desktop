@@ -106,7 +106,7 @@
 
 /* account dropdown (reuses .chain-menu container) */
 .acct-pop {
-  width: 248px;
+  width: 272px;
   max-height: 320px;
   overflow: auto;
 }
@@ -152,6 +152,22 @@
 .acct-opt .check {
   color: var(--brand-ink);
   flex: none;
+}
+.acct-copy {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.acct-copy:hover {
+  background: var(--surface);
+  color: var(--brand-ink);
 }
 
 /* chain dropdown */

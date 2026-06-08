@@ -1,6 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./WalletPage.css";
 import { chainLogo, findChain, useChains, type Chain } from "../lib/chains";
+import {
+  loadActivity,
+  openExternalUrl,
+  useActivity,
+  type ActivityRecord,
+} from "../lib/activity";
 import {
   fmtPct,
   fmtUsd,
@@ -26,6 +32,7 @@ import { LedgerList, useLedgerScan } from "../lib/LedgerPicker";
 import {
   addWatchAccount,
   removeWatchAccount,
+  renameWatchAccount,
   setActive,
   useAccounts,
   useActiveAccount,
@@ -60,6 +67,36 @@ import { Avatar } from "../lib/ui";
 import { QrCode } from "../lib/qr";
 import { toast } from "../lib/toast";
 
+const PINNED_ACCOUNT_STORAGE_KEY = "autodesktop:pinned-wallet-addresses";
+
+function loadPinnedAccounts(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(PINNED_ACCOUNT_STORAGE_KEY) ?? "[]",
+    );
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((v): v is string => typeof v === "string")
+      .map((v) => v.toLowerCase());
+  } catch {
+    return [];
+  }
+}
+
+function savePinnedAccounts(addresses: string[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    PINNED_ACCOUNT_STORAGE_KEY,
+    JSON.stringify(addresses),
+  );
+}
+
+function copyAccountAddress(address: string, t: TFn) {
+  void navigator.clipboard.writeText(address);
+  toast(t("common.copied"));
+}
+
 // Wallet page (VISION ①). Aurora portfolio: account/wallet switcher (create/import/
 // link + rename/delete), hero with a REAL total (native balances × live CoinGecko
 // prices), quick actions, a per-chain native token list with USD, and an honest
@@ -72,8 +109,14 @@ export default function WalletPage() {
   const active = useActiveAccount();
   const custom = useCustomTokens();
   const { balances, refresh } = useBalances(active.address);
-  const { tokenBalances, refreshTokens } = useTokenBalances(active.address, chainIds);
-  const { state: prices, refresh: refreshPrices } = usePrices(chains.map((c) => c.symbol));
+  const { tokenBalances, refreshTokens } = useTokenBalances(
+    active.address,
+    chainIds,
+  );
+  const { state: prices, refresh: refreshPrices } = usePrices(
+    chains.map((c) => c.symbol),
+  );
+  const activity = useActivity();
 
   // Price only the ERC-20s actually held (>0); unmapped/unknown ones get no USD.
   const pricedTokens = useMemo<PricedToken[]>(() => {
@@ -87,15 +130,30 @@ export default function WalletPage() {
     }
     return out;
   }, [chains, custom, tokenBalances]);
-  const { prices: tokenPrices, refresh: refreshTokenPrices } = useTokenPrices(pricedTokens);
+  const { prices: tokenPrices, refresh: refreshTokenPrices } =
+    useTokenPrices(pricedTokens);
 
   const [tab, setTab] = useState<"tokens" | "activity">("tokens");
   const [filter, setFilter] = useState<string>("all");
   const [showReceive, setShowReceive] = useState(false);
   const [showAddToken, setShowAddToken] = useState(false);
   const [showSend, setShowSend] = useState(false);
+  const [sendAssetKey, setSendAssetKey] = useState<string | undefined>(
+    undefined,
+  );
 
   const isWatch = !active.signer;
+  const accountActivity = useMemo(
+    () =>
+      activity.filter(
+        (a) => a.from.toLowerCase() === active.address.toLowerCase(),
+      ),
+    [activity, active.address],
+  );
+
+  useEffect(() => {
+    void loadActivity();
+  }, []);
 
   // Assets the active account can actually send (non-zero native + ERC-20).
   const sendableAssets = useMemo<SendAsset[]>(() => {
@@ -140,11 +198,13 @@ export default function WalletPage() {
   // chains; the network filter below only narrows the visible token LIST, it must
   // not change the total.
   const allRows = useMemo(
-    () => buildRows(chains, custom, balances, tokenBalances, prices, tokenPrices),
+    () =>
+      buildRows(chains, custom, balances, tokenBalances, prices, tokenPrices),
     [chains, custom, balances, tokenBalances, prices, tokenPrices],
   );
   const rows = useMemo(
-    () => (filter === "all" ? allRows : allRows.filter((r) => r.chainId === filter)),
+    () =>
+      filter === "all" ? allRows : allRows.filter((r) => r.chainId === filter),
     [allRows, filter],
   );
   const portfolio = useMemo(
@@ -171,7 +231,11 @@ export default function WalletPage() {
             to the wallet switcher. */}
         <div className="wallet-head">
           <AccountSwitcher />
-          <button className="icon-btn" title={t("wallet.copy")} onClick={copyAddress}>
+          <button
+            className="icon-btn"
+            title={t("wallet.copy")}
+            onClick={copyAddress}
+          >
             <Icon name="copy" size={17} />
           </button>
         </div>
@@ -181,7 +245,8 @@ export default function WalletPage() {
           <div className="hero-row">
             <div>
               <div className="hero-label">
-                <Icon name="wallet" size={15} /> {t("wallet.total")} · {active.label}
+                <Icon name="wallet" size={15} /> {t("wallet.total")} ·{" "}
+                {active.label}
               </div>
               {portfolio.loading && portfolio.total == null ? (
                 <div className="hero-skel" />
@@ -193,7 +258,10 @@ export default function WalletPage() {
                   {portfolio.change != null && (
                     <div className="hero-change">
                       <span className="pill">
-                        <Icon name={portfolio.change >= 0 ? "arrowUp" : "arrowDown"} size={13} />
+                        <Icon
+                          name={portfolio.change >= 0 ? "arrowUp" : "arrowDown"}
+                          size={13}
+                        />
                         {fmtPct(portfolio.change)}
                       </span>
                       <span style={{ opacity: 0.9 }}>· 24h</span>
@@ -204,13 +272,18 @@ export default function WalletPage() {
                 <>
                   <div className="hero-total disp tnum">$—</div>
                   <div className="hero-note">
-                    <Icon name="info" size={13} /> {t("wallet.pricesUnavailable")}
+                    <Icon name="info" size={13} />{" "}
+                    {t("wallet.pricesUnavailable")}
                   </div>
                 </>
               )}
             </div>
             {/* Refresh balances + prices (the eye/hide-balance toggle was dropped). */}
-            <button className="hero-eye" onClick={refreshAll} title={t("wallet.refresh")}>
+            <button
+              className="hero-eye"
+              onClick={refreshAll}
+              title={t("wallet.refresh")}
+            >
               <Icon name="refresh" size={17} />
             </button>
           </div>
@@ -225,10 +298,30 @@ export default function WalletPage() {
           </div>
         ) : (
           <div className="quick">
-            <QuickBtn icon="receive" label={t("wallet.receive")} onClick={() => setShowReceive(true)} />
-            <QuickBtn icon="send" coral label={t("wallet.send")} onClick={() => setShowSend(true)} />
-            <QuickBtn icon="swap" label={t("wallet.swap")} onClick={() => toast(t("wallet.swapSoon"), "info")} />
-            <QuickBtn icon="bridge" label={t("wallet.bridge")} onClick={() => toast(t("wallet.bridgeSoon"), "info")} />
+            <QuickBtn
+              icon="receive"
+              label={t("wallet.receive")}
+              onClick={() => setShowReceive(true)}
+            />
+            <QuickBtn
+              icon="send"
+              coral
+              label={t("wallet.send")}
+              onClick={() => {
+                setSendAssetKey(undefined);
+                setShowSend(true);
+              }}
+            />
+            <QuickBtn
+              icon="swap"
+              label={t("wallet.swap")}
+              onClick={() => toast(t("wallet.swapSoon"), "info")}
+            />
+            <QuickBtn
+              icon="bridge"
+              label={t("wallet.bridge")}
+              onClick={() => toast(t("wallet.bridgeSoon"), "info")}
+            />
           </div>
         )}
 
@@ -236,10 +329,16 @@ export default function WalletPage() {
         <div className="holdings">
           <div className="holdings-head">
             <div className="seg">
-              <button className={tab === "tokens" ? "on" : ""} onClick={() => setTab("tokens")}>
+              <button
+                className={tab === "tokens" ? "on" : ""}
+                onClick={() => setTab("tokens")}
+              >
                 {t("wallet.tokens")}
               </button>
-              <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>
+              <button
+                className={tab === "activity" ? "on" : ""}
+                onClick={() => setTab("activity")}
+              >
                 {t("wallet.activity")}
               </button>
             </div>
@@ -260,34 +359,58 @@ export default function WalletPage() {
                     className={`cf-pill${filter === c.id ? " on" : ""}`}
                     onClick={() => setFilter(c.id)}
                   >
-                    <span className="chain-dot" style={{ width: 9, height: 9, background: c.color }} />
+                    <span
+                      className="chain-dot"
+                      style={{ width: 9, height: 9, background: c.color }}
+                    />
                     {c.name}
                   </button>
                 ))}
               </div>
               <div className="token-list">
                 {rows.map((r) => (
-                  <HoldingRow key={r.key} row={r} t={t} />
+                  <HoldingRow
+                    key={r.key}
+                    row={r}
+                    t={t}
+                    canSign={!!active.signer}
+                    onSend={(assetKey) => {
+                      setSendAssetKey(assetKey);
+                      setShowSend(true);
+                    }}
+                    onSwap={() => toast(t("wallet.swapSoon"), "info")}
+                  />
                 ))}
               </div>
-              <button className="add-token" onClick={() => setShowAddToken(true)}>
+              <button
+                className="add-token"
+                onClick={() => setShowAddToken(true)}
+              >
                 <Icon name="plus" size={16} /> {t("wallet.addToken")}
               </button>
             </>
           ) : (
-            <div className="empty">
-              <div className="empty-ic">
-                <Icon name="activity" size={28} />
-              </div>
-              {t("wallet.activitySoon")}
-            </div>
+            <ActivityList records={accountActivity} chains={chains} t={t} />
           )}
         </div>
       </div>
 
-      {showReceive && <ReceiveModal account={active} onClose={() => setShowReceive(false)} />}
-      {showAddToken && <AddTokenModal defaultChain={filter !== "all" ? filter : undefined} onClose={() => setShowAddToken(false)} />}
-      {showSend && <SendModal assets={sendableAssets} onClose={() => setShowSend(false)} />}
+      {showReceive && (
+        <ReceiveModal account={active} onClose={() => setShowReceive(false)} />
+      )}
+      {showAddToken && (
+        <AddTokenModal
+          defaultChain={filter !== "all" ? filter : undefined}
+          onClose={() => setShowAddToken(false)}
+        />
+      )}
+      {showSend && (
+        <SendModal
+          assets={sendableAssets}
+          initialAssetKey={sendAssetKey}
+          onClose={() => setShowSend(false)}
+        />
+      )}
     </div>
   );
 }
@@ -306,7 +429,11 @@ type SendAsset = {
   wei: string;
 };
 
-type Portfolio = { total: number | null; change: number | null; loading: boolean };
+type Portfolio = {
+  total: number | null;
+  change: number | null;
+  loading: boolean;
+};
 
 // A balance state — native (BalanceState) and ERC-20 (TokenBalance) are the same
 // shape; the unified row carries whichever applies.
@@ -322,6 +449,7 @@ type DisplayRow = {
   kind: "native" | "erc20";
   symbol: string;
   decimals: number;
+  address?: string;
   /** Coin-glyph background color (chain brand for native, seeded for tokens). */
   color: string;
   logo?: string;
@@ -364,7 +492,10 @@ function buildRows(
       color: c.color,
       logo: chainLogo(c.id),
       state: balances[c.id],
-      price: prices.status === "ok" ? prices.prices[c.symbol.toUpperCase()] : undefined,
+      price:
+        prices.status === "ok"
+          ? prices.prices[c.symbol.toUpperCase()]
+          : undefined,
     });
     for (const tk of tokensForChain(custom, c.id)) {
       const st = tokenBalances[tokenKey(c.id, tk.address)];
@@ -378,6 +509,7 @@ function buildRows(
         kind: "erc20",
         symbol: tk.symbol,
         decimals: tk.decimals,
+        address: tk.address,
         color: seedColor(tk.address),
         logo: tk.logo || undefined,
         state: st,
@@ -386,11 +518,28 @@ function buildRows(
       });
     }
   }
-  return rows;
+  return rows
+    .map((row, index) => ({ row, index, usd: rowUsdValue(row) }))
+    .sort((a, b) => {
+      if (a.usd == null && b.usd == null) return a.index - b.index;
+      if (a.usd == null) return 1;
+      if (b.usd == null) return -1;
+      return b.usd - a.usd || a.index - b.index;
+    })
+    .map(({ row }) => row);
 }
 
-function computePortfolio(rows: DisplayRow[], pricesLoading: boolean): Portfolio {
-  const loading = pricesLoading || rows.some((r) => !r.state || r.state.status === "loading");
+function rowUsdValue(row: DisplayRow): number | null {
+  if (!row.state || row.state.status !== "ok" || !row.price) return null;
+  return weiToUsd(row.state.wei, row.decimals, row.price.usd);
+}
+
+function computePortfolio(
+  rows: DisplayRow[],
+  pricesLoading: boolean,
+): Portfolio {
+  const loading =
+    pricesLoading || rows.some((r) => !r.state || r.state.status === "loading");
   let total = 0;
   let delta = 0;
   let priced = false;
@@ -454,11 +603,23 @@ function Coin({
   return (
     <span className="coin" style={{ width: size, height: size }}>
       {logo && !broken ? (
-        <img className="coin-img" src={logo} width={size} height={size} alt="" onError={() => setBroken(true)} />
+        <img
+          className="coin-img"
+          src={logo}
+          width={size}
+          height={size}
+          alt=""
+          onError={() => setBroken(true)}
+        />
       ) : (
         <span
           className="coin-glyph"
-          style={{ width: size, height: size, background: color, fontSize: letters.length > 2 ? 11 : 13 }}
+          style={{
+            width: size,
+            height: size,
+            background: color,
+            fontSize: letters.length > 2 ? 11 : 13,
+          }}
         >
           {letters}
         </span>
@@ -469,23 +630,69 @@ function Coin({
 
 // Token-first row (#5): the token symbol is the headline, the chain it lives on is
 // the secondary tag. Works for both the native coin and held ERC-20s.
-function HoldingRow({ row, t }: { row: DisplayRow; t: TFn }) {
+function HoldingRow({
+  row,
+  t,
+  canSign,
+  onSend,
+  onSwap,
+}: {
+  row: DisplayRow;
+  t: TFn;
+  canSign: boolean;
+  onSend: (assetKey: string) => void;
+  onSwap: () => void;
+}) {
   const usd =
-    row.state?.status === "ok" && row.price ? weiToUsd(row.state.wei, row.decimals, row.price.usd) : null;
+    row.state?.status === "ok" && row.price
+      ? weiToUsd(row.state.wei, row.decimals, row.price.usd)
+      : null;
   const up = (row.price?.change24h ?? 0) >= 0;
+  const sendAssetKey =
+    row.kind === "native"
+      ? `n:${row.chainId}`
+      : row.address
+        ? `e:${row.chainId}:${row.address}`
+        : null;
+  const canSend =
+    canSign &&
+    !!sendAssetKey &&
+    row.state?.status === "ok" &&
+    BigInt(row.state.wei) > 0n;
   return (
     <div className="token-row">
       <Coin symbol={row.symbol} color={row.color} logo={row.logo} />
       <div className="token-meta">
         <div className="token-name">
           {row.symbol}
-          {row.isCustom && <span className="badge neutral">{t("wallet.custom")}</span>}
+          {row.isCustom && (
+            <span className="badge neutral">{t("wallet.custom")}</span>
+          )}
         </div>
         <div className="token-sub">
-          <span className="chain-dot" style={{ width: 8, height: 8, background: row.chainColor }} />
+          <span
+            className="chain-dot"
+            style={{ width: 8, height: 8, background: row.chainColor }}
+          />
           {row.chainName}
-          {row.price && <span className={`chg ${up ? "up" : "down"}`}>{fmtPct(row.price.change24h)}</span>}
+          {row.price && (
+            <span className={`chg ${up ? "up" : "down"}`}>
+              {fmtPct(row.price.change24h)}
+            </span>
+          )}
         </div>
+      </div>
+      <div className="token-actions">
+        <button
+          className="token-action send"
+          disabled={!canSend}
+          onClick={() => sendAssetKey && onSend(sendAssetKey)}
+        >
+          <Icon name="send" size={14} /> {t("wallet.send")}
+        </button>
+        <button className="token-action" onClick={onSwap}>
+          <Icon name="swap" size={14} /> {t("wallet.swap")}
+        </button>
       </div>
       <div className="token-right">
         {!row.state || row.state.status === "loading" ? (
@@ -507,7 +714,129 @@ function HoldingRow({ row, t }: { row: DisplayRow; t: TFn }) {
   );
 }
 
-function KindBadge({ kind, t }: { kind: WalletInfo["kind"]; t: TFn }) {
+function ActivityList({
+  records,
+  chains,
+  t,
+}: {
+  records: ActivityRecord[];
+  chains: Chain[];
+  t: TFn;
+}) {
+  if (records.length === 0) {
+    return (
+      <div className="empty">
+        <div className="empty-ic">
+          <Icon name="activity" size={28} />
+        </div>
+        {t("wallet.activityEmpty")}
+      </div>
+    );
+  }
+  return (
+    <div className="activity-list">
+      {records.map((record) => {
+        const chain = chains.find(
+          (c) => c.id.toLowerCase() === record.chainId.toLowerCase(),
+        );
+        const href = txExplorerUrl(chain, record);
+        const hasValue = BigInt(record.value || "0x0") > 0n;
+        const label =
+          record.kind === "contract"
+            ? t("wallet.activityContract")
+            : t("wallet.activitySend");
+        return (
+          <button
+            key={record.id}
+            className="activity-row"
+            onClick={() => href && void openExternalUrl(href)}
+            disabled={!href}
+            title={href ? t("wallet.openExplorer") : t("wallet.noExplorer")}
+          >
+            <span className={`activity-ic ${record.kind}`}>
+              <Icon
+                name={record.kind === "contract" ? "doc" : "send"}
+                size={17}
+              />
+            </span>
+            <span className="activity-main">
+              <span className="activity-title">
+                {label}
+                <span className="activity-chain">
+                  {chain?.name ?? record.chainName}
+                </span>
+              </span>
+              <span className="activity-sub">
+                {shortAddress(record.to || record.hash, 10, 8)} ·{" "}
+                {record.origin}
+              </span>
+            </span>
+            <span className="activity-right">
+              <span className="activity-value">
+                {hasValue
+                  ? `${formatUnits(record.value, chain?.decimals ?? 18)} ${record.symbol}`
+                  : t("wallet.activityNoValue")}
+              </span>
+              <span className="activity-time">
+                {formatActivityTime(record.timestamp)}
+              </span>
+            </span>
+            {href && <Icon name="external" size={15} />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatActivityTime(timestamp: number): string {
+  if (!timestamp) return "";
+  return new Date(timestamp * 1000).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function txExplorerUrl(
+  chain: Chain | undefined,
+  record: ActivityRecord,
+): string | null {
+  const id = record.chainId.toLowerCase();
+  const name = (chain?.name ?? record.chainName).toLowerCase();
+  const bases: Record<string, string> = {
+    "0x1": "https://etherscan.io/tx/",
+    "0x2105": "https://basescan.org/tx/",
+    "0xa": "https://optimistic.etherscan.io/tx/",
+    "0xa4b1": "https://arbiscan.io/tx/",
+    "0x89": "https://polygonscan.com/tx/",
+    "0x38": "https://bscscan.com/tx/",
+    "0xa86a": "https://snowtrace.io/tx/",
+    "0xe708": "https://lineascan.build/tx/",
+    "0x13e31": "https://blastscan.io/tx/",
+    "0x144": "https://era.zksync.network/tx/",
+    "0x44d": "https://zkevm.polygonscan.com/tx/",
+    "0x92": "https://sonicscan.org/tx/",
+    "0xc4": "https://www.oklink.com/xlayer/tx/",
+    "0x1e0": "https://worldscan.org/tx/",
+    "0x250": "https://astar.subscan.io/evm_transaction/",
+    "0x378": "https://wanscan.org/tx/",
+    "0x440": "https://andromeda-explorer.metis.io/tx/",
+    "0xa4ec": "https://celoscan.io/tx/",
+  };
+  const base =
+    bases[id] ?? (name.includes("0g") ? "https://chainscan.0g.ai/tx/" : null);
+  return base ? `${base}${record.hash}` : null;
+}
+
+function KindBadge({
+  kind,
+  t,
+}: {
+  kind: WalletInfo["kind"] | "watch";
+  t: TFn;
+}) {
   if (kind === "ledger")
     return (
       <span className="badge ledger">
@@ -518,6 +847,12 @@ function KindBadge({ kind, t }: { kind: WalletInfo["kind"]; t: TFn }) {
     return (
       <span className="badge neutral">
         <Icon name="key" size={11} /> {t("lock.importTab.privkey")}
+      </span>
+    );
+  if (kind === "watch")
+    return (
+      <span className="badge neutral">
+        <Icon name="eye" size={11} /> {t("wallet.watch")}
       </span>
     );
   return null;
@@ -531,17 +866,102 @@ function AccountSwitcher() {
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [renamingWatch, setRenamingWatch] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [pinned, setPinned] = useState<string[]>(() => loadPinnedAccounts());
 
   const watchAccounts = accounts.filter((a) => !a.signer);
+  const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
+  const q = query.trim().toLowerCase();
+  const visibleWallets = useMemo(() => {
+    return vault.wallets
+      .map((w) => {
+        const walletHaystack = [w.label, w.kind, w.id].join(" ").toLowerCase();
+        const matchedAccounts = w.accounts
+          .map((addr, i) => ({ addr, index: i }))
+          .filter(({ addr, index }) => {
+            if (!q) return true;
+            const accountLabel =
+              w.accounts.length > 1
+                ? `${t("wallet.account")} ${index + 1}`
+                : "";
+            return [
+              walletHaystack,
+              addr,
+              shortAddress(addr, 12, 8),
+              accountLabel,
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(q);
+          })
+          .sort(
+            (a, b) =>
+              Number(pinnedSet.has(b.addr.toLowerCase())) -
+              Number(pinnedSet.has(a.addr.toLowerCase())),
+          );
+        return {
+          wallet: w,
+          accounts: matchedAccounts,
+          pinned: matchedAccounts.some((a) =>
+            pinnedSet.has(a.addr.toLowerCase()),
+          ),
+        };
+      })
+      .filter((g) => g.accounts.length > 0)
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned));
+  }, [pinnedSet, q, t, vault.wallets]);
+
+  const visibleWatchAccounts = useMemo(() => {
+    return watchAccounts
+      .filter((a) => {
+        if (!q) return true;
+        return [
+          a.label,
+          a.address,
+          shortAddress(a.address, 10, 6),
+          t("wallet.watchGroup"),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      })
+      .sort(
+        (a, b) =>
+          Number(pinnedSet.has(b.address.toLowerCase())) -
+          Number(pinnedSet.has(a.address.toLowerCase())),
+      );
+  }, [pinnedSet, q, t, watchAccounts]);
+
+  const visibleCount =
+    visibleWallets.reduce((sum, g) => sum + g.accounts.length, 0) +
+    visibleWatchAccounts.length;
+
+  function togglePinned(address: string) {
+    const key = address.toLowerCase();
+    setPinned((current) => {
+      const next = current.includes(key)
+        ? current.filter((addr) => addr !== key)
+        : [key, ...current];
+      savePinnedAccounts(next);
+      return next;
+    });
+  }
 
   function close() {
     setOpen(false);
     setRenaming(null);
+    setRenamingWatch(null);
+    setQuery("");
   }
 
   return (
     <div className="acct-switch">
-      <button className="acct-pill" onClick={() => setOpen((o) => !o)} title={t("wallet.switchAccount")}>
+      <button
+        className="acct-pill"
+        onClick={() => setOpen((o) => !o)}
+        title={t("wallet.switchAccount")}
+      >
         <Avatar address={active.address} size={34} />
         <div className="acct-pill-meta">
           <div className="nm">
@@ -564,22 +984,37 @@ function AccountSwitcher() {
 
       {open && (
         <>
-          <div style={{ position: "fixed", inset: 0, zIndex: 30 }} onClick={close} />
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 30 }}
+            onClick={close}
+          />
           <div className="acct-menu scroll">
             <div className="acct-menu-head">
               <span>{t("wallet.wallets")}</span>
               <span>{vault.wallets.length}</span>
             </div>
+            <label className="acct-search">
+              <Icon name="search" size={15} />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("wallet.searchAccounts")}
+                autoComplete="off"
+              />
+            </label>
 
-            {vault.wallets.map((w) => (
+            {visibleWallets.map(({ wallet: w, accounts: matchedAccounts }) => (
               <WalletGroup
                 key={w.id}
                 wallet={w}
+                accounts={matchedAccounts}
                 active={active}
                 t={t}
                 renaming={renaming === w.id}
+                pinnedSet={pinnedSet}
                 onRename={() => setRenaming(w.id)}
                 onRenameDone={() => setRenaming(null)}
+                onTogglePinned={togglePinned}
                 onPick={(addr) => {
                   setActive(addr);
                   close();
@@ -587,46 +1022,42 @@ function AccountSwitcher() {
               />
             ))}
 
-            {watchAccounts.length > 0 && (
+            {visibleWatchAccounts.length > 0 && (
               <div className="acct-group">
                 <div className="acct-group-head">
                   <span>{t("wallet.watchGroup")}</span>
                 </div>
-                {watchAccounts.map((a) => (
-                  <div key={a.address} className={`acct-row${a.address === active.address ? " on" : ""}`}>
-                    <button
-                      className="acct-row-main"
-                      onClick={() => {
+                {visibleWatchAccounts.map((a) => {
+                  const isPinned = pinnedSet.has(a.address.toLowerCase());
+                  return (
+                    <WatchAccountRow
+                      key={a.address}
+                      account={a}
+                      activeAddress={active.address}
+                      isPinned={isPinned}
+                      renaming={renamingWatch === a.address}
+                      t={t}
+                      onPick={() => {
                         setActive(a.address);
                         close();
                       }}
-                    >
-                      <Avatar address={a.address} size={30} />
-                      <div className="meta">
-                        <div className="l">{a.label}</div>
-                        <div className="a">{shortAddress(a.address, 10, 6)}</div>
-                      </div>
-                      {a.address === active.address && (
-                        <span className="check">
-                          <Icon name="check" size={16} />
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      className="icon-btn bare acct-row-act"
-                      title={t("wallet.removeWatch")}
-                      onClick={() => {
+                      onRename={() => setRenamingWatch(a.address)}
+                      onRenameDone={() => setRenamingWatch(null)}
+                      onTogglePinned={() => togglePinned(a.address)}
+                      onRemove={() => {
                         if (confirm(t("wallet.deleteWatchConfirm"))) {
                           removeWatchAccount(a.address);
                           toast(t("wallet.removed"));
                         }
                       }}
-                    >
-                      <Icon name="trash" size={15} />
-                    </button>
-                  </div>
-                ))}
+                    />
+                  );
+                })}
               </div>
+            )}
+
+            {visibleCount === 0 && (
+              <div className="acct-empty">{t("wallet.noAccountMatches")}</div>
             )}
 
             <button className="acct-add-wallet" onClick={() => setAdding(true)}>
@@ -650,21 +1081,126 @@ function AccountSwitcher() {
   );
 }
 
+function WatchAccountRow({
+  account,
+  activeAddress,
+  isPinned,
+  renaming,
+  t,
+  onPick,
+  onRename,
+  onRenameDone,
+  onTogglePinned,
+  onRemove,
+}: {
+  account: Account;
+  activeAddress: string;
+  isPinned: boolean;
+  renaming: boolean;
+  t: TFn;
+  onPick: () => void;
+  onRename: () => void;
+  onRenameDone: () => void;
+  onTogglePinned: () => void;
+  onRemove: () => void;
+}) {
+  const [name, setName] = useState(account.label);
+
+  async function saveName() {
+    const next = name.trim();
+    if (next && next !== account.label) {
+      renameWatchAccount(account.address, next);
+      toast(t("wallet.renamed"));
+    }
+    onRenameDone();
+  }
+
+  return (
+    <div
+      className={`acct-row${account.address === activeAddress ? " on" : ""}`}
+    >
+      {renaming ? (
+        <div className="acct-row-main">
+          <Avatar address={account.address} size={30} />
+          <input
+            className="input acct-watch-rename"
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void saveName();
+              if (e.key === "Escape") onRenameDone();
+            }}
+            onBlur={() => void saveName()}
+          />
+        </div>
+      ) : (
+        <button className="acct-row-main" onClick={onPick}>
+          <Avatar address={account.address} size={30} />
+          <div className="meta">
+            <div className="l">{account.label}</div>
+            <div className="a">{shortAddress(account.address, 10, 6)}</div>
+          </div>
+          {account.address === activeAddress && (
+            <span className="check">
+              <Icon name="check" size={16} />
+            </span>
+          )}
+        </button>
+      )}
+      <button
+        className={`icon-btn bare acct-pin${isPinned ? " on" : ""}`}
+        title={t(isPinned ? "wallet.unpinAccount" : "wallet.pinAccount")}
+        onClick={onTogglePinned}
+      >
+        <Icon name="star" size={15} />
+      </button>
+      <button
+        className="icon-btn bare acct-copy"
+        title={t("wallet.copy")}
+        onClick={() => copyAccountAddress(account.address, t)}
+      >
+        <Icon name="copy" size={15} />
+      </button>
+      <button
+        className="icon-btn bare acct-row-edit"
+        title={t("wallet.rename")}
+        onClick={onRename}
+      >
+        <Icon name="edit" size={15} />
+      </button>
+      <button
+        className="icon-btn bare acct-row-act"
+        title={t("wallet.removeWatch")}
+        onClick={onRemove}
+      >
+        <Icon name="trash" size={15} />
+      </button>
+    </div>
+  );
+}
+
 function WalletGroup({
   wallet,
+  accounts,
   active,
   t,
   renaming,
+  pinnedSet,
   onRename,
   onRenameDone,
+  onTogglePinned,
   onPick,
 }: {
   wallet: WalletInfo;
+  accounts: { addr: string; index: number }[];
   active: Account;
   t: TFn;
   renaming: boolean;
+  pinnedSet: Set<string>;
   onRename: () => void;
   onRenameDone: () => void;
+  onTogglePinned: (address: string) => void;
   onPick: (address: string) => void;
 }) {
   const [name, setName] = useState(wallet.label);
@@ -700,7 +1236,11 @@ function WalletGroup({
               <KindBadge kind={wallet.kind} t={t} />
             </span>
             <div className="wallet-acts">
-              <button className="icon-btn bare" title={t("wallet.rename")} onClick={onRename}>
+              <button
+                className="icon-btn bare"
+                title={t("wallet.rename")}
+                onClick={onRename}
+              >
                 <Icon name="edit" size={14} />
               </button>
               <button
@@ -708,7 +1248,9 @@ function WalletGroup({
                 title={t("wallet.delete")}
                 onClick={() => {
                   if (confirm(t("wallet.deleteConfirm"))) {
-                    void deleteWallet(wallet.id).then(() => toast(t("wallet.removed")));
+                    void deleteWallet(wallet.id).then(() =>
+                      toast(t("wallet.removed")),
+                    );
                   }
                 }}
               >
@@ -719,26 +1261,48 @@ function WalletGroup({
         )}
       </div>
 
-      {wallet.accounts.map((addr, i) => (
-        <button
-          key={addr}
-          className={`acct-row-main${addr === active.address ? " on" : ""}`}
-          onClick={() => onPick(addr)}
-        >
-          <Avatar address={addr} size={30} />
-          <div className="meta">
-            <div className="l">
-              {wallet.accounts.length > 1 ? `${t("wallet.account")} ${i + 1}` : shortAddress(addr, 12, 8)}
-            </div>
-            {wallet.accounts.length > 1 && <div className="a">{shortAddress(addr, 10, 6)}</div>}
+      {accounts.map(({ addr, index }) => {
+        const isPinned = pinnedSet.has(addr.toLowerCase());
+        return (
+          <div
+            key={addr}
+            className={`acct-row${addr === active.address ? " on" : ""}`}
+          >
+            <button className="acct-row-main" onClick={() => onPick(addr)}>
+              <Avatar address={addr} size={30} />
+              <div className="meta">
+                <div className="l">
+                  {wallet.accounts.length > 1
+                    ? `${t("wallet.account")} ${index + 1}`
+                    : shortAddress(addr, 12, 8)}
+                </div>
+                {wallet.accounts.length > 1 && (
+                  <div className="a">{shortAddress(addr, 10, 6)}</div>
+                )}
+              </div>
+              {addr === active.address && (
+                <span className="check">
+                  <Icon name="check" size={16} />
+                </span>
+              )}
+            </button>
+            <button
+              className={`icon-btn bare acct-pin${isPinned ? " on" : ""}`}
+              title={t(isPinned ? "wallet.unpinAccount" : "wallet.pinAccount")}
+              onClick={() => onTogglePinned(addr)}
+            >
+              <Icon name="star" size={15} />
+            </button>
+            <button
+              className="icon-btn bare acct-copy"
+              title={t("wallet.copy")}
+              onClick={() => copyAccountAddress(addr, t)}
+            >
+              <Icon name="copy" size={15} />
+            </button>
           </div>
-          {addr === active.address && (
-            <span className="check">
-              <Icon name="check" size={16} />
-            </span>
-          )}
-        </button>
-      ))}
+        );
+      })}
 
       {wallet.kind === "hd" && (
         <button
@@ -789,17 +1353,27 @@ function AddWalletModal({
 
   const opts: { s: AddStep; ic: IconName; label: string; coral?: boolean }[] = [
     { s: "create", ic: "plus", label: t("wallet.createWallet") },
-    { s: "import", ic: "download", label: t("wallet.importWallet"), coral: true },
+    {
+      s: "import",
+      ic: "download",
+      label: t("wallet.importWallet"),
+      coral: true,
+    },
     { s: "ledger", ic: "ledger", label: t("wallet.connectLedger") },
     { s: "watch", ic: "eye", label: t("wallet.watchAddress") },
   ];
 
   return (
     <div className="scrim" onClick={onClose}>
-      <div className={`modal${step === "ledger" ? " wide" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`modal${step === "ledger" ? " wide" : ""}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-head">
           <div className="modal-title">
-            {step === "backup" ? t("wallet.backupNew") : t("wallet.addWalletTitle")}
+            {step === "backup"
+              ? t("wallet.backupNew")
+              : t("wallet.addWalletTitle")}
           </div>
           <button className="icon-btn bare" onClick={onClose}>
             <Icon name="close" size={18} />
@@ -809,7 +1383,11 @@ function AddWalletModal({
           {step === "menu" && (
             <div className="add-opts">
               {opts.map((o) => (
-                <button key={o.s} className={`add-opt${o.coral ? " coral" : ""}`} onClick={() => setStep(o.s)}>
+                <button
+                  key={o.s}
+                  className={`add-opt${o.coral ? " coral" : ""}`}
+                  onClick={() => setStep(o.s)}
+                >
                   <span className="add-opt-ic">
                     <Icon name={o.ic} size={19} />
                   </span>
@@ -830,11 +1408,21 @@ function AddWalletModal({
             />
           )}
           {step === "import" && (
-            <ImportWalletForm needsPassword={!hasPassword} onBack={() => setStep("menu")} onDone={onDone} />
+            <ImportWalletForm
+              needsPassword={!hasPassword}
+              onBack={() => setStep("menu")}
+              onDone={onDone}
+            />
           )}
-          {step === "ledger" && <LedgerForm onBack={() => setStep("menu")} onDone={onDone} />}
-          {step === "watch" && <WatchForm onBack={() => setStep("menu")} onDone={onDone} />}
-          {step === "backup" && <BackupBox mnemonic={mnemonic} onDone={onDone} />}
+          {step === "ledger" && (
+            <LedgerForm onBack={() => setStep("menu")} onDone={onDone} />
+          )}
+          {step === "watch" && (
+            <WatchForm onBack={() => setStep("menu")} onDone={onDone} />
+          )}
+          {step === "backup" && (
+            <BackupBox mnemonic={mnemonic} onDone={onDone} />
+          )}
         </div>
       </div>
     </div>
@@ -860,7 +1448,13 @@ function PasswordPair({
       <div className="add-note">{t("wallet.setPasswordHint")}</div>
       <div className="field">
         <label className="field-label">{t("lock.newPassword")}</label>
-        <input className="input" type="password" value={pw} placeholder={t("lock.min8")} onChange={(e) => setPw(e.target.value)} />
+        <input
+          className="input"
+          type="password"
+          value={pw}
+          placeholder={t("lock.min8")}
+          onChange={(e) => setPw(e.target.value)}
+        />
         <div className={`pw-strength s${score}`}>
           <i />
           <i />
@@ -870,7 +1464,13 @@ function PasswordPair({
       </div>
       <div className="field">
         <label className="field-label">{t("lock.confirm")}</label>
-        <input className="input" type="password" value={confirm} placeholder={t("lock.confirm")} onChange={(e) => setConfirm(e.target.value)} />
+        <input
+          className="input"
+          type="password"
+          value={confirm}
+          placeholder={t("lock.confirm")}
+          onChange={(e) => setConfirm(e.target.value)}
+        />
       </div>
     </>
   );
@@ -899,7 +1499,9 @@ function CreateWalletForm({
     setBusy(true);
     setError(null);
     try {
-      const { mnemonic, address } = await createVault(needsPassword ? pw : undefined);
+      const { mnemonic, address } = await createVault(
+        needsPassword ? pw : undefined,
+      );
       setActive(address); // make the new wallet active everywhere (shell + backend + dApps)
       toast(t("wallet.added"));
       onCreated(mnemonic);
@@ -912,7 +1514,13 @@ function CreateWalletForm({
   return (
     <div className="add-form">
       {needsPassword ? (
-        <PasswordPair pw={pw} setPw={setPw} confirm={confirm} setConfirm={setConfirm} t={t} />
+        <PasswordPair
+          pw={pw}
+          setPw={setPw}
+          confirm={confirm}
+          setConfirm={setConfirm}
+          t={t}
+        />
       ) : (
         <div className="add-note">{t("lock.optCreateDesc")}</div>
       )}
@@ -925,7 +1533,11 @@ function CreateWalletForm({
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
           {t("lock.back")}
         </button>
-        <button className="btn btn-aurora btn-sm" disabled={busy} onClick={submit}>
+        <button
+          className="btn btn-aurora btn-sm"
+          disabled={busy}
+          onClick={submit}
+        >
           {busy ? "…" : t("wallet.createWallet")}
         </button>
       </div>
@@ -957,7 +1569,8 @@ function ImportWalletForm({
       if (words !== 12 && words !== 24) return setError(t("lock.errPhrase"));
     } else {
       const body = privkey.trim().replace(/^0x/i, "");
-      if (!/^[0-9a-fA-F]{64}$/.test(body)) return setError(t("lock.errPrivkey"));
+      if (!/^[0-9a-fA-F]{64}$/.test(body))
+        return setError(t("lock.errPrivkey"));
     }
     if (needsPassword) {
       if (pw.length < 8) return setError(t("lock.errShort"));
@@ -982,10 +1595,16 @@ function ImportWalletForm({
   return (
     <div className="add-form">
       <div className="seg lock-seg">
-        <button className={tab === "phrase" ? "on" : ""} onClick={() => setTab("phrase")}>
+        <button
+          className={tab === "phrase" ? "on" : ""}
+          onClick={() => setTab("phrase")}
+        >
           {t("lock.importTab.phrase")}
         </button>
-        <button className={tab === "privkey" ? "on" : ""} onClick={() => setTab("privkey")}>
+        <button
+          className={tab === "privkey" ? "on" : ""}
+          onClick={() => setTab("privkey")}
+        >
           {t("lock.importTab.privkey")}
         </button>
       </div>
@@ -1007,7 +1626,13 @@ function ImportWalletForm({
         />
       )}
       {needsPassword && (
-        <PasswordPair pw={pw} setPw={setPw} confirm={confirm} setConfirm={setConfirm} t={t} />
+        <PasswordPair
+          pw={pw}
+          setPw={setPw}
+          confirm={confirm}
+          setConfirm={setConfirm}
+          t={t}
+        />
       )}
       {error && (
         <div className="lock-err">
@@ -1018,22 +1643,46 @@ function ImportWalletForm({
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
           {t("lock.back")}
         </button>
-        <button className="btn btn-aurora btn-sm" disabled={busy} onClick={submit}>
-          {busy ? "…" : tab === "phrase" ? t("lock.import") : t("lock.importPrivkey")}
+        <button
+          className="btn btn-aurora btn-sm"
+          disabled={busy}
+          onClick={submit}
+        >
+          {busy
+            ? "…"
+            : tab === "phrase"
+              ? t("lock.import")
+              : t("lock.importPrivkey")}
         </button>
       </div>
     </div>
   );
 }
 
-function LedgerForm({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
+function LedgerForm({
+  onBack,
+  onDone,
+}: {
+  onBack: () => void;
+  onDone: () => void;
+}) {
   const { t } = useT();
-  const { accounts, page, loading, connecting, started, error, scan, nextPage, prevPage, pick } =
-    useLedgerScan((ref) => {
-      setActive(ref.address); // make the connected Ledger account active everywhere
-      toast(t("wallet.added"));
-      onDone();
-    });
+  const {
+    accounts,
+    page,
+    loading,
+    connecting,
+    started,
+    error,
+    scan,
+    nextPage,
+    prevPage,
+    pick,
+  } = useLedgerScan((ref) => {
+    setActive(ref.address); // make the connected Ledger account active everywhere
+    toast(t("wallet.added"));
+    onDone();
+  });
   const showList = started && (accounts.length > 0 || loading);
 
   return (
@@ -1049,7 +1698,9 @@ function LedgerForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
           onNext={nextPage}
         />
       ) : (
-        <div className="add-note">{connecting ? t("lock.ledgerConnecting") : t("lock.ledgerIntro")}</div>
+        <div className="add-note">
+          {connecting ? t("lock.ledgerConnecting") : t("lock.ledgerIntro")}
+        </div>
       )}
       {error && (
         <div className="lock-err">
@@ -1061,7 +1712,11 @@ function LedgerForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
           {t("lock.back")}
         </button>
         {!showList && (
-          <button className="btn btn-aurora btn-sm" disabled={loading} onClick={scan}>
+          <button
+            className="btn btn-aurora btn-sm"
+            disabled={loading}
+            onClick={scan}
+          >
             {loading ? "…" : error ? t("lock.retry") : t("lock.ledgerScan")}
           </button>
         )}
@@ -1070,7 +1725,13 @@ function LedgerForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
   );
 }
 
-function WatchForm({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
+function WatchForm({
+  onBack,
+  onDone,
+}: {
+  onBack: () => void;
+  onDone: () => void;
+}) {
   const { t } = useT();
   const [val, setVal] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -1110,7 +1771,11 @@ function WatchForm({ onBack, onDone }: { onBack: () => void; onDone: () => void 
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
           {t("lock.back")}
         </button>
-        <button className="btn btn-primary btn-sm" disabled={!val} onClick={submit}>
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={!val}
+          onClick={submit}
+        >
           {t("wallet.add")}
         </button>
       </div>
@@ -1118,7 +1783,13 @@ function WatchForm({ onBack, onDone }: { onBack: () => void; onDone: () => void 
   );
 }
 
-function BackupBox({ mnemonic, onDone }: { mnemonic: string; onDone: () => void }) {
+function BackupBox({
+  mnemonic,
+  onDone,
+}: {
+  mnemonic: string;
+  onDone: () => void;
+}) {
   const { t } = useT();
   const [revealed, setRevealed] = useState(false);
   const [acked, setAcked] = useState(false);
@@ -1146,17 +1817,31 @@ function BackupBox({ mnemonic, onDone }: { mnemonic: string; onDone: () => void 
         )}
       </div>
       <label className="lock-check">
-        <input type="checkbox" checked={acked} onChange={(e) => setAcked(e.target.checked)} />
+        <input
+          type="checkbox"
+          checked={acked}
+          onChange={(e) => setAcked(e.target.checked)}
+        />
         {t("lock.backupAck")}
       </label>
-      <button className="btn btn-aurora btn-block" disabled={!acked} onClick={onDone}>
+      <button
+        className="btn btn-aurora btn-block"
+        disabled={!acked}
+        onClick={onDone}
+      >
         {t("lock.continue")}
       </button>
     </div>
   );
 }
 
-function ReceiveModal({ account, onClose }: { account: Account; onClose: () => void }) {
+function ReceiveModal({
+  account,
+  onClose,
+}: {
+  account: Account;
+  onClose: () => void;
+}) {
   const { t } = useT();
   return (
     <div className="scrim" onClick={onClose}>
@@ -1199,11 +1884,19 @@ function ReceiveModal({ account, onClose }: { account: Account; onClose: () => v
 // Add a custom ERC-20 (#8): pick a chain, paste the contract address, scan its
 // on-chain metadata, then persist it. Already-added customs are listed with a
 // remove control.
-function AddTokenModal({ defaultChain, onClose }: { defaultChain?: string; onClose: () => void }) {
+function AddTokenModal({
+  defaultChain,
+  onClose,
+}: {
+  defaultChain?: string;
+  onClose: () => void;
+}) {
   const { t } = useT();
   const chains = useChains();
   const custom = useCustomTokens();
-  const [chainId, setChainId] = useState<string>(defaultChain ?? chains[0]?.id ?? "0x1");
+  const [chainId, setChainId] = useState<string>(
+    defaultChain ?? chains[0]?.id ?? "0x1",
+  );
   const [addr, setAddr] = useState("");
   const [scanned, setScanned] = useState<TokenMeta | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1283,7 +1976,11 @@ function AddTokenModal({ defaultChain, onClose }: { defaultChain?: string; onClo
                   }}
                   onKeyDown={(e) => e.key === "Enter" && void scan()}
                 />
-                <button className="btn btn-ghost btn-sm" disabled={busy || !addr.trim()} onClick={() => void scan()}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={busy || !addr.trim()}
+                  onClick={() => void scan()}
+                >
                   {busy ? t("wallet.scanning") : t("wallet.scan")}
                 </button>
               </div>
@@ -1295,13 +1992,20 @@ function AddTokenModal({ defaultChain, onClose }: { defaultChain?: string; onClo
             )}
             {scanned && (
               <div className="scan-preview">
-                <Coin symbol={scanned.symbol} color={seedColor(scanned.address)} logo={scanned.logo || undefined} size={36} />
+                <Coin
+                  symbol={scanned.symbol}
+                  color={seedColor(scanned.address)}
+                  logo={scanned.logo || undefined}
+                  size={36}
+                />
                 <div className="scan-meta">
                   <div className="l">
-                    {scanned.symbol} <span className="muted">· {scanned.name}</span>
+                    {scanned.symbol}{" "}
+                    <span className="muted">· {scanned.name}</span>
                   </div>
                   <div className="a">
-                    {shortAddress(scanned.address, 10, 8)} · {scanned.decimals} decimals
+                    {shortAddress(scanned.address, 10, 8)} · {scanned.decimals}{" "}
+                    decimals
                   </div>
                 </div>
                 <button className="btn btn-aurora btn-sm" onClick={add}>
@@ -1316,11 +2020,17 @@ function AddTokenModal({ defaultChain, onClose }: { defaultChain?: string; onClo
               <div className="custom-list-head">{t("wallet.customTokens")}</div>
               {customList.map(({ chainId: cid, token }) => (
                 <div key={`${cid}:${token.address}`} className="custom-row">
-                  <Coin symbol={token.symbol} color={seedColor(token.address)} logo={token.logo || undefined} size={28} />
+                  <Coin
+                    symbol={token.symbol}
+                    color={seedColor(token.address)}
+                    logo={token.logo || undefined}
+                    size={28}
+                  />
                   <div className="custom-meta">
                     <div className="l">{token.symbol}</div>
                     <div className="a">
-                      {findChain(cid)?.name ?? cid} · {shortAddress(token.address, 8, 6)}
+                      {findChain(cid)?.name ?? cid} ·{" "}
+                      {shortAddress(token.address, 8, 6)}
                     </div>
                   </div>
                   <button
@@ -1345,23 +2055,72 @@ function AddTokenModal({ defaultChain, onClose }: { defaultChain?: string; onClo
 
 // Wallet-initiated Send (#7): pick a held asset (native or ERC-20), recipient, and
 // amount; the actual confirm (with gas details) happens in the approval window.
-function SendModal({ assets, onClose }: { assets: SendAsset[]; onClose: () => void }) {
+function resolveRecipient(input: string, accounts: Account[]): string | null {
+  const raw = input.trim();
+  if (isAddress(raw)) return raw;
+  const q = raw.toLowerCase();
+  if (!q) return null;
+  const exact = accounts.filter((a) => a.label.toLowerCase() === q);
+  if (exact.length === 1) return exact[0].address;
+  const matches = accounts.filter((a) =>
+    [a.label, a.address, shortAddress(a.address, 10, 6), a.kind]
+      .join(" ")
+      .toLowerCase()
+      .includes(q),
+  );
+  return matches.length === 1 ? matches[0].address : null;
+}
+
+function SendModal({
+  assets,
+  initialAssetKey,
+  onClose,
+}: {
+  assets: SendAsset[];
+  initialAssetKey?: string;
+  onClose: () => void;
+}) {
   const { t } = useT();
-  const [sel, setSel] = useState<string>(assets[0]?.key ?? "");
+  const accounts = useAccounts();
+  const [sel, setSel] = useState<string>(
+    initialAssetKey && assets.some((a) => a.key === initialAssetKey)
+      ? initialAssetKey
+      : (assets[0]?.key ?? ""),
+  );
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const asset = assets.find((a) => a.key === sel);
+  const recipientQuery = recipient.trim().toLowerCase();
+  const recipientMatches = useMemo(() => {
+    if (!recipientQuery || isAddress(recipient)) return [];
+    return accounts
+      .filter((a) =>
+        [a.label, a.address, shortAddress(a.address, 10, 6), a.kind]
+          .join(" ")
+          .toLowerCase()
+          .includes(recipientQuery),
+      )
+      .slice(0, 5);
+  }, [accounts, recipient, recipientQuery]);
+  const resolvedRecipient = resolveRecipient(recipient, accounts);
 
   function setMax() {
-    if (asset) setAmount(formatUnits(asset.wei, asset.decimals, asset.decimals));
+    if (asset)
+      setAmount(formatUnits(asset.wei, asset.decimals, asset.decimals));
   }
 
   async function submit() {
     if (!asset) return;
-    if (!isAddress(recipient)) return setError(t("wallet.invalidRecipient"));
+    const to = resolvedRecipient;
+    if (!to)
+      return setError(
+        recipientMatches.length > 0
+          ? t("wallet.chooseRecipient")
+          : t("wallet.invalidRecipient"),
+      );
     let amountWei: bigint;
     try {
       amountWei = parseUnits(amount, asset.decimals);
@@ -1369,19 +2128,22 @@ function SendModal({ assets, onClose }: { assets: SendAsset[]; onClose: () => vo
       return setError(t("wallet.invalidAmount"));
     }
     if (amountWei <= 0n) return setError(t("wallet.invalidAmount"));
-    if (amountWei > BigInt(asset.wei)) return setError(t("wallet.insufficient"));
+    if (amountWei > BigInt(asset.wei))
+      return setError(t("wallet.insufficient"));
 
-    const to = recipient.trim();
     const tx =
       asset.kind === "native"
         ? { to, value: toHexQuantity(amountWei) }
-        : { to: asset.address as string, value: "0x0", data: encodeErc20Transfer(to, amountWei) };
+        : {
+            to: asset.address as string,
+            value: "0x0",
+            data: encodeErc20Transfer(to, amountWei),
+          };
 
     setBusy(true);
     setError(null);
     try {
       await walletSend(asset.chainId, tx);
-      toast(t("wallet.sent"));
       onClose();
     } catch (e) {
       setError(errText(e));
@@ -1415,7 +2177,8 @@ function SendModal({ assets, onClose }: { assets: SendAsset[]; onClose: () => vo
                 >
                   {assets.map((a) => (
                     <option key={a.key} value={a.key}>
-                      {a.symbol} · {a.chainName} ({formatUnits(a.wei, a.decimals)})
+                      {a.symbol} · {a.chainName} (
+                      {formatUnits(a.wei, a.decimals)})
                     </option>
                   ))}
                 </select>
@@ -1425,19 +2188,51 @@ function SendModal({ assets, onClose }: { assets: SendAsset[]; onClose: () => vo
                 <input
                   className="input mono"
                   value={recipient}
-                  placeholder="0x…"
+                  placeholder={t("wallet.recipientPlaceholder")}
                   onChange={(e) => {
                     setRecipient(e.target.value);
                     setError(null);
                   }}
                 />
+                {resolvedRecipient && !isAddress(recipient) && (
+                  <div className="recipient-match">
+                    <Icon name="check" size={14} />
+                    {t("wallet.recipientMatched")}:{" "}
+                    {shortAddress(resolvedRecipient, 10, 6)}
+                  </div>
+                )}
+                {!resolvedRecipient && recipientMatches.length > 0 && (
+                  <div className="recipient-options">
+                    {recipientMatches.map((a) => (
+                      <button
+                        key={a.address}
+                        className="recipient-option"
+                        onClick={() => {
+                          setRecipient(a.address);
+                          setError(null);
+                        }}
+                      >
+                        <Avatar address={a.address} size={24} />
+                        <span className="recipient-option-meta">
+                          <span>{a.label}</span>
+                          <span>{shortAddress(a.address, 10, 6)}</span>
+                        </span>
+                        <KindBadge
+                          kind={a.kind === "watch" ? "watch" : a.kind}
+                          t={t}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="field">
                 <label className="field-label">
                   {t("wallet.amount")}
                   {asset && (
                     <span className="field-aux">
-                      {t("wallet.available")}: {formatUnits(asset.wei, asset.decimals)} {asset.symbol}
+                      {t("wallet.available")}:{" "}
+                      {formatUnits(asset.wei, asset.decimals)} {asset.symbol}
                     </span>
                   )}
                 </label>
@@ -1472,7 +2267,7 @@ function SendModal({ assets, onClose }: { assets: SendAsset[]; onClose: () => vo
                 </button>
                 <button
                   className="btn btn-aurora btn-sm"
-                  disabled={busy || !asset || !recipient || !amount}
+                  disabled={busy || !asset || !resolvedRecipient || !amount}
                   onClick={() => void submit()}
                 >
                   {busy ? t("wallet.sending") : t("wallet.send")}

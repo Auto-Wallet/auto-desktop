@@ -32,6 +32,16 @@ description = "Allow the shell to read the active wallet network for the chain s
 commands.allow = ["get_active_chain"]
 
 [[permission]]
+identifier = "allow-get-close-behavior"
+description = "Allow the shell to read the main-window close-button behavior."
+commands.allow = ["get_close_behavior"]
+
+[[permission]]
+identifier = "allow-set-close-behavior"
+description = "Allow the shell to set the main-window close-button behavior."
+commands.allow = ["set_close_behavior"]
+
+[[permission]]
 identifier = "allow-get-chains"
 description = "Allow the shell to read the full chain registry (Settings network list + selectors)."
 commands.allow = ["get_chains"]
@@ -50,3 +60,8 @@ commands.allow = ["update_chain"]
 identifier = "allow-remove-chain"
 description = "Allow the shell to remove a user-added network."
 commands.allow = ["remove_chain"]
+
+[[permission]]
+identifier = "allow-get-activity"
+description = "Allow the shell to read persisted wallet transaction activity."
+commands.allow = ["get_activity"]

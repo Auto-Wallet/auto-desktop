@@ -34,13 +34,25 @@ function waitForInvoke(timeoutMs = 5000): Promise<InvokeFn> {
 let invokeReady: Promise<InvokeFn> | null = null;
 const getInvoke = () => (invokeReady ??= waitForInvoke());
 
+function providerError(error: unknown): Error {
+  const message = typeof error === 'string' ? error : error instanceof Error ? error.message : String(error);
+  const out = new Error(message) as Error & { code?: number };
+  const codeMatch = message.match(/(?:code\s*)?(\b49\d{2}\b|\b4\d{3}\b)/i);
+  if (codeMatch) out.code = Number(codeMatch[1]);
+  return out;
+}
+
 const transport: ProviderTransport = {
   async request({ method, params }) {
     const invoke = await getInvoke();
     // NOTE: we intentionally do NOT forward `origin`. The page-reported origin is
     // untrusted; the Rust `wallet_request` command derives the real caller origin
     // from the webview context instead (see src-tauri/src/lib.rs).
-    return invoke('wallet_request', { method, params });
+    try {
+      return await invoke('wallet_request', { method, params });
+    } catch (e) {
+      throw providerError(e);
+    }
   },
   subscribe(handler) {
     // The backend pushes wallet events (chainChanged, …) by eval'ing

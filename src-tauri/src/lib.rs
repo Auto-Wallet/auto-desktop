@@ -427,6 +427,23 @@ struct ChainCfg {
     builtin: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivityRecord {
+    id: String,
+    hash: String,
+    chain_id: String,
+    chain_name: String,
+    symbol: String,
+    from: String,
+    to: String,
+    value: String,
+    data: String,
+    origin: String,
+    kind: String,
+    timestamp: u64,
+}
+
 fn builtin_chains() -> Vec<ChainCfg> {
     fn c(id: &str, name: &str, symbol: &str, rpc: &str, color: &str) -> ChainCfg {
         ChainCfg { id: id.into(), name: name.into(), symbol: symbol.into(), rpc: rpc.into(), decimals: 18, color: color.into(), builtin: true }
@@ -557,7 +574,7 @@ fn handle_wallet_method(
         "wallet_switchEthereumChain" => {
             let target = chain_id_param()?;
             let chain = find_chain(target).ok_or_else(|| {
-                format!("Unrecognized chain ID {target}; add it first (EIP-3326 code 4902)")
+                format!("Unrecognized chain ID {target}; add it first with wallet_addEthereumChain (code 4902)")
             })?;
             Ok(WalletOutcome::SwitchChain(chain.id.to_string()))
         }
@@ -685,6 +702,51 @@ async fn node_rpc(chain_id: String, method: String, params: Option<Vec<Value>>) 
     }
     let chain = find_chain(&chain_id).ok_or_else(|| format!("node_rpc: unknown chain {chain_id}"))?;
     node_rpc_call(&chain, &method, &params.unwrap_or_default()).await
+}
+
+const BCS_API_URL: &str = "https://balance-change-simulate-api.wanscan.org/simulate";
+
+#[derive(Debug, Deserialize)]
+struct SimulateTxRequest {
+    chain_id: u64,
+    from: String,
+    to: String,
+    data: String,
+    value: String,
+    gas: u64,
+}
+
+/// Balance-change simulation for the trusted approval window. This runs through
+/// Rust reqwest because the BCS API does not handle browser CORS preflight from
+/// the Tauri WebView (`OPTIONS /simulate` returns 405), while the extension's
+/// background context can call it with host permissions.
+#[tauri::command]
+async fn simulate_tx(req: SimulateTxRequest) -> Result<Value, String> {
+    let payload = json!({
+        "chain_id": req.chain_id,
+        "from": req.from,
+        "to": req.to,
+        "data": req.data,
+        "value": req.value,
+        "gas": req.gas,
+    });
+    let resp = http()
+        .post(BCS_API_URL)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("simulation request failed: {e}"))?;
+    let status = resp.status().as_u16();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("simulation response read failed: {e}"))?;
+    let data = if text.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({ "message": text }))
+    };
+    Ok(json!({ "ok": (200..300).contains(&status), "status": status, "data": data }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1103,7 +1165,11 @@ async fn approve_and_send<R: Runtime>(
     {
         p.max_priority_fee_per_gas = p.max_fee_per_gas.clone();
     }
-    finalize_tx(&p).await
+    let hash = finalize_tx(&p).await?;
+    if let Some(hash_str) = hash.as_str() {
+        record_activity(app, &p, origin, hash_str);
+    }
+    Ok(hash)
 }
 
 /// Wallet-initiated send (shell-only): same approval + sign + broadcast path as a
@@ -1150,6 +1216,20 @@ async fn handle_rpc<R: Runtime>(
                 }
                 WalletOutcome::AddChain(chain) => {
                     let new_id = chain.id.clone();
+                    let summary = format!(
+                        "Network: {}\nChain ID: {}\nRPC: {}\nCurrency: {}",
+                        chain.name, chain.id, chain.rpc, chain.symbol
+                    );
+                    let req = PendingRequest {
+                        id: next_request_id(),
+                        method: "wallet_addEthereumChain".to_string(),
+                        origin: origin.to_string(),
+                        summary,
+                        tx: None,
+                    };
+                    if !request_approval(app, req).await.approved {
+                        return Err("User rejected adding the network (code 4001)".to_string());
+                    }
                     {
                         let mut chains = chains_state().lock().unwrap();
                         if !chains.iter().any(|c| c.id.eq_ignore_ascii_case(&new_id)) {
@@ -1478,6 +1558,128 @@ fn save_chains<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let list = chains_state().lock().unwrap().clone();
     let json = serde_json::to_vec_pretty(&list).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("writing chains: {e}"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum CloseBehavior {
+    Hide,
+    Quit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct AppPrefs {
+    close_behavior: CloseBehavior,
+}
+
+impl Default for AppPrefs {
+    fn default() -> Self {
+        Self { close_behavior: default_close_behavior() }
+    }
+}
+
+fn default_close_behavior() -> CloseBehavior {
+    #[cfg(target_os = "macos")]
+    {
+        CloseBehavior::Hide
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        CloseBehavior::Quit
+    }
+}
+
+const APP_PREFS_FILE: &str = "app-prefs.json";
+
+fn app_prefs_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(APP_PREFS_FILE))
+}
+
+fn load_app_prefs<R: Runtime>(app: &AppHandle<R>) -> AppPrefs {
+    let Ok(path) = app_prefs_path(app) else { return AppPrefs::default() };
+    let Ok(bytes) = std::fs::read(path) else { return AppPrefs::default() };
+    serde_json::from_slice::<AppPrefs>(&bytes).unwrap_or_default()
+}
+
+fn save_app_prefs<R: Runtime>(app: &AppHandle<R>, prefs: &AppPrefs) -> Result<(), String> {
+    let path = app_prefs_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(prefs).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("writing app prefs: {e}"))
+}
+
+const ACTIVITY_FILE: &str = "activity.json";
+
+fn activity_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(ACTIVITY_FILE))
+}
+
+fn load_activity_records<R: Runtime>(app: &AppHandle<R>) -> Vec<ActivityRecord> {
+    let Ok(path) = activity_path(app) else { return Vec::new() };
+    let Ok(bytes) = std::fs::read(path) else { return Vec::new() };
+    serde_json::from_slice::<Vec<ActivityRecord>>(&bytes).unwrap_or_default()
+}
+
+fn save_activity_records<R: Runtime>(app: &AppHandle<R>, records: &[ActivityRecord]) -> Result<(), String> {
+    let path = activity_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(records).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("writing activity: {e}"))
+}
+
+fn record_activity<R: Runtime>(app: &AppHandle<R>, prepared: &PreparedTx, origin: &str, hash: &str) {
+    let has_data = prepared.data.trim() != "0x" && !prepared.data.trim().is_empty();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let record = ActivityRecord {
+        id: format!("{}:{}", prepared.chain_id.to_lowercase(), hash.to_lowercase()),
+        hash: hash.to_string(),
+        chain_id: prepared.chain_id.clone(),
+        chain_name: prepared.chain_name.clone(),
+        symbol: prepared.symbol.clone(),
+        from: prepared.from.clone(),
+        to: prepared.to.clone(),
+        value: prepared.value.clone(),
+        data: prepared.data.clone(),
+        origin: origin.to_string(),
+        kind: if has_data { "contract".to_string() } else { "send".to_string() },
+        timestamp: now,
+    };
+
+    let mut records = load_activity_records(app);
+    records.retain(|r| !r.hash.eq_ignore_ascii_case(hash) || !r.chain_id.eq_ignore_ascii_case(&prepared.chain_id));
+    records.insert(0, record);
+    records.truncate(500);
+    if let Err(e) = save_activity_records(app, &records) {
+        println!("[AutoDesktop] warn: failed to save activity: {e}");
+    } else {
+        let _ = app.emit("activity-changed", ());
+    }
+    let _ = app.emit("activity-recorded", &records[0]);
+}
+
+#[tauri::command]
+fn get_activity<R: Runtime>(app: AppHandle<R>) -> Vec<ActivityRecord> {
+    load_activity_records(&app)
+}
+
+#[tauri::command]
+fn get_close_behavior<R: Runtime>(app: AppHandle<R>) -> CloseBehavior {
+    load_app_prefs(&app).close_behavior
+}
+
+#[tauri::command]
+fn set_close_behavior<R: Runtime>(app: AppHandle<R>, close_behavior: CloseBehavior) -> Result<CloseBehavior, String> {
+    let prefs = AppPrefs { close_behavior };
+    save_app_prefs(&app, &prefs)?;
+    Ok(close_behavior)
 }
 
 /// Normalize a chain id (accept "0x.." or decimal) to canonical lowercase 0x-hex.
@@ -2214,13 +2416,31 @@ fn build_context<R: tauri::Runtime>() -> tauri::Context<R> {
 // ---------------------------------------------------------------------------
 // Window / webview layout.
 // ---------------------------------------------------------------------------
-const WIN_W: f64 = 1280.0;
-const WIN_H: f64 = 720.0;
+const WIN_W: f64 = 1350.0;
+const WIN_H: f64 = 880.0;
+const MIN_WIN_W: f64 = 940.0;
+const MIN_WIN_H: f64 = 600.0;
 
 /// The real EIP-1193/EIP-6963 provider from auto-wallet-core, bundled to a
 /// self-contained IIFE by `bun run build:injected` and embedded at compile time.
 /// Injected into every dApp webview before page scripts.
 const INPAGE_PROVIDER: &str = include_str!("../injected/inpage.js");
+
+fn startup_window_size<R: Runtime>(app: &tauri::App<R>) -> (LogicalSize<f64>, bool) {
+    let preferred = LogicalSize::new(WIN_W, WIN_H);
+    let Ok(Some(monitor)) = app.primary_monitor() else {
+        return (preferred, false);
+    };
+    let work_area = monitor
+        .work_area()
+        .size
+        .to_logical::<f64>(monitor.scale_factor());
+    if work_area.width < WIN_W || work_area.height < WIN_H {
+        (LogicalSize::new(work_area.width, work_area.height), true)
+    } else {
+        (preferred, false)
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -2256,9 +2476,13 @@ pub fn run() {
             close_dapp,
             open_external_url,
             node_rpc,
+            simulate_tx,
             wallet_send,
             set_active_chain,
             get_active_chain,
+            get_close_behavior,
+            set_close_behavior,
+            get_activity,
             get_chains,
             add_chain,
             update_chain,
@@ -2286,11 +2510,16 @@ pub fn run() {
             if let Err(e) = boot_load_ledger_only(app.handle()) {
                 println!("[AutoDesktop] warn: could not restore Ledger wallets: {e}");
             }
+            let (startup_size, should_maximize) = startup_window_size(app);
             // Container window (no webview of its own).
             let window = WindowBuilder::new(app, "main")
                 .title("AutoDesktop")
-                .inner_size(WIN_W, WIN_H)
-                .min_inner_size(940.0, 600.0)
+                .inner_size(startup_size.width, startup_size.height)
+                .min_inner_size(
+                    MIN_WIN_W.min(startup_size.width),
+                    MIN_WIN_H.min(startup_size.height),
+                )
+                .maximized(should_maximize)
                 .resizable(true)
                 .build()?;
 
@@ -2299,7 +2528,7 @@ pub fn run() {
             let shell = window.add_child(
                 shell_builder,
                 LogicalPosition::new(0.0, 0.0),
-                LogicalSize::new(WIN_W, WIN_H),
+                startup_size,
             )?;
 
             // dApp tab webviews (remote, untrusted) are created on demand, one per
@@ -2314,15 +2543,26 @@ pub fn run() {
             // separately: resizing the shell resizes `.browser-content`, whose
             // ResizeObserver calls set_dapp_bounds from JS.
             let shell_for_resize = shell.clone();
+            let window_for_close = window.clone();
+            let app_for_close = app.handle().clone();
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::Resized(size) = event {
-                    let scale = shell_for_resize
-                        .window()
-                        .scale_factor()
-                        .unwrap_or(1.0);
-                    let logical = size.to_logical::<f64>(scale);
-                    let _ = shell_for_resize
-                        .set_size(LogicalSize::new(logical.width, logical.height));
+                match event {
+                    tauri::WindowEvent::Resized(size) => {
+                        let scale = shell_for_resize
+                            .window()
+                            .scale_factor()
+                            .unwrap_or(1.0);
+                        let logical = size.to_logical::<f64>(scale);
+                        let _ = shell_for_resize
+                            .set_size(LogicalSize::new(logical.width, logical.height));
+                    }
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        if load_app_prefs(&app_for_close).close_behavior == CloseBehavior::Hide {
+                            api.prevent_close();
+                            let _ = window_for_close.hide();
+                        }
+                    }
+                    _ => {}
                 }
             });
 

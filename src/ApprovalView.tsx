@@ -47,6 +47,8 @@ function kindMeta(method: string, t: TFn): { title: string; icon: IconName; cora
       return { title: t("approval.signTyped"), icon: "edit", coral: false };
     case "eth_sendTransaction":
       return { title: t("approval.sendTx"), icon: "send", coral: true };
+    case "wallet_addEthereumChain":
+      return { title: t("approval.addNetwork"), icon: "globe", coral: false };
     default:
       return { title: method, icon: "shield", coral: false };
   }
@@ -285,7 +287,8 @@ function ApprovalView() {
         )}
 
         <div className="apv-warn">
-          <Icon name="alert" size={16} /> {t("approval.warn")}
+          <Icon name="alert" size={16} />
+          {current.method === "wallet_addEthereumChain" ? t("approval.addNetworkWarn") : t("approval.warn")}
         </div>
 
         {isLedger && busy && (

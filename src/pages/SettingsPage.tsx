@@ -7,6 +7,7 @@ import { lockVault } from "../lib/vault";
 import { useActiveWallet } from "../lib/accounts";
 import { setLang, useT, type Lang, type TFn } from "../lib/i18n";
 import { setThemePref, useThemePref, type ThemePref } from "../lib/theme";
+import { setCloseBehavior, useCloseBehavior } from "../lib/appPrefs";
 import { Icon, type IconName } from "../lib/icons";
 import { toast } from "../lib/toast";
 
@@ -30,6 +31,7 @@ export default function SettingsPage() {
   const chains = useChains();
   const activeChain = useActiveChain();
   const themePref = useThemePref();
+  const closeBehavior = useCloseBehavior();
   const activeWallet = useActiveWallet();
   const [updated, setUpdated] = useState(false);
   const [editing, setEditing] = useState<Chain | "new" | null>(null);
@@ -127,6 +129,19 @@ export default function SettingsPage() {
                     </button>
                   ))}
                 </div>
+              </div>
+              <div className="set-row">
+                <div className="gr">
+                  <div className="rl">{t("settings.closeBehavior")}</div>
+                  <div className="rs">{t("settings.closeBehaviorHint")}</div>
+                </div>
+                <button
+                  className={`toggle${closeBehavior === "hide" ? " on" : ""}`}
+                  aria-pressed={closeBehavior === "hide"}
+                  onClick={() => void setCloseBehavior(closeBehavior === "hide" ? "quit" : "hide")}
+                >
+                  <i />
+                </button>
               </div>
             </div>
           </div>

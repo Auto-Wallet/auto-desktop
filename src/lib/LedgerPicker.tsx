@@ -104,7 +104,7 @@ export function LedgerList({
   const busy = loading || connecting;
   return (
     <div className="ledger-pick">
-      <ul className="ledger-list scroll">
+      <ul className="ledger-list">
         {accounts.map((a) => (
           <li key={a.path}>
             <button className="ledger-acct" disabled={connecting} onClick={() => onPick(a)}>
@@ -115,7 +115,7 @@ export function LedgerList({
           </li>
         ))}
         {loading &&
-          Array.from({ length: Math.min(3, LEDGER_PAGE_SIZE - accounts.length) }).map((_, i) => (
+          Array.from({ length: LEDGER_PAGE_SIZE - accounts.length }).map((_, i) => (
             <li key={`skel-${i}`}>
               <div className="ledger-acct ledger-skel">
                 <span className="skeleton" style={{ width: 40, height: 13 }} />

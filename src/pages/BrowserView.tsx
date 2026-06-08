@@ -66,30 +66,26 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     };
   }, [native, label, dapp.url]);
 
-  // Keep the page VISIBLE while a topbar menu (chain / account) is open. The menu is
-  // drawn by the shell, which sits BEHIND the dApp's native webview, so instead of
-  // hiding the whole page we inset the webview's top edge to just below the open
-  // menu: the menu shows in the freed strip and the page stays visible beneath it.
+  // Native child webviews render above the shell, so a shell dropdown cannot truly
+  // float over the dApp webview. While a menu is open, keep the page visible below
+  // the menu by cropping only the top strip that the menu occupies.
   useEffect(() => {
     if (!native) return;
     const el = contentRef.current;
     if (!el) return;
-    if (!menuOpen) {
-      void setDappBounds(label, rectOf(el)); // restore the full content rect
-      return;
-    }
     const id = requestAnimationFrame(() => {
-      const menu = document.querySelector(".chain-menu") as HTMLElement | null;
-      const full = rectOf(el);
-      if (!menu) {
-        void setDappBounds(label, full);
+      if (!menuOpen) {
+        void openDapp(label, dapp.url, rectOf(el));
         return;
       }
-      const top = Math.min(full.y + full.h - 1, menu.getBoundingClientRect().bottom + 8);
+      const full = rectOf(el);
+      const menu = document.querySelector(".chain-menu") as HTMLElement | null;
+      const menuBottom = menu?.getBoundingClientRect().bottom ?? full.y;
+      const top = Math.min(full.y + full.h - 1, Math.max(full.y, menuBottom + 8));
       void setDappBounds(label, { x: full.x, y: top, w: full.w, h: full.y + full.h - top });
     });
     return () => cancelAnimationFrame(id);
-  }, [menuOpen, native, label]);
+  }, [menuOpen, native, label, dapp.url]);
 
   return (
     <div className="browser">
@@ -153,13 +149,17 @@ function AcctChip({ onMenu }: { onMenu: (open: boolean) => void }) {
   const accounts = useAccounts();
   const active = useActiveAccount();
   const [open, setOpen] = useState(false);
-  // Tell the parent when the menu is open so it can hide the dApp webview underneath.
+  // Tell the parent when the menu is open so it can keep the native webview below it.
   useEffect(() => {
     if (!open) return;
     onMenu(true);
     return () => onMenu(false);
   }, [open, onMenu]);
   const isActive = (addr: string) => addr.toLowerCase() === active.address.toLowerCase();
+  function copyAddress(address: string) {
+    void navigator.clipboard.writeText(address);
+    toast(t("common.copied"));
+  }
   return (
     <div className="chain-wrap">
       <button className="acct-chip" onClick={() => setOpen((o) => !o)} title={t("wallet.switchAccount")}>
@@ -172,10 +172,18 @@ function AcctChip({ onMenu }: { onMenu: (open: boolean) => void }) {
           <div style={{ position: "fixed", inset: 0, zIndex: 30 }} onClick={() => setOpen(false)} />
           <div className="chain-menu acct-pop scroll">
             {accounts.map((a) => (
-              <button
+              <div
                 key={a.address}
+                role="button"
+                tabIndex={0}
                 className={`acct-opt${isActive(a.address) ? " on" : ""}`}
                 onClick={() => {
+                  setActive(a.address);
+                  setOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
                   setActive(a.address);
                   setOpen(false);
                 }}
@@ -185,12 +193,22 @@ function AcctChip({ onMenu }: { onMenu: (open: boolean) => void }) {
                   <span className="l">{a.label}</span>
                   <span className="a">{shortAddress(a.address, 8, 6)}</span>
                 </span>
+                <button
+                  className="acct-copy"
+                  title={t("wallet.copy")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copyAddress(a.address);
+                  }}
+                >
+                  <Icon name="copy" size={14} />
+                </button>
                 {isActive(a.address) && (
                   <span className="check">
                     <Icon name="check" size={15} />
                   </span>
                 )}
-              </button>
+              </div>
             ))}
           </div>
         </>
