@@ -2071,6 +2071,88 @@ function resolveRecipient(input: string, accounts: Account[]): string | null {
   return matches.length === 1 ? matches[0].address : null;
 }
 
+function AssetSelect({
+  assets,
+  selected,
+  onChange,
+}: {
+  assets: SendAsset[];
+  selected: SendAsset | undefined;
+  onChange: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = selected ?? assets[0];
+  if (!current) return null;
+
+  function pick(key: string) {
+    onChange(key);
+    setOpen(false);
+  }
+
+  return (
+    <div className="asset-select">
+      <button
+        className="asset-trigger"
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Coin
+          symbol={current.symbol}
+          color={current.color}
+          logo={current.logo}
+          size={34}
+        />
+        <span className="asset-trigger-meta">
+          <span className="asset-symbol">{current.symbol}</span>
+          <span className="asset-sub">{current.chainName}</span>
+        </span>
+        <span className="asset-balance">
+          {formatUnits(current.wei, current.decimals)} {current.symbol}
+        </span>
+        <Icon name="chevronD" size={16} />
+      </button>
+
+      {open && (
+        <>
+          <div className="asset-backdrop" onClick={() => setOpen(false)} />
+          <div className="asset-menu">
+            {assets.map((asset) => (
+              <button
+                key={asset.key}
+                type="button"
+                className={`asset-option${asset.key === current.key ? " on" : ""}`}
+                onClick={() => pick(asset.key)}
+              >
+                <Coin
+                  symbol={asset.symbol}
+                  color={asset.color}
+                  logo={asset.logo}
+                  size={32}
+                />
+                <span className="asset-option-meta">
+                  <span>
+                    {asset.symbol}
+                    <span className="muted"> · {asset.chainName}</span>
+                  </span>
+                  <span>
+                    {asset.kind === "erc20" && asset.address
+                      ? shortAddress(asset.address, 8, 6)
+                      : asset.chainName}
+                  </span>
+                </span>
+                <span className="asset-option-balance">
+                  {formatUnits(asset.wei, asset.decimals)} {asset.symbol}
+                </span>
+                {asset.key === current.key && <Icon name="check" size={16} />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SendModal({
   assets,
   initialAssetKey,
@@ -2167,21 +2249,14 @@ function SendModal({
             <div className="add-form">
               <div className="field">
                 <label className="field-label">{t("wallet.sendAsset")}</label>
-                <select
-                  className="input"
-                  value={sel}
-                  onChange={(e) => {
-                    setSel(e.target.value);
+                <AssetSelect
+                  assets={assets}
+                  selected={asset}
+                  onChange={(key) => {
+                    setSel(key);
                     setError(null);
                   }}
-                >
-                  {assets.map((a) => (
-                    <option key={a.key} value={a.key}>
-                      {a.symbol} · {a.chainName} (
-                      {formatUnits(a.wei, a.decimals)})
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
               <div className="field">
                 <label className="field-label">{t("wallet.recipient")}</label>
