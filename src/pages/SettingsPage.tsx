@@ -19,7 +19,7 @@ import { openExternalUrl } from "../lib/platform";
 import { Icon, type IconName } from "../lib/icons";
 import { toast } from "../lib/toast";
 
-const APP_VERSION = "0.1.1"; // mirrors src-tauri/tauri.conf.json
+const APP_VERSION = "0.1.2"; // mirrors src-tauri/tauri.conf.json
 
 function safeHost(rpc: string): string {
   try {
