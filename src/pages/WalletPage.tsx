@@ -8,6 +8,7 @@ import {
 } from "../lib/activity";
 import { openExternalUrl } from "../lib/platform";
 import { ChainIcon } from "../lib/ChainIcon";
+import { useDefiPositions, type DefiState } from "../lib/defi";
 import {
   fmtPct,
   fmtUsd,
@@ -133,6 +134,7 @@ export default function WalletPage() {
   }, [chains, custom, tokenBalances]);
   const { prices: tokenPrices, refresh: refreshTokenPrices } =
     useTokenPrices(pricedTokens);
+  const defi = useDefiPositions(active.address);
 
   const [tab, setTab] = useState<"tokens" | "activity">("tokens");
   const [filter, setFilter] = useState<string>("all");
@@ -222,6 +224,7 @@ export default function WalletPage() {
     refreshTokens();
     refreshPrices();
     refreshTokenPrices();
+    defi.refresh();
     toast(t("common.refreshed"));
   }
 
@@ -365,27 +368,40 @@ export default function WalletPage() {
                   </button>
                 ))}
               </div>
-              <div className="token-list">
-                {rows.map((r) => (
-                  <HoldingRow
-                    key={r.key}
-                    row={r}
-                    t={t}
-                    canSign={!!active.signer}
-                    onSend={(assetKey) => {
-                      setSendAssetKey(assetKey);
-                      setShowSend(true);
-                    }}
-                    onSwap={() => toast(t("wallet.swapSoon"), "info")}
-                  />
-                ))}
-              </div>
-              <button
-                className="add-token"
-                onClick={() => setShowAddToken(true)}
-              >
-                <Icon name="plus" size={16} /> {t("wallet.addToken")}
-              </button>
+              <section className="asset-section">
+                <div className="asset-section-head">
+                  <div>
+                    <div className="asset-section-title">
+                      {t("wallet.tokenHoldings")}
+                    </div>
+                    <div className="asset-section-sub">
+                      {t("wallet.tokenHoldingsHint")}
+                    </div>
+                  </div>
+                </div>
+                <div className="token-list">
+                  {rows.map((r) => (
+                    <HoldingRow
+                      key={r.key}
+                      row={r}
+                      t={t}
+                      canSign={!!active.signer}
+                      onSend={(assetKey) => {
+                        setSendAssetKey(assetKey);
+                        setShowSend(true);
+                      }}
+                      onSwap={() => toast(t("wallet.swapSoon"), "info")}
+                    />
+                  ))}
+                </div>
+                <button
+                  className="add-token"
+                  onClick={() => setShowAddToken(true)}
+                >
+                  <Icon name="plus" size={16} /> {t("wallet.addToken")}
+                </button>
+              </section>
+              <DefiSection t={t} defi={defi} />
             </>
           ) : (
             <ActivityList records={accountActivity} chains={chains} t={t} />
@@ -410,6 +426,121 @@ export default function WalletPage() {
         />
       )}
     </div>
+  );
+}
+
+function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
+  return (
+    <section className="asset-section defi-section">
+      <div className="asset-section-head">
+        <div>
+          <div className="asset-section-title">{t("wallet.defiHoldings")}</div>
+          <div className="asset-section-sub">{t("wallet.defiHoldingsHint")}</div>
+        </div>
+      </div>
+      {defi.status === "loading" && defi.positions.length === 0 ? (
+        <div className="defi-list">
+          <div className="defi-card">
+            <span className="skeleton" style={{ width: 38, height: 38 }} />
+            <div className="defi-main">
+              <span className="skeleton" style={{ width: 180, height: 14 }} />
+              <span className="skeleton" style={{ width: 120, height: 12 }} />
+            </div>
+            <span className="skeleton" style={{ width: 76, height: 14 }} />
+          </div>
+        </div>
+      ) : defi.status === "error" ? (
+        <div className="defi-empty error">
+          <div className="defi-empty-ic">
+            <Icon name="alert" size={18} />
+          </div>
+          <div>
+            <div className="defi-empty-title">{t("wallet.defiError")}</div>
+            <div className="defi-empty-sub">{defi.error}</div>
+          </div>
+        </div>
+      ) : defi.positions.length > 0 ? (
+        <div className="defi-list">
+          {defi.positions.map((position) => (
+            <DefiPositionCard key={position.id} position={position} />
+          ))}
+        </div>
+      ) : (
+        <div className="defi-empty">
+          <div className="defi-empty-ic">
+            <Icon name="bridge" size={18} />
+          </div>
+          <div>
+            <div className="defi-empty-title">{t("wallet.defiEmpty")}</div>
+            <div className="defi-empty-sub">{t("wallet.defiEmptyHint")}</div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DefiPositionCard({
+  position,
+}: {
+  position: DefiState["positions"][number];
+}) {
+  const symbols =
+    position.symbols.length > 0
+      ? position.symbols
+      : position.tokens.map((token) => token.symbol);
+  const canOpen = !!position.appUrl;
+  function openPositionDapp() {
+    if (!position.appUrl) return;
+    let url: URL;
+    try {
+      url = new URL(position.appUrl);
+    } catch {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("autodesktop:open-dapp", {
+        detail: {
+          id: `defi-${url.hostname}-${position.appName}`
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]/g, "-"),
+          url: url.toString(),
+          name: position.appName,
+          pinned: false,
+        },
+      }),
+    );
+  }
+  const Tag = canOpen ? "button" : "div";
+  return (
+    <Tag
+      className={`defi-card${canOpen ? " clickable" : ""}`}
+      onClick={canOpen ? openPositionDapp : undefined}
+      title={canOpen ? position.appUrl ?? undefined : undefined}
+    >
+      <div className="defi-app-icon">
+        {position.appImageUrl ? (
+          <img src={position.appImageUrl} alt="" />
+        ) : (
+          position.appName.slice(0, 2).toUpperCase()
+        )}
+      </div>
+      <div className="defi-main">
+        <div className="defi-title">
+          {position.appName}
+          <span className="defi-network">{position.networkName}</span>
+        </div>
+        <div className="defi-label">{position.label}</div>
+        {symbols.length > 0 && (
+          <div className="defi-symbols">
+            {symbols.slice(0, 4).map((symbol) => (
+              <span key={symbol}>{symbol}</span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="defi-value tnum">{fmtUsd(position.balanceUsd)}</div>
+    </Tag>
   );
 }
 

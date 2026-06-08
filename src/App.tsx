@@ -7,7 +7,7 @@ import DappsPage from "./pages/DappsPage";
 import BrowserView from "./pages/BrowserView";
 import SettingsPage from "./pages/SettingsPage";
 import LockScreen from "./pages/LockScreen";
-import { faviconOf, type Dapp } from "./lib/dapps";
+import { ensureDapp, faviconOf, type Dapp } from "./lib/dapps";
 import { closeDapp, dappLabel, isTauri } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
 import { useActiveAccount, useActiveAccountSync } from "./lib/accounts";
@@ -94,6 +94,16 @@ function App() {
     setActiveId(dapp.id);
     setPage("browser");
   }
+
+  useEffect(() => {
+    const onOpenDapp = (event: Event) => {
+      const dapp = (event as CustomEvent<Dapp>).detail;
+      if (!dapp?.id || !dapp.url || !dapp.name) return;
+      openTab(ensureDapp(dapp.url, dapp.name));
+    };
+    window.addEventListener("autodesktop:open-dapp", onOpenDapp);
+    return () => window.removeEventListener("autodesktop:open-dapp", onOpenDapp);
+  }, []);
 
   function closeTab(id: string) {
     void closeDapp(dappLabel(id));

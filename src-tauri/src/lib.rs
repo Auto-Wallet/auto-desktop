@@ -576,6 +576,30 @@ struct UpdateInfo {
     download_url: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefiPositionToken {
+    symbol: String,
+    balance: Option<String>,
+    balance_usd: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefiPosition {
+    id: String,
+    app_name: String,
+    app_image_url: Option<String>,
+    app_url: Option<String>,
+    network_name: String,
+    chain_id: String,
+    label: String,
+    group_label: Option<String>,
+    balance_usd: f64,
+    symbols: Vec<String>,
+    tokens: Vec<DefiPositionToken>,
+}
+
 fn builtin_chains() -> Vec<ChainCfg> {
     fn c(id: &str, name: &str, symbol: &str, rpc: &str, color: &str) -> ChainCfg {
         ChainCfg {
@@ -2251,6 +2275,296 @@ async fn check_for_update() -> Result<UpdateInfo, String> {
     })
 }
 
+fn read_env_file_value(name: &str) -> Option<String> {
+    let mut dirs = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd.clone());
+        if let Some(parent) = cwd.parent() {
+            dirs.push(parent.to_path_buf());
+        }
+    }
+    for dir in dirs {
+        let path = dir.join(".env.local");
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+            if key.trim() != name {
+                continue;
+            }
+            let value = value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn zapper_api_key() -> Option<String> {
+    std::env::var("ZAPPER_APIKEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("ZAPPER_API_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
+        .or_else(|| read_env_file_value("ZAPPER_APIKEY"))
+        .or_else(|| read_env_file_value("ZAPPER_API_KEY"))
+        .or_else(|| {
+            option_env!("ZAPPER_APIKEY")
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            option_env!("ZAPPER_API_KEY")
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn value_as_f64(value: Option<&Value>) -> Option<f64> {
+    match value {
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn value_as_string(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+fn zapper_display_label(node: &Value) -> String {
+    value_as_string(node.pointer("/displayProps/label"))
+        .or_else(|| value_as_string(node.get("groupLabel")))
+        .or_else(|| value_as_string(node.get("type")))
+        .unwrap_or_else(|| "Position".to_string())
+}
+
+fn zapper_position_tokens(node: &Value) -> Vec<DefiPositionToken> {
+    let mut out = Vec::new();
+    if let Some(symbol) = value_as_string(node.get("symbol")) {
+        out.push(DefiPositionToken {
+            symbol,
+            balance: value_as_string(node.get("balance")),
+            balance_usd: value_as_f64(node.get("balanceUSD")),
+        });
+    }
+    if let Some(tokens) = node.get("tokens").and_then(Value::as_array) {
+        for token in tokens {
+            let inner = token.get("token").unwrap_or(token);
+            let Some(symbol) = value_as_string(inner.get("symbol")) else {
+                continue;
+            };
+            out.push(DefiPositionToken {
+                symbol,
+                balance: value_as_string(inner.get("balance")),
+                balance_usd: value_as_f64(inner.get("balanceUSD")),
+            });
+        }
+    }
+    out
+}
+
+fn parse_zapper_positions(data: &Value) -> Vec<DefiPosition> {
+    let Some(app_edges) = data
+        .pointer("/data/portfolioV2/appBalances/byApp/edges")
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut positions = Vec::new();
+    for (app_index, edge) in app_edges.iter().enumerate() {
+        let node = edge.get("node").unwrap_or(edge);
+        let app_name = value_as_string(node.pointer("/app/displayName"))
+            .unwrap_or_else(|| "DeFi app".to_string());
+        let app_image_url = value_as_string(node.pointer("/app/imgUrl"));
+        let app_url = value_as_string(node.pointer("/app/url"))
+            .or_else(|| value_as_string(node.pointer("/app/websiteUrl")));
+        let network_name = value_as_string(node.pointer("/network/name"))
+            .unwrap_or_else(|| "Unknown network".to_string());
+        let chain_id =
+            value_as_string(node.pointer("/network/chainId")).unwrap_or_else(|| "unknown".into());
+        let app_balance = value_as_f64(node.get("balanceUSD")).unwrap_or(0.0);
+        let Some(position_edges) = node
+            .pointer("/positionBalances/edges")
+            .and_then(Value::as_array)
+        else {
+            if app_balance > 0.0 {
+                positions.push(DefiPosition {
+                    id: format!("{app_name}:{chain_id}:{app_index}:summary"),
+                    app_name,
+                    app_image_url,
+                    app_url,
+                    network_name,
+                    chain_id,
+                    label: "Position".to_string(),
+                    group_label: None,
+                    balance_usd: app_balance,
+                    symbols: Vec::new(),
+                    tokens: Vec::new(),
+                });
+            }
+            continue;
+        };
+        for (position_index, position_edge) in position_edges.iter().enumerate() {
+            let position = position_edge.get("node").unwrap_or(position_edge);
+            let balance_usd = value_as_f64(position.get("balanceUSD")).unwrap_or(0.0);
+            if balance_usd <= 0.0 {
+                continue;
+            }
+            let tokens = zapper_position_tokens(position);
+            let mut symbols = Vec::new();
+            for token in &tokens {
+                if !symbols.iter().any(|s| s == &token.symbol) {
+                    symbols.push(token.symbol.clone());
+                }
+            }
+            positions.push(DefiPosition {
+                id: format!("{app_name}:{chain_id}:{app_index}:{position_index}"),
+                app_name: app_name.clone(),
+                app_image_url: app_image_url.clone(),
+                app_url: app_url.clone(),
+                network_name: network_name.clone(),
+                chain_id: chain_id.clone(),
+                label: zapper_display_label(position),
+                group_label: value_as_string(position.get("groupLabel")),
+                balance_usd,
+                symbols,
+                tokens,
+            });
+        }
+    }
+    positions.sort_by(|a, b| {
+        b.balance_usd
+            .partial_cmp(&a.balance_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    positions
+}
+
+#[tauri::command]
+async fn get_defi_positions(address: String) -> Result<Vec<DefiPosition>, String> {
+    let address = address.trim();
+    if !(address.len() == 42
+        && address.starts_with("0x")
+        && address[2..].chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err("invalid address".to_string());
+    }
+    let key = zapper_api_key().ok_or_else(|| "ZAPPER_APIKEY is not configured".to_string())?;
+    const QUERY: &str = r#"
+query AppBalances($addresses: [Address!]!, $first: Int = 30) {
+  portfolioV2(addresses: $addresses) {
+    appBalances {
+      totalBalanceUSD
+      byApp(first: $first) {
+        totalCount
+        edges {
+          node {
+            balanceUSD
+            app {
+              displayName
+              imgUrl
+              url
+              websiteUrl
+              description
+              category { name }
+            }
+            network { name chainId }
+            positionBalances(first: 30) {
+              edges {
+                node {
+                  ... on AppTokenPositionBalance {
+                    type
+                    symbol
+                    balance
+                    balanceUSD
+                    price
+                    groupLabel
+                    displayProps { label images }
+                  }
+                  ... on ContractPositionBalance {
+                    type
+                    balanceUSD
+                    groupLabel
+                    tokens {
+                      metaType
+                      token {
+                        ... on BaseTokenPositionBalance {
+                          symbol
+                          balance
+                          balanceUSD
+                        }
+                      }
+                    }
+                    displayProps { label images }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
+    let body = json!({
+        "query": QUERY,
+        "variables": {
+            "addresses": [address],
+            "first": 30,
+        }
+    });
+    let data: Value = reqwest::Client::new()
+        .post("https://public.zapper.xyz/graphql")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header("x-zapper-api-key", key)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AutoDesktop/1.0",
+        )
+        .header(reqwest::header::ORIGIN, "https://build.zapper.xyz")
+        .header(reqwest::header::REFERER, "https://build.zapper.xyz/")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("querying Zapper: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("querying Zapper: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("reading Zapper response: {e}"))?;
+    if let Some(errors) = data.get("errors").and_then(Value::as_array) {
+        let msg = errors
+            .first()
+            .and_then(|e| e.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("Zapper returned an error");
+        return Err(msg.to_string());
+    }
+    Ok(parse_zapper_positions(&data))
+}
+
 /// Normalize a chain id (accept "0x.." or decimal) to canonical lowercase 0x-hex.
 fn normalize_chain_id(id: &str) -> Result<String, String> {
     let s = id.trim();
@@ -3139,6 +3453,7 @@ pub fn run() {
             set_close_behavior,
             check_for_update,
             get_activity,
+            get_defi_positions,
             get_chains,
             add_chain,
             update_chain,
@@ -3821,8 +4136,12 @@ mod e2e {
                 .unwrap();
         assert_eq!(active_addr, SPIKE_ACCOUNT);
 
-        invoke(&shell, "select_account", json!({ "address": SPIKE_ACCOUNT }))
-            .expect("shell can switch back to a signer");
+        invoke(
+            &shell,
+            "select_account",
+            json!({ "address": SPIKE_ACCOUNT }),
+        )
+        .expect("shell can switch back to a signer");
         assert_eq!(
             call(&wv, "eth_accounts", json!([])).unwrap(),
             json!([SPIKE_ACCOUNT])

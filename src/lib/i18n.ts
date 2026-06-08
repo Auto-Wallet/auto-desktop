@@ -130,6 +130,14 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "wallet.total": "Total balance",
     "wallet.tokens": "Tokens",
+    "wallet.tokenHoldings": "Tokens",
+    "wallet.tokenHoldingsHint": "Native coins and ERC-20 balances",
+    "wallet.defiHoldings": "DeFi positions",
+    "wallet.defiHoldingsHint": "Deposits, lending, staking, and LP positions",
+    "wallet.defiEmpty": "No DeFi positions detected",
+    "wallet.defiEmptyHint":
+      "Aave deposits and other supported protocol positions will appear here.",
+    "wallet.defiError": "Unable to load DeFi positions",
     "wallet.activity": "Activity",
     "wallet.allNetworks": "All networks",
     "wallet.receive": "Receive",
@@ -416,6 +424,13 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "wallet.total": "总资产",
     "wallet.tokens": "代币",
+    "wallet.tokenHoldings": "代币",
+    "wallet.tokenHoldingsHint": "原生币与 ERC-20 余额",
+    "wallet.defiHoldings": "DeFi 持仓",
+    "wallet.defiHoldingsHint": "存款、借贷、质押和 LP 仓位",
+    "wallet.defiEmpty": "暂无 DeFi 持仓",
+    "wallet.defiEmptyHint": "Aave 存款等受支持的协议仓位会显示在这里。",
+    "wallet.defiError": "无法加载 DeFi 持仓",
     "wallet.activity": "活动",
     "wallet.allNetworks": "全部网络",
     "wallet.receive": "收款",

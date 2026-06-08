@@ -129,6 +129,21 @@ export function addDapp(input: string, name?: string): Dapp {
   return dapp;
 }
 
+export function ensureDapp(input: string, name?: string): Dapp {
+  const url = normalizeUrl(input);
+  const host = hostOf(url);
+  const existing = state.find((d) => hostOf(d.url) === host);
+  if (existing) return existing;
+  const dapp: Dapp = {
+    id: `${host}-${state.length}`,
+    url,
+    name: name?.trim() || deriveName(url),
+    pinned: false,
+  };
+  commit([...state, dapp]);
+  return dapp;
+}
+
 export function removeDapp(id: string) {
   commit(state.filter((d) => d.id !== id));
 }
