@@ -1,6 +1,6 @@
 [package]
 name = "auto-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "AutoDesktop — a lightweight desktop wallet & dApp browser"
 authors = ["you"]
 edition = "2021"
@@ -55,4 +55,3 @@ hidapi = "2"
 # WebDriver Apple doesn't provide, so we drive the real invoke→command→handler
 # pipeline in-process instead. Feature only applies to test builds (resolver v2).
 tauri = { version = "2", features = ["test"] }
-
