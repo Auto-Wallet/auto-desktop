@@ -111,10 +111,14 @@ jobs:
       - name: Build signed + notarized DMG
         env:
           # Signing identity exported above; notarization creds from repo secrets.
+          APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain-db
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bun run tauri build --target ${{ matrix.target }} --bundles dmg
+        run: |
+          set -euxo pipefail
+          security unlock-keychain -p "ci" "$APPLE_KEYCHAIN"
+          bun run tauri build --target ${{ matrix.target }} --bundles dmg -v
 
       - name: Verify macOS DMG and app notarization
         run: |
