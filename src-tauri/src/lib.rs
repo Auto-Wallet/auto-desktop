@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::webview::WebviewBuilder;
 use tauri::window::WindowBuilder;
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent, Runtime, WebviewUrl};
 
 // ---------------------------------------------------------------------------
 // Crypto helpers.
@@ -2442,6 +2442,14 @@ fn startup_window_size<R: Runtime>(app: &tauri::App<R>) -> (LogicalSize<f64>, bo
     }
 }
 
+fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2568,8 +2576,13 @@ pub fn run() {
 
             Ok(())
         })
-        .run(build_context())
-        .expect("error while running tauri application");
+        .build(build_context())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::Reopen { .. } = event {
+                restore_main_window(app);
+            }
+        });
 }
 
 #[cfg(test)]
