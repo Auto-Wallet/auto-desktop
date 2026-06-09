@@ -1202,6 +1202,14 @@ function ActivityList({
               : record.status === "replaced"
                 ? t("wallet.activityReplaced")
                 : t("wallet.activitySubmitted");
+        const statusClass =
+          record.status === "failed"
+            ? " failed"
+            : record.status === "confirmed"
+              ? " confirmed"
+              : record.status === "replaced"
+                ? " replaced"
+                : " submitted";
         const canReplace =
           record.status !== "confirmed" &&
           record.status !== "failed" &&
@@ -1211,7 +1219,7 @@ function ActivityList({
         return (
           <div
             key={record.id}
-            className={`activity-row${href ? "" : " disabled"}`}
+            className={`activity-row${statusClass}${href ? "" : " disabled"}`}
             role="button"
             tabIndex={href ? 0 : -1}
             onClick={() => href && void openExternalUrl(href)}

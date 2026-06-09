@@ -8,7 +8,7 @@ import { setActiveChain, useActiveChain } from "../lib/activeChain";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
 import { Avatar } from "../lib/ui";
-import { toast } from "../lib/toast";
+import { toast, useToasts } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
 import { faviconOf, hostOf, type Dapp } from "../lib/dapps";
 import {
@@ -39,6 +39,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   const chain = chains.find((c) => c.id === chainId) ?? chains[0];
   const contentRef = useRef<HTMLDivElement>(null);
   const native = isTauri();
+  const toasts = useToasts();
 
   const [focus, setFocus] = useState(false);
   const [currentUrl, setCurrentUrl] = useState(dapp.url);
@@ -102,32 +103,35 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     };
   }, [native, label, dapp.url]);
 
-  // Native child webviews render above the shell, so a shell dropdown cannot truly
-  // float over the dApp webview. While a top-right menu is open, keep the dApp at
-  // its original vertical position and crop only the right strip behind the menu.
-  // Cropping the top strip made the page look like it had been pushed downward.
+  // Native child webviews render above the shell, so shell overlays cannot truly
+  // float over the dApp webview. While a top-right menu or toast is visible, keep
+  // the dApp at its original vertical position and crop only the right strip behind
+  // that overlay. Cropping the top/bottom strips made pages look pushed around.
   useEffect(() => {
     if (!native) return;
     const el = contentRef.current;
     if (!el) return;
     const id = requestAnimationFrame(() => {
-      if (!menuOpen) {
-        void openDapp(label, dapp.url, rectOf(el));
+      const full = rectOf(el);
+      const overlays = Array.from(
+        document.querySelectorAll<HTMLElement>(".chain-menu, .toast-wrap .toast"),
+      );
+      const overlayLeft = overlays
+        .map((overlay) => overlay.getBoundingClientRect())
+        .filter((overlay) => overlay.bottom > full.y && overlay.top < full.y + full.h)
+        .filter((overlay) => overlay.left < full.x + full.w && overlay.right > full.x)
+        .reduce((left, overlay) => Math.min(left, overlay.left), full.x + full.w);
+
+      if (overlayLeft >= full.x + full.w) {
+        void openDapp(label, dapp.url, full);
         return;
       }
-      const full = rectOf(el);
-      const menus = Array.from(document.querySelectorAll<HTMLElement>(".chain-menu"));
-      const overlappingMenus = menus
-        .map((menu) => menu.getBoundingClientRect())
-        .filter((menu) => menu.bottom > full.y && menu.left < full.x + full.w);
-      const menuLeft = overlappingMenus.length
-        ? Math.min(...overlappingMenus.map((menu) => menu.left))
-        : full.x + full.w;
-      const width = Math.max(1, Math.min(full.w, menuLeft - full.x - 8));
+
+      const width = Math.max(1, Math.min(full.w, overlayLeft - full.x - 8));
       void setDappBounds(label, { x: full.x, y: full.y, w: width, h: full.h });
     });
     return () => cancelAnimationFrame(id);
-  }, [menuOpen, native, label, dapp.url]);
+  }, [menuOpen, native, label, dapp.url, toasts.length]);
 
   async function handleReload() {
     if (reloading) return;

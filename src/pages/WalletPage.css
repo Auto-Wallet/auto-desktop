@@ -1807,6 +1807,8 @@
   font: inherit;
   text-align: left;
   box-shadow: var(--sh-sm);
+  position: relative;
+  overflow: hidden;
 }
 .activity-row:hover {
   border-color: var(--brand);
@@ -1818,6 +1820,53 @@
 .activity-row.disabled:hover {
   border-color: var(--line-2);
   background: var(--surface);
+}
+.activity-row.failed {
+  border-color: color-mix(in srgb, var(--coral-2) 34%, var(--line-2));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--coral-2) 9%, transparent), transparent 52%),
+    var(--surface);
+}
+.activity-row.failed::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 4px;
+  border-radius: 0 var(--r-pill) var(--r-pill) 0;
+  background: var(--coral-2);
+}
+.activity-row.failed:hover {
+  border-color: color-mix(in srgb, var(--coral-2) 54%, var(--line-2));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--coral-2) 12%, transparent), transparent 56%),
+    var(--surface);
+}
+.activity-row.failed .activity-ic {
+  background: var(--coral-soft);
+  color: var(--coral-2);
+}
+.activity-row.failed .activity-hash span {
+  color: var(--coral-2);
+  font-weight: 800;
+}
+.activity-row.confirmed .activity-hash span {
+  color: var(--green);
+  font-weight: 800;
+}
+.activity-row.submitted {
+  border-color: color-mix(in srgb, var(--brand) 18%, var(--line-2));
+}
+.activity-row.submitted .activity-ic {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 8%, transparent);
+}
+.activity-row.replaced {
+  opacity: 0.82;
+}
+.activity-row.replaced .activity-hash span {
+  color: var(--ink-3);
+  font-weight: 800;
 }
 .activity-ic {
   width: 34px;
