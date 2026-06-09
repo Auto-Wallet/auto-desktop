@@ -8,7 +8,7 @@ import BrowserView from "./pages/BrowserView";
 import SettingsPage from "./pages/SettingsPage";
 import LockScreen from "./pages/LockScreen";
 import { ensureDapp, faviconOf, type Dapp } from "./lib/dapps";
-import { closeDapp, dappLabel, isTauri } from "./lib/platform";
+import { closeDapp, dappLabel, isTauri, openExternalUrl } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
 import { useActiveAccount, useActiveAccountSync } from "./lib/accounts";
 import { loadChains } from "./lib/chains";
@@ -18,7 +18,8 @@ import { setThemePref, useEffectiveTheme } from "./lib/theme";
 import { shortAddress } from "./lib/format";
 import { Avatar, ToastHost } from "./lib/ui";
 import { toast } from "./lib/toast";
-import type { ActivityRecord } from "./lib/activity";
+import { syncActivityReceipts, type ActivityRecord } from "./lib/activity";
+import { txExplorerUrl } from "./lib/explorer";
 
 type Page = "wallet" | "dapps" | "browser" | "settings";
 type Tab = { id: string; dapp: Dapp };
@@ -52,21 +53,56 @@ function App() {
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
-    let unlisten: (() => void) | null = null;
-    void listen<ActivityRecord>("activity-recorded", (event) => {
-      const hash = event.payload?.hash;
+    const unlisteners: (() => void)[] = [];
+    const showTxToast = (
+      record: ActivityRecord | undefined,
+      messageKey: "wallet.txSubmitted" | "wallet.txConfirmed" | "wallet.txFailed",
+      kind: "ok" | "info" | "warn" = "ok",
+    ) => {
+      const hash = record?.hash;
+      const href = record ? txExplorerUrl(undefined, record) : null;
       toast(
-        t("wallet.txSubmitted", { hash: hash ? shortAddress(hash, 8, 6) : "" }),
+        t(messageKey, { hash: hash ? shortAddress(hash, 8, 6) : "" }),
+        kind,
+        href
+          ? {
+              label: t("wallet.openExplorer"),
+              onClick: () => void openExternalUrl(href),
+            }
+          : undefined,
       );
+    };
+    void listen<ActivityRecord>("activity-recorded", (event) => {
+      showTxToast(event.payload, "wallet.txSubmitted", "info");
     }).then((fn) => {
       if (disposed) fn();
-      else unlisten = fn;
+      else unlisteners.push(fn);
+    });
+    void listen<ActivityRecord>("activity-confirmed", (event) => {
+      showTxToast(event.payload, "wallet.txConfirmed");
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisteners.push(fn);
+    });
+    void listen<ActivityRecord>("activity-failed", (event) => {
+      showTxToast(event.payload, "wallet.txFailed", "warn");
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisteners.push(fn);
     });
     return () => {
       disposed = true;
-      unlisten?.();
+      for (const unlisten of unlisteners) unlisten();
     };
   }, [lang]);
+  useEffect(() => {
+    if (!isTauri() || !sessionUnlocked) return;
+    void syncActivityReceipts().catch(() => undefined);
+    const id = window.setInterval(() => {
+      void syncActivityReceipts().catch(() => undefined);
+    }, 20_000);
+    return () => window.clearInterval(id);
+  }, [sessionUnlocked]);
 
   const [page, setPage] = useState<Page>("wallet");
   const [collapsed, setCollapsed] = useState<boolean>(

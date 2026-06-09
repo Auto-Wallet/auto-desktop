@@ -8,6 +8,7 @@
     "allow-approve-request",
     "allow-reject-request",
     "allow-get-pending-requests",
+    "allow-node-rpc",
     "allow-simulate-tx"
   ]
 }

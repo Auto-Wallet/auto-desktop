@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./ApprovalView.css";
 import { Icon, type IconName } from "./lib/icons";
@@ -6,6 +6,7 @@ import { Avatar } from "./lib/ui";
 import { useT, type TFn } from "./lib/i18n";
 import { formatUnits, parseUnits, shortAddress, toHexQuantity } from "./lib/format";
 import { isTauri } from "./lib/platform";
+import { rpc } from "./lib/rpc";
 import { simulateTx, type SimulationPreview } from "./lib/simulation";
 
 // Mirrors the Rust `PreparedTx` (snake_case from serde).
@@ -31,6 +32,17 @@ interface PendingRequest {
   summary: string;
   tx?: TxDisplay;
 }
+type ApprovalDetails = {
+  tokenAddress: string;
+  spender: string;
+  amountRaw: bigint;
+};
+type ApprovalTokenInfo = {
+  symbol: string;
+  decimals: number;
+  balanceRaw: string;
+  balance: string;
+};
 // Mirrors the Rust vault status (read once so the window can show WHO signs).
 interface VaultStatusDto {
   address: string | null;
@@ -84,6 +96,9 @@ function ApprovalView() {
   // Pre-sign balance-change simulation for the active eth_sendTransaction request.
   const [sim, setSim] = useState<SimulationPreview | null>(null);
   const [simPending, setSimPending] = useState(false);
+  const [approvalInfo, setApprovalInfo] = useState<ApprovalTokenInfo | null>(null);
+  const [approvalAmount, setApprovalAmount] = useState("");
+  const [approvalError, setApprovalError] = useState("");
 
   const refresh = useCallback(async () => {
     if (!isTauri()) return;
@@ -102,6 +117,10 @@ function ApprovalView() {
   }, [refresh]);
 
   const current = requests[0];
+  const approvalDetails = useMemo(
+    () => (current?.tx ? parseApprovalDetails(current.tx) : null),
+    [current?.id, current?.tx?.to, current?.tx?.data],
+  );
 
   // Seed the editable fee field from the resolved tx whenever the active request
   // changes (so the user starts from the suggested max fee, in Gwei).
@@ -145,6 +164,29 @@ function ApprovalView() {
     };
   }, [current?.id, current?.tx?.chain_id, current?.tx?.to, current?.tx?.data, current?.tx?.value]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setApprovalInfo(null);
+    setApprovalError("");
+    setApprovalAmount("");
+    if (!current?.tx || !approvalDetails) return;
+
+    void loadApprovalTokenInfo(current.tx.chain_id, approvalDetails.tokenAddress, current.tx.from)
+      .then((info) => {
+        if (cancelled) return;
+        setApprovalInfo(info);
+        setApprovalAmount(formatTokenAmountForInput(approvalDetails.amountRaw, info.decimals));
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setApprovalError(errText(e) || "Unable to load token balance.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [approvalDetails, current?.id, current?.tx?.chain_id, current?.tx?.from]);
+
   const decide = useCallback(
     async (req: PendingRequest, approve: boolean) => {
       let args: Record<string, unknown> = { id: req.id };
@@ -174,10 +216,27 @@ function ApprovalView() {
                 direction: c.direction,
               }))
             : undefined;
+        let txData: string | undefined;
+        if (approvalDetails) {
+          if (!approvalInfo) {
+            setApprovalError(t("approval.approveTokenLoading"));
+            return;
+          }
+          try {
+            txData = encodeErc20Approve(
+              approvalDetails.spender,
+              parseUnits(approvalAmount.trim(), approvalInfo.decimals),
+            );
+          } catch {
+            setApprovalError(t("approval.approveAmountInvalid"));
+            return;
+          }
+        }
         args = {
           id: req.id,
           maxFeePerGas,
           maxPriorityFeePerGas,
+          txData,
           balanceChanges,
         };
       }
@@ -189,7 +248,7 @@ function ApprovalView() {
         setBusy(false);
       }
     },
-    [refresh, maxFeeGwei, maxPrioGwei, sim],
+    [refresh, maxFeeGwei, maxPrioGwei, sim, approvalDetails, approvalInfo, approvalAmount, t],
   );
 
   if (!current) {
@@ -254,6 +313,14 @@ function ApprovalView() {
                 <SimPreview sim={sim} pending={simPending} t={t} />
                 <TxDetails
                 tx={current.tx}
+                approvalDetails={approvalDetails}
+                approvalInfo={approvalInfo}
+                approvalAmount={approvalAmount}
+                onApprovalAmount={(v) => {
+                  setApprovalAmount(v);
+                  setApprovalError("");
+                }}
+                approvalError={approvalError}
                 maxFeeGwei={maxFeeGwei}
                 onMaxFee={(v) => {
                   setMaxFeeGwei(v);
@@ -392,6 +459,11 @@ function toBigintSafe(hex: string): string {
 // Transaction details for an eth_sendTransaction approval, with an editable max fee.
 function TxDetails({
   tx,
+  approvalDetails,
+  approvalInfo,
+  approvalAmount,
+  onApprovalAmount,
+  approvalError,
   maxFeeGwei,
   onMaxFee,
   feeError,
@@ -401,6 +473,11 @@ function TxDetails({
   t,
 }: {
   tx: TxDisplay;
+  approvalDetails: ApprovalDetails | null;
+  approvalInfo: ApprovalTokenInfo | null;
+  approvalAmount: string;
+  onApprovalAmount: (v: string) => void;
+  approvalError: string;
   maxFeeGwei: string;
   onMaxFee: (v: string) => void;
   feeError: boolean;
@@ -423,6 +500,49 @@ function TxDetails({
       <Row label={t("approval.gasLimit")} value={toBigintSafe(tx.gas)} mono />
       <Row label={t("approval.nonce")} value={toBigintSafe(tx.nonce)} mono />
       {hasData && <Row label={t("approval.data")} value={t("approval.dataBytes", { n: dataBytes })} />}
+      {approvalDetails && (
+        <div className="apv-approve-editor">
+          <div className="apv-approve-head">
+            <span>{t("approval.approveTitle")}</span>
+            <span className="apv-approve-pill">{t("approval.editable")}</span>
+          </div>
+          <Row
+            label={t("approval.token")}
+            value={approvalInfo?.symbol ?? shortAddress(approvalDetails.tokenAddress, 10, 8)}
+            mono={!approvalInfo}
+          />
+          <Row
+            label={t("approval.spender")}
+            value={shortAddress(approvalDetails.spender, 10, 8)}
+            mono
+          />
+          <div className="apv-approve-field">
+            <label className="field-label">{t("approval.approveAmount")}</label>
+            <input
+              className={`input mono${approvalError ? " err" : ""}`}
+              value={approvalAmount}
+              inputMode="decimal"
+              placeholder={approvalInfo ? `${t("approval.amount")} (${approvalInfo.symbol})` : t("approval.approveTokenLoading")}
+              disabled={!approvalInfo}
+              onChange={(e) => onApprovalAmount(e.target.value)}
+            />
+            <div className="apv-approve-meta">
+              <span>
+                {t("approval.balance")}:{" "}
+                {approvalInfo
+                  ? `${approvalInfo.balance} ${approvalInfo.symbol}`
+                  : t("approval.approveTokenLoading")}
+              </span>
+              {approvalInfo && (
+                <button type="button" onClick={() => onApprovalAmount(approvalInfo.balance)}>
+                  {t("approval.useBalance")}
+                </button>
+              )}
+            </div>
+            {approvalError && <div className="apv-approve-error">{approvalError}</div>}
+          </div>
+        </div>
+      )}
       <FeeInput label={t("approval.maxPriority")} value={maxPrioGwei} onChange={onMaxPrio} err={prioError} hint={t("approval.maxPriorityHint")} />
       <FeeInput label={t("approval.maxFee")} value={maxFeeGwei} onChange={onMaxFee} err={feeError} hint={t("approval.maxFeeHint")} />
     </div>
@@ -462,6 +582,105 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
       <span className={`apv-row-v${mono ? " mono" : ""}`}>{value}</span>
     </div>
   );
+}
+
+function errText(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
+function parseApprovalDetails(tx: TxDisplay): ApprovalDetails | null {
+  if (!tx.to || !tx.data?.startsWith("0x095ea7b3")) return null;
+  const data = tx.data.slice(2);
+  if (data.length < 8 + 64 + 64) return null;
+  const spenderWord = data.slice(8, 72);
+  const amountWord = data.slice(72, 136);
+  const spender = `0x${spenderWord.slice(24)}`;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(spender)) return null;
+  return {
+    tokenAddress: tx.to,
+    spender,
+    amountRaw: BigInt(`0x${amountWord}`),
+  };
+}
+
+function encodeErc20Approve(spender: string, amount: bigint): string {
+  const addr = spender.toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]{40}$/.test(addr)) throw new Error("invalid spender");
+  return `0x095ea7b3${addr.padStart(64, "0")}${amount.toString(16).padStart(64, "0")}`;
+}
+
+async function loadApprovalTokenInfo(
+  chainId: string,
+  tokenAddress: string,
+  owner: string,
+): Promise<ApprovalTokenInfo> {
+  const [symbol, decimals, balanceRaw] = await Promise.all([
+    readErc20Symbol(chainId, tokenAddress),
+    readErc20Decimals(chainId, tokenAddress),
+    rpc<string>(chainId, "eth_call", [
+      { to: tokenAddress, data: `0x70a08231${owner.replace(/^0x/, "").padStart(64, "0")}` },
+      "latest",
+    ]),
+  ]);
+  return {
+    symbol,
+    decimals,
+    balanceRaw,
+    balance: formatTokenAmountForInput(BigInt(balanceRaw), decimals),
+  };
+}
+
+async function readErc20Symbol(chainId: string, tokenAddress: string): Promise<string> {
+  try {
+    const raw = await rpc<string>(chainId, "eth_call", [
+      { to: tokenAddress, data: "0x95d89b41" },
+      "latest",
+    ]);
+    return decodeAbiString(raw) || "TOKEN";
+  } catch {
+    return "TOKEN";
+  }
+}
+
+async function readErc20Decimals(chainId: string, tokenAddress: string): Promise<number> {
+  try {
+    const raw = await rpc<string>(chainId, "eth_call", [
+      { to: tokenAddress, data: "0x313ce567" },
+      "latest",
+    ]);
+    const value = Number(BigInt(raw));
+    return Number.isFinite(value) && value >= 0 && value <= 255 ? value : 18;
+  } catch {
+    return 18;
+  }
+}
+
+function decodeAbiString(raw: string): string {
+  const hex = raw.replace(/^0x/, "");
+  if (hex.length === 64) return decodeBytes(hex);
+  if (hex.length >= 128) {
+    const len = Number(BigInt(`0x${hex.slice(64, 128)}`));
+    if (Number.isFinite(len) && len >= 0) {
+      return decodeBytes(hex.slice(128, 128 + len * 2));
+    }
+  }
+  return "";
+}
+
+function decodeBytes(hex: string): string {
+  const bytes = hex.match(/.{1,2}/g)?.map((b) => Number.parseInt(b, 16)) ?? [];
+  const trimmed = bytes.filter((b) => b !== 0);
+  return new TextDecoder().decode(new Uint8Array(trimmed)).trim();
+}
+
+function formatTokenAmountForInput(value: bigint, decimals: number): string {
+  const base = 10n ** BigInt(decimals);
+  const whole = value / base;
+  const frac = value % base;
+  if (frac === 0n) return whole.toString();
+  return `${whole}.${frac.toString().padStart(decimals, "0").replace(/0+$/, "")}`;
 }
 
 export default ApprovalView;

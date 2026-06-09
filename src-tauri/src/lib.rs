@@ -1111,6 +1111,7 @@ struct ApprovalDecision {
     approved: bool,
     max_fee_per_gas: Option<String>,
     max_priority_fee_per_gas: Option<String>,
+    tx_data: Option<String>,
     balance_changes: Vec<ActivityBalanceChange>,
 }
 
@@ -1505,6 +1506,9 @@ async fn approve_and_send<R: Runtime>(
     if let Some(mp) = decision.max_priority_fee_per_gas {
         p.max_priority_fee_per_gas = mp;
     }
+    if let Some(data) = decision.tx_data {
+        p.data = data;
+    }
     // Keep priority ≤ max fee even if the user lowered the cap below it.
     if hex_to_u128(&p.max_priority_fee_per_gas).unwrap_or(0)
         > hex_to_u128(&p.max_fee_per_gas).unwrap_or(u128::MAX)
@@ -1607,6 +1611,7 @@ fn approve_request<R: Runtime>(
     id: String,
     max_fee_per_gas: Option<String>,
     max_priority_fee_per_gas: Option<String>,
+    tx_data: Option<String>,
     balance_changes: Option<Vec<ActivityBalanceChange>>,
 ) -> Result<(), String> {
     resolve_request(
@@ -1616,6 +1621,7 @@ fn approve_request<R: Runtime>(
             approved: true,
             max_fee_per_gas,
             max_priority_fee_per_gas,
+            tx_data,
             balance_changes: balance_changes.unwrap_or_default(),
         },
     )
@@ -2387,6 +2393,7 @@ async fn sync_activity_receipts<R: Runtime>(app: AppHandle<R>) -> Result<Vec<Act
         .collect();
 
     let mut changed = false;
+    let mut completed = Vec::new();
     for (idx, chain_id, hash) in pending {
         let Some(chain) = find_chain(&chain_id) else {
             continue;
@@ -2394,7 +2401,8 @@ async fn sync_activity_receipts<R: Runtime>(app: AppHandle<R>) -> Result<Vec<Act
         match receipt_status(&chain, &hash).await {
             Ok(Some(status)) => {
                 if records[idx].status.as_deref() != Some(status.as_str()) {
-                    records[idx].status = Some(status);
+                    records[idx].status = Some(status.clone());
+                    completed.push((status, records[idx].clone()));
                     changed = true;
                 }
             }
@@ -2406,6 +2414,13 @@ async fn sync_activity_receipts<R: Runtime>(app: AppHandle<R>) -> Result<Vec<Act
     if changed {
         save_activity_records(&app, &records)?;
         let _ = app.emit("activity-changed", ());
+        for (status, record) in completed {
+            if status == "confirmed" {
+                let _ = app.emit("activity-confirmed", &record);
+            } else if status == "failed" {
+                let _ = app.emit("activity-failed", &record);
+            }
+        }
     }
     Ok(records)
 }
@@ -2890,6 +2905,8 @@ query AppBalances($addresses: [Address!]!, $first: Int = 30) {
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header("x-zapper-api-key", key)
         .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
+        .header(reqwest::header::PRAGMA, "no-cache")
         .header(
             reqwest::header::USER_AGENT,
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AutoDesktop/1.0",

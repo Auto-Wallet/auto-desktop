@@ -33,11 +33,29 @@ export function ToastHost() {
   if (toasts.length === 0) return null;
   return (
     <div className="toast-wrap">
-      {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.kind}`}>
-          <span className="tdot" /> {t.msg}
-        </div>
-      ))}
+      {toasts.map((t) => {
+        const content = (
+          <>
+            <span className="tdot" />
+            <span className="toast-msg">{t.msg}</span>
+            {t.action?.label && <span className="toast-action">{t.action.label}</span>}
+          </>
+        );
+        return t.action ? (
+          <button
+            key={t.id}
+            type="button"
+            className={`toast ${t.kind} actionable`}
+            onClick={t.action.onClick}
+          >
+            {content}
+          </button>
+        ) : (
+          <div key={t.id} className={`toast ${t.kind}`}>
+            {content}
+          </div>
+        );
+      })}
     </div>
   );
 }

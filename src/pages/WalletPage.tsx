@@ -9,6 +9,7 @@ import {
   type ActivityRecord,
 } from "../lib/activity";
 import { openExternalUrl } from "../lib/platform";
+import { txExplorerUrl } from "../lib/explorer";
 import { ChainIcon } from "../lib/ChainIcon";
 import { useDefiPositions, type DefiState } from "../lib/defi";
 import {
@@ -186,14 +187,6 @@ export default function WalletPage() {
     void loadActivity();
   }, []);
 
-  useEffect(() => {
-    void syncActivityReceipts().catch(() => undefined);
-    const id = window.setInterval(() => {
-      void syncActivityReceipts().catch(() => undefined);
-    }, 20_000);
-    return () => window.clearInterval(id);
-  }, []);
-
   // Assets the active account can actually send (non-zero native + ERC-20).
   const sendableAssets = useMemo<SendAsset[]>(() => {
     const out: SendAsset[] = [];
@@ -270,7 +263,7 @@ export default function WalletPage() {
     refreshTokens();
     refreshPrices();
     refreshTokenPrices();
-    defi.refresh();
+    void defi.refresh();
     toast(t("common.refreshed"));
   }
 
@@ -447,11 +440,13 @@ export default function WalletPage() {
                       {t("wallet.tokenHoldingsHint")}
                     </div>
                   </div>
-                  <SectionSearch
-                    value={tokenSearch}
-                    onChange={setTokenSearch}
-                    placeholder={t("wallet.searchTokenHoldings")}
-                  />
+                  <div className="asset-section-tools">
+                    <SectionSearch
+                      value={tokenSearch}
+                      onChange={setTokenSearch}
+                      placeholder={t("wallet.searchTokenHoldings")}
+                    />
+                  </div>
                 </div>
                 {visibleRows.length > 0 ? (
                   <div className="token-list">
@@ -574,18 +569,27 @@ function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
     () => filterDefiPositions(defi.positions, query),
     [defi.positions, query],
   );
+  const isRefreshing = defi.status === "loading" && defi.positions.length > 0;
   return (
-    <section className="asset-section defi-section">
+    <section className="asset-section defi-section" aria-busy={isRefreshing}>
       <div className="asset-section-head">
         <div>
           <div className="asset-section-title">{t("wallet.defiHoldings")}</div>
           <div className="asset-section-sub">{t("wallet.defiHoldingsHint")}</div>
         </div>
-        <SectionSearch
-          value={query}
-          onChange={setQuery}
-          placeholder={t("wallet.searchDefiPositions")}
-        />
+        <div className="asset-section-tools">
+          {isRefreshing && (
+            <span className="section-refreshing">
+              <Icon name="refresh" size={13} />
+              {t("wallet.refreshingDefi")}
+            </span>
+          )}
+          <SectionSearch
+            value={query}
+            onChange={setQuery}
+            placeholder={t("wallet.searchDefiPositions")}
+          />
+        </div>
       </div>
       {defi.status === "loading" && defi.positions.length === 0 ? (
         <div className="defi-list">
@@ -610,11 +614,11 @@ function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
         </div>
       ) : defi.positions.length > 0 ? (
         positions.length > 0 ? (
-        <div className="defi-list">
-          {positions.map((position) => (
-            <DefiPositionCard key={position.id} position={position} />
-          ))}
-        </div>
+          <div className="defi-list">
+            {positions.map((position) => (
+              <DefiPositionCard key={position.id} position={position} />
+            ))}
+          </div>
         ) : (
           <div className="section-empty">{t("wallet.noDefiMatches")}</div>
         )
@@ -1279,37 +1283,6 @@ function formatActivityTime(timestamp: number): string {
   });
 }
 
-function txExplorerUrl(
-  chain: Chain | undefined,
-  record: ActivityRecord,
-): string | null {
-  const id = record.chainId.toLowerCase();
-  const name = (chain?.name ?? record.chainName).toLowerCase();
-  const bases: Record<string, string> = {
-    "0x1": "https://etherscan.io/tx/",
-    "0x2105": "https://basescan.org/tx/",
-    "0xa": "https://optimistic.etherscan.io/tx/",
-    "0xa4b1": "https://arbiscan.io/tx/",
-    "0x89": "https://polygonscan.com/tx/",
-    "0x38": "https://bscscan.com/tx/",
-    "0xa86a": "https://snowtrace.io/tx/",
-    "0xe708": "https://lineascan.build/tx/",
-    "0x13e31": "https://blastscan.io/tx/",
-    "0x144": "https://era.zksync.network/tx/",
-    "0x44d": "https://zkevm.polygonscan.com/tx/",
-    "0x92": "https://sonicscan.org/tx/",
-    "0xc4": "https://www.oklink.com/xlayer/tx/",
-    "0x1e0": "https://worldscan.org/tx/",
-    "0x250": "https://astar.subscan.io/evm_transaction/",
-    "0x378": "https://wanscan.org/tx/",
-    "0x440": "https://andromeda-explorer.metis.io/tx/",
-    "0xa4ec": "https://celoscan.io/tx/",
-  };
-  const base =
-    bases[id] ?? (name.includes("0g") ? "https://chainscan.0g.ai/tx/" : null);
-  return base ? `${base}${record.hash}` : null;
-}
-
 function feeHexToGwei(value: string | null | undefined): string {
   if (!value) return "";
   try {
@@ -1931,6 +1904,16 @@ function errText(e: unknown): string {
   if (typeof e === "string") return e;
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+function isGasEstimateError(e: unknown): boolean {
+  const text = errText(e).toLowerCase();
+  return (
+    text.includes("eth_estimategas") ||
+    text.includes("estimate gas") ||
+    text.includes("gas estimate") ||
+    text.includes("gas required exceeds allowance")
+  );
 }
 
 type AddStep = "menu" | "create" | "import" | "ledger" | "watch" | "backup";
@@ -3368,20 +3351,32 @@ function SwapModal({
 
   async function approve() {
     if (!asset || !selectedQuote?.approvalSpender || !sourceToken) return;
+    if (!amountRaw || amountRaw <= 0n) {
+      setStage({ kind: "error", message: t("wallet.invalidAmount") });
+      return;
+    }
     setStage({ kind: "approving" });
-    try {
-      const data = encodeErc20Approve(selectedQuote.approvalSpender, MAX_UINT256);
-      await walletSend(asset.chainId, {
+    const sendApprove = (value: bigint) =>
+      walletSend(asset.chainId, {
         to: sourceToken.address,
         value: "0x0",
-        data,
+        data: encodeErc20Approve(selectedQuote.approvalSpender!, value),
         activity: {
           kind: "contract",
           counterparty: selectedQuote.approvalSpender,
           assetSymbol: sourceToken.symbol,
           tokenAddress: sourceToken.address,
+          amount: toHexQuantity(value),
         },
       });
+    try {
+      try {
+        await sendApprove(MAX_UINT256);
+      } catch (e) {
+        if (!isGasEstimateError(e)) throw e;
+        await sendApprove(0n);
+        await sendApprove(amountRaw);
+      }
       setApproved((prev) => new Set(prev).add(approveKey));
       setStage({ kind: "idle" });
     } catch (e) {

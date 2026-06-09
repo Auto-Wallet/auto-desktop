@@ -4,7 +4,16 @@
 import { useSyncExternalStore } from "react";
 
 export type ToastKind = "ok" | "info" | "warn";
-export type Toast = { id: string; msg: string; kind: ToastKind };
+export type ToastAction = {
+  label?: string;
+  onClick: () => void;
+};
+export type Toast = {
+  id: string;
+  msg: string;
+  kind: ToastKind;
+  action?: ToastAction;
+};
 
 let toasts: Toast[] = [];
 let seq = 0;
@@ -14,9 +23,13 @@ function emit() {
   for (const l of listeners) l();
 }
 
-export function toast(msg: string, kind: ToastKind = "ok") {
+export function toast(
+  msg: string,
+  kind: ToastKind = "ok",
+  action?: ToastAction,
+) {
   const id = `t${++seq}`;
-  toasts = [...toasts, { id, msg, kind }];
+  toasts = [...toasts, { id, msg, kind, action }];
   emit();
   setTimeout(() => {
     toasts = toasts.filter((t) => t.id !== id);

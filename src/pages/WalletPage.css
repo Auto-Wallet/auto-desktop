@@ -1406,6 +1406,13 @@
   gap: 12px;
   margin: 0 2px 10px;
 }
+.asset-section-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: min(360px, 50%);
+}
 .asset-section-title {
   color: var(--ink);
   font-size: 13px;
@@ -1429,6 +1436,22 @@
   background: var(--surface);
   color: var(--ink-3);
   box-shadow: var(--sh-sm);
+}
+.asset-section-tools .section-search {
+  width: min(260px, 100%);
+  flex: 1;
+}
+.section-refreshing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 800;
+}
+.section-refreshing svg {
+  animation: spin 0.9s linear infinite;
 }
 .section-search:focus-within {
   border-color: var(--brand);
