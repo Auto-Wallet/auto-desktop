@@ -14,7 +14,12 @@ import { useActiveWallet } from "../lib/accounts";
 import { setLang, useT, type Lang, type TFn } from "../lib/i18n";
 import { setThemePref, useThemePref, type ThemePref } from "../lib/theme";
 import { setCloseBehavior, useCloseBehavior } from "../lib/appPrefs";
-import { checkForUpdate, installUpdate, type UpdateInfo } from "../lib/updater";
+import {
+  checkForUpdate,
+  installUpdate,
+  type UpdateInfo,
+  type UpdateProgress,
+} from "../lib/updater";
 import { openExternalUrl } from "../lib/platform";
 import { Icon, type IconName } from "../lib/icons";
 import { toast } from "../lib/toast";
@@ -45,6 +50,9 @@ export default function SettingsPage() {
   const [updated, setUpdated] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(
+    null,
+  );
   const [editing, setEditing] = useState<Chain | "new" | null>(null);
 
   const themeOpts: [ThemePref, IconName, string][] = [
@@ -61,18 +69,28 @@ export default function SettingsPage() {
       : t("settings.checkUpdates");
 
   async function handleCheckUpdates() {
-    if (updateInfo?.available) {
+    if (updateInfo?.available && !updateInfo.manual) {
       await handleInstallUpdate();
       return;
     }
     setCheckingUpdate(true);
     setUpdated(false);
+    setUpdateProgress(null);
     try {
       const info = await checkForUpdate();
       setUpdateInfo(info);
       if (!info.available) {
         setUpdated(true);
         toast(t("settings.upToDate"));
+        return;
+      }
+      if (info.manual) {
+        toast(
+          t("settings.updateAutoUnavailable", {
+            error: info.autoError || t("settings.unknownError"),
+          }),
+          "warn",
+        );
         return;
       }
       toast(t("settings.updateAvailable", { version: info.latestVersion }));
@@ -86,8 +104,12 @@ export default function SettingsPage() {
   async function handleInstallUpdate() {
     if (!updateInfo?.available) return;
     setCheckingUpdate(true);
+    setUpdateProgress({ phase: "downloading", downloaded: 0 });
     try {
-      const info = await installUpdate(updateInfo);
+      const info = await installUpdate(
+        { ...updateInfo, manual: false },
+        setUpdateProgress,
+      );
       setUpdateInfo(info);
       if (!info.available) {
         setUpdated(true);
@@ -95,9 +117,12 @@ export default function SettingsPage() {
         return;
       }
       if (info.manual) {
-        const url = info.downloadUrl || info.releaseUrl;
-        await openExternalUrl(url);
-        toast(t("settings.updateOpened", { version: info.latestVersion }));
+        toast(
+          t("settings.updateAutoFailed", {
+            error: info.autoError || t("settings.unknownError"),
+          }),
+          "warn",
+        );
         return;
       }
       toast(t("settings.updateInstalled", { version: info.latestVersion }));
@@ -105,8 +130,24 @@ export default function SettingsPage() {
       toast(t("settings.updateFailed", { error: errText(e) }), "warn");
     } finally {
       setCheckingUpdate(false);
+      setUpdateProgress(null);
     }
   }
+
+  async function handleManualDownload() {
+    if (!updateInfo?.available) return;
+    const url = updateInfo.downloadUrl || updateInfo.releaseUrl;
+    await openExternalUrl(url);
+    toast(t("settings.updateOpened", { version: updateInfo.latestVersion }));
+  }
+
+  const updatePercent =
+    updateProgress?.total && updateProgress.total > 0
+      ? Math.min(
+          100,
+          Math.round((updateProgress.downloaded / updateProgress.total) * 100),
+        )
+      : null;
 
   return (
     <>
@@ -363,14 +404,54 @@ export default function SettingsPage() {
                     </div>
                   )}
                 </div>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  disabled={checkingUpdate}
-                  onClick={() => void handleCheckUpdates()}
-                >
-                  {updateButtonLabel}
-                </button>
+                {!(updateInfo?.available && updateInfo.manual) && (
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    disabled={checkingUpdate}
+                    onClick={() => void handleCheckUpdates()}
+                  >
+                    {updateButtonLabel}
+                  </button>
+                )}
               </div>
+              {updateProgress && (
+                <div className="update-progress">
+                  <div className="update-progress-meta">
+                    <span>
+                      {updateProgress.phase === "installing"
+                        ? t("settings.installingUpdate")
+                        : t("settings.downloadingUpdate")}
+                    </span>
+                    {updatePercent !== null && <span>{updatePercent}%</span>}
+                  </div>
+                  <div className="update-progress-track">
+                    <span
+                      style={{
+                        width:
+                          updatePercent !== null ? `${updatePercent}%` : "35%",
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              {updateInfo?.available &&
+                updateInfo.manual &&
+                !checkingUpdate && (
+                  <div className="update-manual-actions">
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => void handleInstallUpdate()}
+                    >
+                      {t("settings.retryAutoUpdate")}
+                    </button>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => void handleManualDownload()}
+                    >
+                      {t("settings.manualDownload")}
+                    </button>
+                  </div>
+                )}
             </div>
           </div>
         </div>
