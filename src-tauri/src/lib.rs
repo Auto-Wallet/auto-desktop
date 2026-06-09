@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,6 +28,8 @@ mod eth_tx;
 mod eip712;
 // Ledger hardware wallet over USB-HID (framing + Ethereum APDUs + hidapi I/O).
 mod ledger;
+
+const DEFI_PROVIDER_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Serialize)]
 struct Wallet {
@@ -614,6 +617,13 @@ struct DefiPosition {
     balance_usd: f64,
     symbols: Vec<String>,
     tokens: Vec<DefiPositionToken>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefiPositionsResponse {
+    source: String,
+    positions: Vec<DefiPosition>,
 }
 
 fn builtin_chains() -> Vec<ChainCfg> {
@@ -1328,6 +1338,14 @@ fn hex_to_u128(hex: &str) -> Result<u128, String> {
         .map_err(|e| format!("bad quantity {hex}: {e}"))
 }
 
+fn bump_estimated_gas(gas: &str) -> Result<String, String> {
+    let value = hex_to_u128(gas)?;
+    // Add a 20% safety margin to node gas estimates. Some contracts pass
+    // estimation but still run out of gas at execution with the exact value.
+    let margin = value.saturating_add(4) / 5;
+    Ok(format!("0x{:x}", value.saturating_add(margin)))
+}
+
 /// A human-readable summary of a transaction for the approval window. Display
 /// only — `prepare_tx` resolves the real fields and `finalize_tx` signs them.
 fn preview_tx(tx: &Value) -> String {
@@ -1420,11 +1438,12 @@ async fn prepare_tx(chain_id: &str, tx: &Value) -> Result<PreparedTx, String> {
         Some(g) => g.to_string(),
         None => {
             let call = json!({ "from": from, "to": to, "value": value, "data": data });
-            node_rpc_call(&chain, "eth_estimateGas", &[call])
+            let estimate = node_rpc_call(&chain, "eth_estimateGas", &[call])
                 .await?
                 .as_str()
                 .ok_or("node returned a non-string gas estimate")?
-                .to_string()
+                .to_string();
+            bump_estimated_gas(&estimate)?
         }
     };
 
@@ -2701,6 +2720,29 @@ fn zapper_api_key() -> Option<String> {
         })
 }
 
+fn debank_api_key() -> Option<String> {
+    std::env::var("DEBANK_APIKEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("DEBANK_API_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
+        .or_else(|| read_env_file_value("DEBANK_APIKEY"))
+        .or_else(|| read_env_file_value("DEBANK_API_KEY"))
+        .or_else(|| {
+            option_env!("DEBANK_APIKEY")
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            option_env!("DEBANK_API_KEY")
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
 fn value_as_f64(value: Option<&Value>) -> Option<f64> {
     match value {
         Some(Value::Number(n)) => n.as_f64(),
@@ -2826,16 +2868,13 @@ fn parse_zapper_positions(data: &Value) -> Vec<DefiPosition> {
     positions
 }
 
-#[tauri::command]
-async fn get_defi_positions(address: String) -> Result<Vec<DefiPosition>, String> {
-    let address = address.trim();
-    if !(address.len() == 42
-        && address.starts_with("0x")
-        && address[2..].chars().all(|c| c.is_ascii_hexdigit()))
-    {
-        return Err("invalid address".to_string());
-    }
+fn zapper_app_balance_usd(data: &Value) -> f64 {
+    value_as_f64(data.pointer("/data/portfolioV2/appBalances/totalBalanceUSD")).unwrap_or(0.0)
+}
+
+async fn fetch_zapper_defi_positions(address: &str) -> Result<(Vec<DefiPosition>, f64), String> {
     let key = zapper_api_key().ok_or_else(|| "ZAPPER_APIKEY is not configured".to_string())?;
+    println!("[AutoDesktop] defi Zapper start address={address}");
     const QUERY: &str = r#"
 query AppBalances($addresses: [Address!]!, $first: Int = 30) {
   portfolioV2(addresses: $addresses) {
@@ -2900,7 +2939,10 @@ query AppBalances($addresses: [Address!]!, $first: Int = 30) {
             "first": 30,
         }
     });
-    let data: Value = reqwest::Client::new()
+    let data: Value = reqwest::Client::builder()
+        .timeout(DEFI_PROVIDER_TIMEOUT)
+        .build()
+        .map_err(|e| format!("building Zapper client: {e}"))?
         .post("https://public.zapper.xyz/graphql")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header("x-zapper-api-key", key)
@@ -2930,7 +2972,243 @@ query AppBalances($addresses: [Address!]!, $first: Int = 30) {
             .unwrap_or("Zapper returned an error");
         return Err(msg.to_string());
     }
-    Ok(parse_zapper_positions(&data))
+    let positions = parse_zapper_positions(&data);
+    let app_balance = zapper_app_balance_usd(&data);
+    println!(
+        "[AutoDesktop] defi Zapper done address={address} positions={} appBalanceUsd={app_balance}",
+        positions.len()
+    );
+    Ok((positions, app_balance))
+}
+
+fn debank_chain_name(chain: &str) -> String {
+    match chain {
+        "eth" => "Ethereum",
+        "bsc" => "BSC",
+        "arb" => "Arbitrum",
+        "op" => "Optimism",
+        "matic" => "Polygon",
+        "base" => "Base",
+        "avax" => "Avalanche",
+        "ftm" => "Fantom",
+        "xdai" => "Gnosis",
+        "linea" => "Linea",
+        "zksync" => "zkSync Era",
+        "scroll" => "Scroll",
+        _ => chain,
+    }
+    .to_string()
+}
+
+fn debank_token_from_value(value: &Value) -> Option<DefiPositionToken> {
+    let symbol = value_as_string(value.get("optimized_symbol"))
+        .or_else(|| value_as_string(value.get("display_symbol")))
+        .or_else(|| value_as_string(value.get("symbol")))?;
+    let balance = value_as_string(value.get("amount"))
+        .or_else(|| value_as_string(value.get("balance")))
+        .or_else(|| value_as_string(value.get("raw_amount")));
+    let balance_usd = value_as_f64(value.get("usd_value"))
+        .or_else(|| value_as_f64(value.get("net_usd_value")))
+        .or_else(|| {
+            let amount = value_as_f64(value.get("amount"))?;
+            let price = value_as_f64(value.get("price"))?;
+            Some(amount * price)
+        });
+    Some(DefiPositionToken {
+        symbol,
+        balance,
+        balance_usd,
+    })
+}
+
+fn collect_debank_tokens(value: &Value, out: &mut Vec<DefiPositionToken>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                if let Some(token) = debank_token_from_value(item) {
+                    out.push(token);
+                }
+                collect_debank_tokens(item, out);
+            }
+        }
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key.ends_with("token_list") || key.ends_with("tokens") || key == "token" {
+                    collect_debank_tokens(child, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_debank_positions(data: &Value) -> Result<Vec<DefiPosition>, String> {
+    let apps = data
+        .as_array()
+        .ok_or_else(|| "DeBank returned an unexpected response".to_string())?;
+    let mut positions = Vec::new();
+    for (app_index, app) in apps.iter().enumerate() {
+        let app_name = value_as_string(app.get("name")).unwrap_or_else(|| "DeFi app".to_string());
+        let app_id = value_as_string(app.get("id")).unwrap_or_else(|| app_name.clone());
+        let app_image_url = value_as_string(app.get("logo_url"));
+        let app_url = value_as_string(app.get("site_url"));
+        let Some(items) = app.get("portfolio_item_list").and_then(Value::as_array) else {
+            continue;
+        };
+        for (position_index, item) in items.iter().enumerate() {
+            let net_usd = value_as_f64(item.pointer("/stats/net_usd_value"))
+                .or_else(|| value_as_f64(item.pointer("/stats/asset_usd_value")))
+                .unwrap_or(0.0);
+            if net_usd <= 0.0 {
+                continue;
+            }
+            let chain_id = value_as_string(item.pointer("/base/chain"))
+                .or_else(|| value_as_string(app.get("chain")))
+                .unwrap_or_else(|| "unknown".to_string());
+            let mut tokens = Vec::new();
+            collect_debank_tokens(item, &mut tokens);
+            let mut symbols = Vec::new();
+            tokens.retain(|token| {
+                let key = format!(
+                    "{}:{}:{}",
+                    token.symbol,
+                    token.balance.as_deref().unwrap_or(""),
+                    token.balance_usd.unwrap_or(0.0)
+                );
+                if symbols.iter().any(|s| s == &key) {
+                    false
+                } else {
+                    symbols.push(key);
+                    true
+                }
+            });
+            let symbols = tokens.iter().fold(Vec::new(), |mut out, token| {
+                if !out.iter().any(|s| s == &token.symbol) {
+                    out.push(token.symbol.clone());
+                }
+                out
+            });
+            positions.push(DefiPosition {
+                id: format!("debank:{app_id}:{chain_id}:{app_index}:{position_index}"),
+                app_name: app_name.clone(),
+                app_image_url: app_image_url.clone(),
+                app_url: app_url.clone(),
+                network_name: debank_chain_name(&chain_id),
+                chain_id,
+                label: value_as_string(item.get("name")).unwrap_or_else(|| "Position".to_string()),
+                group_label: value_as_string(item.get("detail_types"))
+                    .or_else(|| value_as_string(item.get("position_index"))),
+                balance_usd: net_usd,
+                symbols,
+                tokens,
+            });
+        }
+    }
+    positions.sort_by(|a, b| {
+        b.balance_usd
+            .partial_cmp(&a.balance_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(positions)
+}
+
+async fn fetch_debank_defi_positions(address: &str) -> Result<Vec<DefiPosition>, String> {
+    let key = debank_api_key().ok_or_else(|| "DEBANK_APIKEY is not configured".to_string())?;
+    println!("[AutoDesktop] defi DeBank start address={address}");
+    let url =
+        format!("https://pro-openapi.debank.com/v1/user/all_complex_protocol_list?id={address}");
+    let data: Value = reqwest::Client::builder()
+        .timeout(DEFI_PROVIDER_TIMEOUT)
+        .build()
+        .map_err(|e| format!("building DeBank client: {e}"))?
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header("AccessKey", key)
+        .send()
+        .await
+        .map_err(|e| format!("querying DeBank: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("querying DeBank: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("reading DeBank response: {e}"))?;
+    if let Some(msg) = value_as_string(data.get("error_msg")) {
+        return Err(msg);
+    }
+    let positions = parse_debank_positions(&data)?;
+    println!(
+        "[AutoDesktop] defi DeBank done address={address} positions={}",
+        positions.len()
+    );
+    Ok(positions)
+}
+
+#[tauri::command]
+async fn get_defi_positions(
+    address: String,
+    has_wallet_assets_over_one_usd: Option<bool>,
+) -> Result<DefiPositionsResponse, String> {
+    let address = address.trim();
+    println!(
+        "[AutoDesktop] defi request address={address} hasWalletAssetsOverOneUsd={}",
+        has_wallet_assets_over_one_usd.unwrap_or(false)
+    );
+    if !(address.len() == 42
+        && address.starts_with("0x")
+        && address[2..].chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err("invalid address".to_string());
+    }
+    let has_wallet_assets = has_wallet_assets_over_one_usd.unwrap_or(false);
+    let debank_available = debank_api_key().is_some();
+    let zapper = fetch_zapper_defi_positions(address).await;
+    let (zapper_positions, zapper_balance_usd) = match zapper {
+        Ok(result) => result,
+        Err(err) => {
+            if has_wallet_assets && debank_available {
+                println!(
+                    "[AutoDesktop] defi fallback source=DeBank address={address} reason=zapper-error error={err}"
+                );
+                let positions = fetch_debank_defi_positions(address).await?;
+                println!(
+                    "[AutoDesktop] defi response source=DeBank address={address} positions={}",
+                    positions.len()
+                );
+                return Ok(DefiPositionsResponse {
+                    source: "DeBank".to_string(),
+                    positions,
+                });
+            }
+            println!("[AutoDesktop] defi Zapper failed address={address} error={err}");
+            return Err(err);
+        }
+    };
+    if !zapper_positions.is_empty()
+        || zapper_balance_usd > 0.0
+        || !has_wallet_assets
+        || !debank_available
+    {
+        println!(
+            "[AutoDesktop] defi response source=Zapper address={address} positions={}",
+            zapper_positions.len()
+        );
+        return Ok(DefiPositionsResponse {
+            source: "Zapper".to_string(),
+            positions: zapper_positions,
+        });
+    }
+    println!(
+        "[AutoDesktop] defi fallback source=DeBank address={address} reason=zapper-empty-wallet-assets-present"
+    );
+    let positions = fetch_debank_defi_positions(address).await?;
+    println!(
+        "[AutoDesktop] defi response source=DeBank address={address} positions={}",
+        positions.len()
+    );
+    Ok(DefiPositionsResponse {
+        source: "DeBank".to_string(),
+        positions,
+    })
 }
 
 /// Normalize a chain id (accept "0x.." or decimal) to canonical lowercase 0x-hex.
@@ -4089,6 +4367,42 @@ mod tests {
             "data": "0xa9059cbb"
         });
         assert!(preview_tx(&call).contains("Contract interaction"));
+    }
+
+    #[test]
+    fn estimated_gas_gets_twenty_percent_margin() {
+        assert_eq!(bump_estimated_gas("0x5208").unwrap(), "0x6270"); // 21000 -> 25200
+        assert_eq!(bump_estimated_gas("0xc351").unwrap(), "0xea62"); // ceil(50001 * 1.2)
+        assert_eq!(bump_estimated_gas("0x0").unwrap(), "0x0");
+    }
+
+    #[test]
+    fn parses_debank_protocol_positions() {
+        let data = json!([
+            {
+                "id": "arb_gmx",
+                "chain": "arb",
+                "name": "GMX",
+                "site_url": "https://app.gmx.io",
+                "logo_url": "https://example.com/gmx.png",
+                "portfolio_item_list": [
+                    {
+                        "name": "Staked",
+                        "stats": { "net_usd_value": 5.5, "asset_usd_value": 5.5, "debt_usd_value": 0 },
+                        "base": { "chain": "arb" },
+                        "asset_token_list": [
+                            { "symbol": "GMX", "amount": 1.25, "price": 4.4, "usd_value": 5.5 }
+                        ]
+                    }
+                ]
+            }
+        ]);
+        let positions = parse_debank_positions(&data).unwrap();
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].app_name, "GMX");
+        assert_eq!(positions[0].network_name, "Arbitrum");
+        assert_eq!(positions[0].balance_usd, 5.5);
+        assert_eq!(positions[0].symbols, vec!["GMX"]);
     }
 
     #[test]

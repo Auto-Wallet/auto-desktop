@@ -8,7 +8,7 @@ import {
   useActivity,
   type ActivityRecord,
 } from "../lib/activity";
-import { openExternalUrl } from "../lib/platform";
+import { isTauri, openExternalUrl } from "../lib/platform";
 import { txExplorerUrl } from "../lib/explorer";
 import { ChainIcon } from "../lib/ChainIcon";
 import { useDefiPositions, type DefiState } from "../lib/defi";
@@ -88,6 +88,7 @@ import { Icon, type IconName } from "../lib/icons";
 import { Avatar } from "../lib/ui";
 import { QrCode } from "../lib/qr";
 import { toast } from "../lib/toast";
+import { rpc } from "../lib/rpc";
 
 const PINNED_ACCOUNT_STORAGE_KEY = "autodesktop:pinned-wallet-addresses";
 
@@ -154,7 +155,6 @@ export default function WalletPage() {
   }, [chains, custom, tokenBalances]);
   const { prices: tokenPrices, refresh: refreshTokenPrices } =
     useTokenPrices(pricedTokens);
-  const defi = useDefiPositions(active.address);
 
   const [tab, setTab] = useState<"tokens" | "activity">("tokens");
   const [filter, setFilter] = useState<string>("all");
@@ -234,6 +234,11 @@ export default function WalletPage() {
       buildRows(chains, custom, balances, tokenBalances, prices, tokenPrices),
     [chains, custom, balances, tokenBalances, prices, tokenPrices],
   );
+  const walletAssetsOverOneUsd = useMemo(
+    () => computeWalletAssetsOverOneUsd(allRows, prices.status === "loading"),
+    [allRows, prices.status],
+  );
+  const defi = useDefiPositions(active.address, walletAssetsOverOneUsd);
   const rows = useMemo(
     () =>
       filter === "all" ? allRows : allRows.filter((r) => r.chainId === filter),
@@ -247,6 +252,7 @@ export default function WalletPage() {
     () => computePortfolio(allRows, prices.status === "loading", defi),
     [allRows, prices.status, defi],
   );
+  const isDefiLoading = defi.status === "loading";
   const trend = usePortfolioHistory(
     active.address,
     portfolio.total,
@@ -263,7 +269,7 @@ export default function WalletPage() {
     refreshTokens();
     refreshPrices();
     refreshTokenPrices();
-    void defi.refresh();
+    void defi.refresh(true);
     toast(t("common.refreshed"));
   }
 
@@ -319,6 +325,12 @@ export default function WalletPage() {
                 <>
                   <div className="hero-total disp tnum">
                     <HeroAmount n={portfolio.total} />
+                    {isDefiLoading && (
+                      <span className="hero-loading" title={t("wallet.refreshingDefi")}>
+                        <Icon name="refresh" size={14} />
+                        {t("wallet.refreshingDefi")}
+                      </span>
+                    )}
                   </div>
                   {portfolio.total != null && (
                     <div className="hero-change">
@@ -575,7 +587,10 @@ function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
       <div className="asset-section-head">
         <div>
           <div className="asset-section-title">{t("wallet.defiHoldings")}</div>
-          <div className="asset-section-sub">{t("wallet.defiHoldingsHint")}</div>
+          <div className="asset-section-sub">
+            {t("wallet.defiHoldingsHint")}
+            {defi.source ? ` · Source: ${defi.source}` : ""}
+          </div>
         </div>
         <div className="asset-section-tools">
           {isRefreshing && (
@@ -883,6 +898,30 @@ function filterDefiPositions(
       ...position.tokens.map((token) => token.symbol),
     ]),
   );
+}
+
+function computeWalletAssetsOverOneUsd(
+  rows: DisplayRow[],
+  pricesLoading: boolean,
+): boolean | undefined {
+  let sawLoading = pricesLoading;
+  let sawPricedAsset = false;
+  let total = 0;
+
+  for (const row of rows) {
+    if (!row.state || row.state.status === "loading") {
+      sawLoading = true;
+      continue;
+    }
+    if (row.state.status !== "ok" || !row.price) continue;
+
+    sawPricedAsset = true;
+    total += weiToUsd(row.state.wei, row.decimals, row.price.usd);
+    if (total > 1) return true;
+  }
+
+  if (sawPricedAsset) return false;
+  return sawLoading ? undefined : false;
 }
 
 function computePortfolio(
@@ -2819,6 +2858,24 @@ function normalizeTxValue(value: string | undefined): string {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForTxSuccess(chainId: string, hash: string, label: string): Promise<void> {
+  if (!isTauri()) return;
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const receipt = await rpc<{ status?: string } | null>(chainId, "eth_getTransactionReceipt", [hash]);
+    if (receipt) {
+      if (receipt.status === "0x1") return;
+      throw new Error(`${label} transaction failed on-chain`);
+    }
+    await sleep(2_500);
+  }
+  throw new Error(`${label} transaction is still pending. Wait for it to confirm before swapping.`);
+}
+
 function encodeErc20Approve(spender: string, amount: bigint): string {
   const addr = spender.toLowerCase().replace(/^0x/, "");
   if (!/^[0-9a-f]{40}$/.test(addr)) throw new Error("invalid spender");
@@ -3239,8 +3296,8 @@ function SwapModal({
   const insufficient =
     !!asset && !!amountRaw && amountRaw > 0n && amountRaw > BigInt(asset.wei);
   const approveKey =
-    asset && selectedQuote?.approvalSpender
-      ? `${asset.chainId}:${asset.address ?? NATIVE_TOKEN_ADDRESS}:${selectedQuote.approvalSpender}`.toLowerCase()
+    asset && selectedQuote?.approvalSpender && amountRaw
+      ? `${asset.chainId}:${asset.address ?? NATIVE_TOKEN_ADDRESS}:${selectedQuote.approvalSpender}:${amountRaw.toString()}`.toLowerCase()
       : "";
   const needsApprove =
     !!asset &&
@@ -3357,8 +3414,8 @@ function SwapModal({
       return;
     }
     setStage({ kind: "approving" });
-    const sendApprove = (value: bigint) =>
-      walletSend(asset.chainId, {
+    const sendApprove = async (value: bigint) => {
+      const hash = await walletSend(asset.chainId, {
         to: sourceToken.address,
         value: "0x0",
         data: encodeErc20Approve(selectedQuote.approvalSpender!, value),
@@ -3369,7 +3426,9 @@ function SwapModal({
           tokenAddress: sourceToken.address,
           amount: toHexQuantity(value),
         },
-    });
+      });
+      await waitForTxSuccess(asset.chainId, hash, "Approve");
+    };
     try {
       try {
         await sendApprove(amountRaw);

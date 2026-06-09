@@ -339,6 +339,29 @@
 .modal-body {
   padding: 4px 20px 20px;
 }
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+.modal-actions .btn {
+  min-width: 118px;
+}
+.btn.primary {
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(91, 75, 240, 0.22);
+}
+.btn.ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+}
 
 /* ---- Toast ---- */
 .toast-wrap {
