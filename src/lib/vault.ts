@@ -52,7 +52,9 @@ type RustStatus = {
   active: string | null;
 };
 type NewVault = { id: string; address: string; mnemonic: string };
-export type ExportedSecret = { kind: "hd" | "privkey"; secret: string };
+/** A revealed software-wallet secret. Its shape (phrase vs raw key) follows the
+ *  caller's already-known `WalletInfo.kind`, so the kind isn't echoed back here. */
+export type ExportedSecret = { secret: string };
 
 // Publicly-known Anvil/Hardhat dev addresses — used ONLY for the no-backend
 // browser preview. NOT secrets.
@@ -66,6 +68,7 @@ const DEMO_ADDRESSES = [
   "0x976ea74026e726554db657fa54763abd0c3a0aa9",
 ];
 const DEMO_MNEMONIC = "test test test test test test test test test test test junk";
+const DEMO_PRIVKEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 let state: VaultState = { phase: "loading", hasPassword: false, wallets: [], active: null };
 
@@ -190,13 +193,7 @@ export async function exportWalletSecret(
     const w = demoWallets.find((x) => x.id === walletId);
     if (!w) throw new Error("wallet not found");
     if (w.kind === "ledger") throw new Error("Ledger wallets do not have a local secret to export");
-    return {
-      kind: w.kind,
-      secret:
-        w.kind === "hd"
-          ? DEMO_MNEMONIC
-          : "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-    };
+    return { secret: w.kind === "hd" ? DEMO_MNEMONIC : DEMO_PRIVKEY };
   }
   return invoke<ExportedSecret>("export_wallet_secret", {
     walletId,

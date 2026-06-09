@@ -3276,8 +3276,10 @@ struct WalletRef {
 /// session cannot leak a seed/key by accident.
 #[derive(Serialize)]
 struct ExportedSecret {
-    kind: String,
-    secret: String,
+    /// `Zeroizing` so the decrypted plaintext is scrubbed from memory once the IPC
+    /// response is serialized — matching how the rest of `mod vault` holds secrets.
+    /// The caller already knows the wallet kind, so it isn't echoed back here.
+    secret: Zeroizing<String>,
 }
 
 /// Whether any wallet exists / is unlocked, the full wallet list, and the active
@@ -3423,13 +3425,9 @@ fn export_wallet_secret<R: Runtime>(
     let path = wallet_file(&app, &wallet_id)?;
     let ks = read_keystore(&path)?.ok_or("wallet not found")?;
     match ks.kind.as_str() {
-        "hd" | "privkey" => {
-            let secret = vault::open(&password, &ks)?;
-            Ok(ExportedSecret {
-                kind: ks.kind,
-                secret: secret.to_string(),
-            })
-        }
+        "hd" | "privkey" => Ok(ExportedSecret {
+            secret: vault::open(&password, &ks)?,
+        }),
         "ledger" => Err("Ledger wallets do not have a local secret to export".to_string()),
         _ => Err(format!("unsupported wallet kind {}", ks.kind)),
     }

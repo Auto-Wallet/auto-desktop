@@ -351,7 +351,8 @@ export default function SettingsPage() {
                     </div>
                     <Icon name="chevronR" size={16} />
                   </button>
-                  {activeWallet?.kind === "hd" && (
+                  {(activeWallet?.kind === "hd" ||
+                    activeWallet?.kind === "privkey") && (
                     <button
                       className="set-row"
                       onClick={() => setExportingWallet(activeWallet)}
@@ -360,26 +361,19 @@ export default function SettingsPage() {
                         <Icon name="key" size={17} />
                       </span>
                       <div className="gr">
-                        <div className="rl">{t("settings.revealPhrase")}</div>
-                        <div className="rs">
-                          {t("settings.revealPhraseHint")}
+                        <div className="rl">
+                          {t(
+                            activeWallet.kind === "hd"
+                              ? "settings.revealPhrase"
+                              : "settings.revealPrivateKey",
+                          )}
                         </div>
-                      </div>
-                      <Icon name="chevronR" size={16} />
-                    </button>
-                  )}
-                  {activeWallet?.kind === "privkey" && (
-                    <button
-                      className="set-row"
-                      onClick={() => setExportingWallet(activeWallet)}
-                    >
-                      <span className="row-ic">
-                        <Icon name="key" size={17} />
-                      </span>
-                      <div className="gr">
-                        <div className="rl">{t("settings.revealPrivateKey")}</div>
                         <div className="rs">
-                          {t("settings.revealPrivateKeyHint")}
+                          {t(
+                            activeWallet.kind === "hd"
+                              ? "settings.revealPhraseHint"
+                              : "settings.revealPrivateKeyHint",
+                          )}
                         </div>
                       </div>
                       <Icon name="chevronR" size={16} />
@@ -530,8 +524,6 @@ function ExportSecretModal({
     toast(t("settings.secretCopied"));
   }
 
-  const words = secret?.kind === "hd" ? secret.secret.split(/\s+/) : [];
-
   return (
     <div className="scrim" onClick={onClose}>
       <div className="modal export-secret-modal" onClick={(e) => e.stopPropagation()}>
@@ -585,9 +577,9 @@ function ExportSecretModal({
             </>
           ) : (
             <>
-              {secret.kind === "hd" ? (
+              {isPhrase ? (
                 <ol className="export-phrase-grid">
-                  {words.map((word, index) => (
+                  {secret.secret.split(/\s+/).map((word, index) => (
                     <li key={`${word}-${index}`}>
                       <span>{index + 1}</span>
                       <strong>{word}</strong>

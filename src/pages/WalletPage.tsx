@@ -1906,13 +1906,16 @@ function errText(e: unknown): string {
   return String(e);
 }
 
-function isGasEstimateError(e: unknown): boolean {
+function isApproveResetRequiredError(e: unknown): boolean {
   const text = errText(e).toLowerCase();
   return (
     text.includes("eth_estimategas") ||
     text.includes("estimate gas") ||
     text.includes("gas estimate") ||
-    text.includes("gas required exceeds allowance")
+    text.includes("gas required exceeds allowance") ||
+    text.includes("execution reverted") ||
+    text.includes("not permitted") ||
+    text.includes("code 3")
   );
 }
 
@@ -2723,8 +2726,6 @@ function AssetSelect({
   );
 }
 
-const MAX_UINT256 = (1n << 256n) - 1n;
-
 function swapInitialSlots(): QuoteSlot[] {
   return PROVIDERS.map((p) => ({
     providerId: p.id,
@@ -3368,12 +3369,12 @@ function SwapModal({
           tokenAddress: sourceToken.address,
           amount: toHexQuantity(value),
         },
-      });
+    });
     try {
       try {
-        await sendApprove(MAX_UINT256);
+        await sendApprove(amountRaw);
       } catch (e) {
-        if (!isGasEstimateError(e)) throw e;
+        if (!isApproveResetRequiredError(e)) throw e;
         await sendApprove(0n);
         await sendApprove(amountRaw);
       }
