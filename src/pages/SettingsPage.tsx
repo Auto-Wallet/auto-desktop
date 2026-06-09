@@ -450,10 +450,12 @@ export default function SettingsPage() {
                     {updatePercent !== null && <span>{updatePercent}%</span>}
                   </div>
                   <div className="update-progress-track">
-                    <span
+                    <div
+                      className="update-progress-fill"
                       style={{
-                        width:
-                          updatePercent !== null ? `${updatePercent}%` : "35%",
+                        transform: `scaleX(${
+                          updatePercent !== null ? updatePercent / 100 : 0.35
+                        })`,
                       }}
                     />
                   </div>
