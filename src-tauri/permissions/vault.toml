@@ -23,6 +23,11 @@ description = "Allow the shell to import a wallet from a single raw private key 
 commands.allow = ["import_private_key"]
 
 [[permission]]
+identifier = "allow-export-wallet-secret"
+description = "Allow the shell to export a software wallet secret after password confirmation."
+commands.allow = ["export_wallet_secret"]
+
+[[permission]]
 identifier = "allow-reset-vault"
 description = "Allow the shell to reset the wallet (delete the keystore) for the forgot-password flow."
 commands.allow = ["reset_vault"]

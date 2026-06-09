@@ -3271,6 +3271,15 @@ struct WalletRef {
     address: String,
 }
 
+/// Decrypted secret for an explicit user export. Only the trusted shell can call
+/// this command, and it still requires the app password so a casual unlocked
+/// session cannot leak a seed/key by accident.
+#[derive(Serialize)]
+struct ExportedSecret {
+    kind: String,
+    secret: String,
+}
+
 /// Whether any wallet exists / is unlocked, the full wallet list, and the active
 /// account. The shell renders the switcher + gates the lock screen from this.
 #[tauri::command]
@@ -3400,6 +3409,30 @@ fn import_private_key<R: Runtime>(
     let address = store_push_wallet(wallet, store_pw);
     push_accounts_changed(&app, Some(&address));
     Ok(WalletRef { id, address })
+}
+
+/// Export the selected software wallet's root secret after password re-check.
+/// HD wallets return their recovery phrase; imported private-key wallets return
+/// the canonical 0x private key. Ledger wallets have no local secret to export.
+#[tauri::command]
+fn export_wallet_secret<R: Runtime>(
+    app: AppHandle<R>,
+    wallet_id: String,
+    password: String,
+) -> Result<ExportedSecret, String> {
+    let path = wallet_file(&app, &wallet_id)?;
+    let ks = read_keystore(&path)?.ok_or("wallet not found")?;
+    match ks.kind.as_str() {
+        "hd" | "privkey" => {
+            let secret = vault::open(&password, &ks)?;
+            Ok(ExportedSecret {
+                kind: ks.kind,
+                secret: secret.to_string(),
+            })
+        }
+        "ledger" => Err("Ledger wallets do not have a local secret to export".to_string()),
+        _ => Err(format!("unsupported wallet kind {}", ks.kind)),
+    }
 }
 
 /// On boot, auto-load wallets ONLY when there is no app password to enter — i.e. a
@@ -3842,6 +3875,7 @@ pub fn run() {
             create_vault,
             import_vault,
             import_private_key,
+            export_wallet_secret,
             unlock_vault,
             lock_vault,
             reset_vault,
@@ -4203,6 +4237,7 @@ mod e2e {
                 create_vault,
                 import_vault,
                 import_private_key,
+                export_wallet_secret,
                 unlock_vault,
                 lock_vault,
                 reset_vault,

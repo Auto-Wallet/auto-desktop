@@ -307,3 +307,76 @@ button.set-row:hover {
   gap: 9px;
   padding: 0 20px 20px;
 }
+
+/* export secret */
+.export-secret-modal {
+  width: min(520px, calc(100vw - 40px));
+}
+.export-warning {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 12px;
+  border-radius: var(--r-md);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.45;
+  margin-bottom: 13px;
+}
+.export-warning svg {
+  flex: none;
+  margin-top: 1px;
+}
+.export-wallet-name {
+  font-family: var(--font-mono);
+  color: var(--ink-3);
+  font-size: 11.5px;
+  margin: 0 2px 15px;
+  word-break: break-all;
+}
+.export-phrase-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.export-phrase-grid li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 11px;
+  border-radius: var(--r-md);
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+.export-phrase-grid li span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.export-phrase-grid li strong {
+  color: var(--ink);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.export-key-box {
+  padding: 13px 14px;
+  border-radius: var(--r-md);
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 560px) {
+  .export-phrase-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

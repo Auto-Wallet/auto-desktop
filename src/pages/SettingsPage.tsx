@@ -9,7 +9,12 @@ import {
   type Chain,
 } from "../lib/chains";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
-import { lockVault } from "../lib/vault";
+import {
+  exportWalletSecret,
+  lockVault,
+  type ExportedSecret,
+  type WalletInfo,
+} from "../lib/vault";
 import { useActiveWallet } from "../lib/accounts";
 import { setLang, useT, type Lang, type TFn } from "../lib/i18n";
 import { setThemePref, useThemePref, type ThemePref } from "../lib/theme";
@@ -51,6 +56,9 @@ export default function SettingsPage() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(
+    null,
+  );
+  const [exportingWallet, setExportingWallet] = useState<WalletInfo | null>(
     null,
   );
   const [editing, setEditing] = useState<Chain | "new" | null>(null);
@@ -154,6 +162,14 @@ export default function SettingsPage() {
       <div className="topbar">
         <div className="topbar-title">{t("settings.title")}</div>
       </div>
+
+      {exportingWallet && (
+        <ExportSecretModal
+          wallet={exportingWallet}
+          t={t}
+          onClose={() => setExportingWallet(null)}
+        />
+      )}
 
       <div className="page scroll">
         <div className="settings-pad">
@@ -338,7 +354,7 @@ export default function SettingsPage() {
                   {activeWallet?.kind === "hd" && (
                     <button
                       className="set-row"
-                      onClick={() => toast(t("settings.soon"), "info")}
+                      onClick={() => setExportingWallet(activeWallet)}
                     >
                       <span className="row-ic">
                         <Icon name="key" size={17} />
@@ -349,9 +365,24 @@ export default function SettingsPage() {
                           {t("settings.revealPhraseHint")}
                         </div>
                       </div>
-                      <span className="badge neutral">
-                        {t("settings.soon")}
+                      <Icon name="chevronR" size={16} />
+                    </button>
+                  )}
+                  {activeWallet?.kind === "privkey" && (
+                    <button
+                      className="set-row"
+                      onClick={() => setExportingWallet(activeWallet)}
+                    >
+                      <span className="row-ic">
+                        <Icon name="key" size={17} />
                       </span>
+                      <div className="gr">
+                        <div className="rl">{t("settings.revealPrivateKey")}</div>
+                        <div className="rs">
+                          {t("settings.revealPrivateKeyHint")}
+                        </div>
+                      </div>
+                      <Icon name="chevronR" size={16} />
                     </button>
                   )}
                   <button
@@ -457,6 +488,129 @@ export default function SettingsPage() {
         </div>
       </div>
     </>
+  );
+}
+
+function ExportSecretModal({
+  wallet,
+  t,
+  onClose,
+}: {
+  wallet: WalletInfo;
+  t: TFn;
+  onClose: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [secret, setSecret] = useState<ExportedSecret | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isPhrase = wallet.kind === "hd";
+  const title = isPhrase
+    ? t("settings.exportPhraseTitle")
+    : t("settings.exportPrivateKeyTitle");
+
+  async function reveal() {
+    if (!password) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await exportWalletSecret(wallet.id, password);
+      setSecret(out);
+      setPassword("");
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copySecret() {
+    if (!secret) return;
+    await navigator.clipboard.writeText(secret.secret);
+    toast(t("settings.secretCopied"));
+  }
+
+  const words = secret?.kind === "hd" ? secret.secret.split(/\s+/) : [];
+
+  return (
+    <div className="scrim" onClick={onClose}>
+      <div className="modal export-secret-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div className="modal-title">{title}</div>
+          <button className="icon-btn bare" onClick={onClose}>
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="export-warning">
+            <Icon name="shield" size={16} />
+            <span>{t("settings.exportSecretWarning")}</span>
+          </div>
+          <div className="export-wallet-name">
+            {wallet.label} · {wallet.accounts[0] ?? ""}
+          </div>
+
+          {!secret ? (
+            <>
+              <div className="field">
+                <label className="field-label">{t("lock.password")}</label>
+                <input
+                  className="input"
+                  type="password"
+                  value={password}
+                  autoFocus
+                  placeholder={t("lock.password")}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void reveal();
+                  }}
+                />
+              </div>
+              {error && <div className="form-error">{error}</div>}
+              <div className="modal-actions">
+                <button className="btn btn-ghost" onClick={onClose}>
+                  {t("wallet.cancel")}
+                </button>
+                <button
+                  className="btn btn-danger"
+                  disabled={busy || !password}
+                  onClick={() => void reveal()}
+                >
+                  {busy ? "..." : t("settings.revealSecret")}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              {secret.kind === "hd" ? (
+                <ol className="export-phrase-grid">
+                  {words.map((word, index) => (
+                    <li key={`${word}-${index}`}>
+                      <span>{index + 1}</span>
+                      <strong>{word}</strong>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <div className="export-key-box">{secret.secret}</div>
+              )}
+              <div className="modal-actions">
+                <button className="btn btn-ghost" onClick={onClose}>
+                  {t("wallet.cancel")}
+                </button>
+                <button className="btn btn-primary" onClick={() => void copySecret()}>
+                  <Icon name="copy" size={15} />
+                  {t("wallet.copy")}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -34,6 +34,7 @@
     "allow-create-vault",
     "allow-import-vault",
     "allow-import-private-key",
+    "allow-export-wallet-secret",
     "allow-unlock-vault",
     "allow-lock-vault",
     "allow-reset-vault",

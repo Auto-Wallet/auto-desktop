@@ -52,6 +52,7 @@ type RustStatus = {
   active: string | null;
 };
 type NewVault = { id: string; address: string; mnemonic: string };
+export type ExportedSecret = { kind: "hd" | "privkey"; secret: string };
 
 // Publicly-known Anvil/Hardhat dev addresses — used ONLY for the no-backend
 // browser preview. NOT secrets.
@@ -177,6 +178,30 @@ export async function importPrivateKey(
   const ref = await invoke<WalletRef>("import_private_key", { password, privateKey: privateKey.trim() });
   await refreshVaultStatus();
   return ref;
+}
+
+/** Export a software wallet's root secret after password confirmation. HD wallets
+ *  return the recovery phrase; imported private-key wallets return the raw key. */
+export async function exportWalletSecret(
+  walletId: string,
+  password: string,
+): Promise<ExportedSecret> {
+  if (!isTauri()) {
+    const w = demoWallets.find((x) => x.id === walletId);
+    if (!w) throw new Error("wallet not found");
+    if (w.kind === "ledger") throw new Error("Ledger wallets do not have a local secret to export");
+    return {
+      kind: w.kind,
+      secret:
+        w.kind === "hd"
+          ? DEMO_MNEMONIC
+          : "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    };
+  }
+  return invoke<ExportedSecret>("export_wallet_secret", {
+    walletId,
+    password,
+  });
 }
 
 /** List addresses from a connected Ledger (for the picker). Requires the device
