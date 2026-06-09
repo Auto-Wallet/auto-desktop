@@ -45,13 +45,13 @@ export function ToastHost() {
           <button
             key={t.id}
             type="button"
-            className={`toast ${t.kind} actionable`}
+            className={`toast ${t.kind}${t.card ? " card" : ""} actionable`}
             onClick={t.action.onClick}
           >
             {content}
           </button>
         ) : (
-          <div key={t.id} className={`toast ${t.kind}`}>
+          <div key={t.id} className={`toast ${t.kind}${t.card ? " card" : ""}`}>
             {content}
           </div>
         );

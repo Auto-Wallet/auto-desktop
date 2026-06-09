@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import mascot from "./assets/mascot.png";
@@ -18,7 +18,12 @@ import { setThemePref, useEffectiveTheme } from "./lib/theme";
 import { shortAddress } from "./lib/format";
 import { Avatar, ToastHost } from "./lib/ui";
 import { toast } from "./lib/toast";
-import { syncActivityReceipts, type ActivityRecord } from "./lib/activity";
+import {
+  loadActivity,
+  syncActivityReceipts,
+  useActivity,
+  type ActivityRecord,
+} from "./lib/activity";
 import { txExplorerUrl } from "./lib/explorer";
 
 type Page = "wallet" | "dapps" | "browser" | "settings";
@@ -29,6 +34,46 @@ const SIDEBAR_KEY = "autodesktop.sidebarCollapsed";
 function App() {
   const vault = useVault();
   const { t, lang } = useT();
+  const activity = useActivity();
+  const txStatusRef = useRef<Map<string, string>>(new Map());
+  const notifiedTxRef = useRef<Set<string>>(new Set());
+  const submittedThisSessionRef = useRef<Set<string>>(new Set());
+  const showTxToast = useCallback(
+    (
+      record: ActivityRecord | undefined,
+      messageKey:
+        | "wallet.txSubmitted"
+        | "wallet.txConfirmed"
+        | "wallet.txFailed",
+      kind: "ok" | "info" | "warn" = "ok",
+      status?: string,
+    ) => {
+      const hash = record?.hash;
+      if (record && status) {
+        if (status === "submitted") {
+          submittedThisSessionRef.current.add(record.id);
+        } else if (!submittedThisSessionRef.current.has(record.id)) {
+          return;
+        }
+        const key = `${record.id}:${status}`;
+        if (notifiedTxRef.current.has(key)) return;
+        notifiedTxRef.current.add(key);
+      }
+      const href = record ? txExplorerUrl(undefined, record) : null;
+      toast(
+        t(messageKey, { hash: hash ? shortAddress(hash, 8, 6) : "" }),
+        kind,
+        href
+          ? {
+              label: t("wallet.openExplorer"),
+              onClick: () => void openExternalUrl(href),
+            }
+          : undefined,
+        { card: true, durationMs: 6000 },
+      );
+    },
+    [t],
+  );
   // Reconcile the backend's active signer with the shell's remembered selection so a
   // dApp always connects to the account shown in the sidebar (and follows wallet
   // switches). Backend resets to the first account on every unlock; this re-syncs it.
@@ -54,38 +99,20 @@ function App() {
     if (!isTauri()) return;
     let disposed = false;
     const unlisteners: (() => void)[] = [];
-    const showTxToast = (
-      record: ActivityRecord | undefined,
-      messageKey: "wallet.txSubmitted" | "wallet.txConfirmed" | "wallet.txFailed",
-      kind: "ok" | "info" | "warn" = "ok",
-    ) => {
-      const hash = record?.hash;
-      const href = record ? txExplorerUrl(undefined, record) : null;
-      toast(
-        t(messageKey, { hash: hash ? shortAddress(hash, 8, 6) : "" }),
-        kind,
-        href
-          ? {
-              label: t("wallet.openExplorer"),
-              onClick: () => void openExternalUrl(href),
-            }
-          : undefined,
-      );
-    };
     void listen<ActivityRecord>("activity-recorded", (event) => {
-      showTxToast(event.payload, "wallet.txSubmitted", "info");
+      showTxToast(event.payload, "wallet.txSubmitted", "info", "submitted");
     }).then((fn) => {
       if (disposed) fn();
       else unlisteners.push(fn);
     });
     void listen<ActivityRecord>("activity-confirmed", (event) => {
-      showTxToast(event.payload, "wallet.txConfirmed");
+      showTxToast(event.payload, "wallet.txConfirmed", "ok", "confirmed");
     }).then((fn) => {
       if (disposed) fn();
       else unlisteners.push(fn);
     });
     void listen<ActivityRecord>("activity-failed", (event) => {
-      showTxToast(event.payload, "wallet.txFailed", "warn");
+      showTxToast(event.payload, "wallet.txFailed", "warn", "failed");
     }).then((fn) => {
       if (disposed) fn();
       else unlisteners.push(fn);
@@ -94,19 +121,44 @@ function App() {
       disposed = true;
       for (const unlisten of unlisteners) unlisten();
     };
-  }, [lang]);
+  }, [lang, showTxToast]);
   useEffect(() => {
     if (!isTauri() || !sessionUnlocked) return;
+    void loadActivity().catch(() => undefined);
     void syncActivityReceipts().catch(() => undefined);
     const id = window.setInterval(() => {
       void syncActivityReceipts().catch(() => undefined);
-    }, 20_000);
+    }, 8_000);
     return () => window.clearInterval(id);
   }, [sessionUnlocked]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    const prev = txStatusRef.current;
+    const next = new Map<string, string>();
+    for (const record of activity) {
+      const status = record.status ?? "submitted";
+      const old = prev.get(record.id);
+      next.set(record.id, status);
+      if (old === "submitted" && status === "confirmed") {
+        if (submittedThisSessionRef.current.has(record.id)) {
+          showTxToast(record, "wallet.txConfirmed", "ok", "confirmed");
+        }
+      } else if (old === "submitted" && status === "failed") {
+        if (submittedThisSessionRef.current.has(record.id)) {
+          showTxToast(record, "wallet.txFailed", "warn", "failed");
+        }
+      }
+    }
+    txStatusRef.current = next;
+  }, [activity, showTxToast]);
 
   const [page, setPage] = useState<Page>("wallet");
   const [collapsed, setCollapsed] = useState<boolean>(
-    () => localStorage.getItem(SIDEBAR_KEY) === "1",
+    () => {
+      const saved = localStorage.getItem(SIDEBAR_KEY);
+      if (saved != null) return saved === "1";
+      return window.innerWidth < 1180;
+    },
   );
   function toggleSidebar() {
     setCollapsed((c) => {

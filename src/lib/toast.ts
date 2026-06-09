@@ -13,6 +13,11 @@ export type Toast = {
   msg: string;
   kind: ToastKind;
   action?: ToastAction;
+  card?: boolean;
+};
+export type ToastOptions = {
+  card?: boolean;
+  durationMs?: number;
 };
 
 let toasts: Toast[] = [];
@@ -27,14 +32,15 @@ export function toast(
   msg: string,
   kind: ToastKind = "ok",
   action?: ToastAction,
+  options?: ToastOptions,
 ) {
   const id = `t${++seq}`;
-  toasts = [...toasts, { id, msg, kind, action }];
+  toasts = [...toasts, { id, msg, kind, action, card: options?.card }];
   emit();
   setTimeout(() => {
     toasts = toasts.filter((t) => t.id !== id);
     emit();
-  }, 2200);
+  }, options?.durationMs ?? 2200);
 }
 
 export function useToasts(): Toast[] {

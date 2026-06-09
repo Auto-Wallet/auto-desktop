@@ -398,6 +398,37 @@
 .toast.actionable:hover {
   transform: translateY(-1px);
 }
+.toast.card {
+  width: min(340px, calc(100vw - 36px));
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 15px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg);
+  white-space: normal;
+}
+.toast.card.actionable:hover {
+  border-color: color-mix(in srgb, var(--brand) 34%, var(--line-2));
+  box-shadow: var(--sh-xl);
+}
+.toast.card .tdot {
+  margin-top: 5px;
+}
+.toast.card .toast-msg {
+  flex: 1;
+  display: block;
+  line-height: 1.35;
+}
+.toast.card .toast-action {
+  flex: none;
+  margin-left: auto;
+  color: var(--brand-ink);
+  line-height: 1.35;
+  white-space: nowrap;
+}
 .toast-msg {
   min-width: 0;
 }

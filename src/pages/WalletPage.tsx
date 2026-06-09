@@ -533,13 +533,12 @@ export default function WalletPage() {
           t={t}
           onClose={() => setReplaceTarget(null)}
           onSubmit={async (maxFee, priorityFee) => {
-            const hash = await replaceActivityTransaction(
+            await replaceActivityTransaction(
               replaceTarget.record.id,
               replaceTarget.action,
               maxFee,
               priorityFee,
             );
-            toast(t("wallet.txSubmitted", { hash: shortAddress(hash, 8, 6) }));
             setReplaceTarget(null);
             await syncActivityReceipts().catch(() => undefined);
           }}
@@ -2970,23 +2969,34 @@ function SwapStatusView({
 }) {
   const done = status?.state === "success";
   const failed = status?.state === "failed" || status?.state === "refunded";
+  const pending = !done && !failed;
   return (
-    <div className={`swap-status-card${done ? " done" : failed ? " failed" : ""}`}>
-      <div className="swap-status-title">
-        {done
-          ? t("wallet.swapComplete")
-          : failed
-            ? status?.message || t("wallet.swapFailed")
-            : t("wallet.swapTracking", { provider: providerName(provider) })}
-      </div>
-      <div className="swap-status-sub mono">
-        {shortAddress(status?.sourceHash ?? hash, 10, 8)}
-      </div>
-      {status?.destHash && (
-        <div className="swap-status-sub mono">
-          {t("wallet.received")}: {shortAddress(status.destHash, 10, 8)}
+    <div
+      className={`swap-status-card${done ? " done" : failed ? " failed" : " pending"}`}
+      role="status"
+      aria-live="polite"
+    >
+      <span className="swap-status-ic" aria-hidden="true">
+        {pending ? <span /> : done ? <Icon name="check" size={16} /> : <Icon name="alert" size={16} />}
+      </span>
+      <div className="swap-status-main">
+        <div className="swap-status-title">
+          {done
+            ? t("wallet.swapComplete")
+            : failed
+              ? status?.message || t("wallet.swapFailed")
+              : t("wallet.swapTracking", { provider: providerName(provider) })}
         </div>
-      )}
+        <div className="swap-status-sub mono">
+          {shortAddress(status?.sourceHash ?? hash, 10, 8)}
+        </div>
+        {status?.destHash && (
+          <div className="swap-status-sub mono">
+            {t("wallet.received")}: {shortAddress(status.destHash, 10, 8)}
+          </div>
+        )}
+      </div>
+      {pending && <div className="swap-status-bar" aria-hidden="true" />}
     </div>
   );
 }

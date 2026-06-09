@@ -4060,6 +4060,12 @@ const WIN_W: f64 = 1350.0;
 const WIN_H: f64 = 880.0;
 const MIN_WIN_W: f64 = 940.0;
 const MIN_WIN_H: f64 = 600.0;
+const SMALL_SCREEN_W: f64 = 1280.0;
+const SMALL_SCREEN_H: f64 = 800.0;
+const MEDIUM_SCREEN_W: f64 = 1728.0;
+const MEDIUM_SCREEN_H: f64 = 1117.0;
+const LARGE_SCREEN_W: f64 = 2560.0;
+const LARGE_SCREEN_H: f64 = 1440.0;
 
 /// The real EIP-1193/EIP-6963 provider from auto-wallet-core, bundled to a
 /// self-contained IIFE by `bun run build:injected` and embedded at compile time.
@@ -4075,11 +4081,31 @@ fn startup_window_size<R: Runtime>(app: &tauri::App<R>) -> (LogicalSize<f64>, bo
         .work_area()
         .size
         .to_logical::<f64>(monitor.scale_factor());
-    if work_area.width < WIN_W || work_area.height < WIN_H {
-        (LogicalSize::new(work_area.width, work_area.height), true)
-    } else {
-        (preferred, false)
+    let w = work_area.width;
+    let h = work_area.height;
+
+    // The embedded dApp browser benefits more from width than the wallet pages do.
+    // Pick startup sizes by usable monitor area, keeping small screens maximized
+    // and giving large displays a wider canvas without making the app feel full-screen.
+    if w <= SMALL_SCREEN_W || h <= SMALL_SCREEN_H {
+        return (LogicalSize::new(w, h), true);
     }
+
+    let target = if w <= MEDIUM_SCREEN_W || h <= MEDIUM_SCREEN_H {
+        LogicalSize::new((w * 0.92).min(1440.0), (h * 0.9).min(900.0))
+    } else if w <= LARGE_SCREEN_W || h <= LARGE_SCREEN_H {
+        LogicalSize::new((w * 0.82).min(1680.0), (h * 0.84).min(980.0))
+    } else {
+        LogicalSize::new((w * 0.72).min(1860.0), (h * 0.78).min(1080.0))
+    };
+
+    (
+        LogicalSize::new(
+            target.width.clamp(MIN_WIN_W.min(w), w),
+            target.height.clamp(MIN_WIN_H.min(h), h),
+        ),
+        false,
+    )
 }
 
 fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
@@ -4183,6 +4209,7 @@ pub fn run() {
                 )
                 .maximized(should_maximize)
                 .resizable(true)
+                .center()
                 .build()?;
 
             // Shell webview (local, trusted): our React UI, fills the whole window.
