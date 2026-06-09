@@ -46,6 +46,41 @@ function pickBaseline(
   return { sample: sorted[0] ?? null, label: "1h" };
 }
 
+type TrendPoint = readonly [number, number];
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+function smoothPath(points: TrendPoint[]): string {
+  if (points.length < 2) return "";
+  if (points.length === 2) {
+    const [a, b] = points;
+    const midX = (a[0] + b[0]) / 2;
+    return `M ${a[0].toFixed(1)} ${a[1].toFixed(1)} C ${midX.toFixed(1)} ${a[1].toFixed(1)} ${midX.toFixed(1)} ${b[1].toFixed(1)} ${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
+  }
+
+  const tension = 0.42;
+  let path = `M ${points[0][0].toFixed(1)} ${points[0][1].toFixed(1)}`;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    const dx = p2[0] - p1[0];
+    const minCx = p1[0] + dx * 0.18;
+    const maxCx = p2[0] - dx * 0.18;
+    const c1x = clamp(p1[0] + (p2[0] - p0[0]) * tension / 6, minCx, maxCx);
+    const c1y = p1[1] + (p2[1] - p0[1]) * tension / 6;
+    const c2x = clamp(p2[0] - (p3[0] - p1[0]) * tension / 6, minCx, maxCx);
+    const c2y = p2[1] - (p3[1] - p1[1]) * tension / 6;
+    path += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+
+  return path;
+}
+
 function buildTrendPath(samples: PortfolioSnapshot[]): Pick<PortfolioTrend, "path" | "areaPath" | "isFlat"> {
   const width = 320;
   const height = 118;
@@ -76,7 +111,7 @@ function buildTrendPath(samples: PortfolioSnapshot[]): Pick<PortfolioTrend, "pat
   });
   const path =
     points.length > 1
-      ? points.map(([x, y], i) => `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ")
+      ? smoothPath(points)
       : `M ${padX} ${height / 2} L ${width - padX} ${height / 2}`;
   const first = points[0] ?? [padX, height / 2];
   const last = points[points.length - 1] ?? [width - padX, height / 2];

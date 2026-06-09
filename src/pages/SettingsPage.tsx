@@ -156,6 +156,8 @@ export default function SettingsPage() {
           Math.round((updateProgress.downloaded / updateProgress.total) * 100),
         )
       : null;
+  const updateFillPercent =
+    updateProgress?.phase === "installing" ? 100 : (updatePercent ?? 35);
 
   return (
     <>
@@ -449,14 +451,16 @@ export default function SettingsPage() {
                     </span>
                     {updatePercent !== null && <span>{updatePercent}%</span>}
                   </div>
-                  <div className="update-progress-track">
+                  <div
+                    className="update-progress-track"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={updatePercent ?? undefined}
+                  >
                     <div
                       className="update-progress-fill"
-                      style={{
-                        transform: `scaleX(${
-                          updatePercent !== null ? updatePercent / 100 : 0.35
-                        })`,
-                      }}
+                      style={{ width: `${updateFillPercent}%` }}
                     />
                   </div>
                 </div>
