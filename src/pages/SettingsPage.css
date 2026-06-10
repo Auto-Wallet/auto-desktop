@@ -297,7 +297,7 @@ button.set-row:hover {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--brand), var(--hot));
+  background: linear-gradient(90deg, var(--brand), var(--coral));
   min-width: 8px;
   transition: width 180ms ease;
 }
