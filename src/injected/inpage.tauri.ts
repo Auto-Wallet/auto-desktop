@@ -76,7 +76,9 @@ const transport: ProviderTransport = {
   },
 };
 
-installProvider(transport, { forceInject: true });
+// lockEthereum: the dapp webview is guaranteed sole-provider, so pin
+// window.ethereum and freeze the provider prototype against page hijacking.
+installProvider(transport, { forceInject: true, lockEthereum: true });
 console.log('[AutoDesktop] Auto Wallet provider injected');
 
 // Route "open in a new window" intents (window.open / <a target="_blank">) to the

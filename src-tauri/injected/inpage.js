@@ -17,9 +17,7 @@
         const accounts = await this.request({ method: "eth_accounts" });
         if (accounts?.length)
           this._accounts = accounts;
-        const chainId = await this.request({ method: "eth_chainId" });
-        if (chainId)
-          this._chainId = chainId;
+        await this.request({ method: "eth_chainId" });
       } catch {}
     }
     get chainId() {
@@ -36,12 +34,15 @@
       if (method === "eth_requestAccounts" || method === "eth_accounts") {
         this._accounts = result ?? this._accounts;
       } else if (method === "eth_chainId") {
-        this._chainId = result;
+        const normalized = normalizeChainId(typeof result === "string" ? result : undefined);
+        if (normalized)
+          this._chainId = normalized;
       } else if (method === "wallet_switchEthereumChain") {
         const p = params[0];
-        if (p?.chainId) {
-          this._chainId = p.chainId;
-          this._emit("chainChanged", p.chainId);
+        const normalized = normalizeChainId(p?.chainId);
+        if (normalized && normalized !== this._chainId) {
+          this._chainId = normalized;
+          this._emit("chainChanged", normalized);
         }
       }
       return result;
@@ -99,6 +100,13 @@
       this._emit(eventName, payload);
     }
   }
+  function normalizeChainId(id) {
+    if (!id)
+      return null;
+    const s = id.trim();
+    const value = /^0x[0-9a-fA-F]+$/i.test(s) ? BigInt(s.toLowerCase()) : /^[0-9]+$/.test(s) ? BigInt(s) : null;
+    return value && value > 0n ? `0x${value.toString(16)}` : null;
+  }
   // ../auto-wallet-core/src/provider/inject.ts
   var BLOCKED_PROVIDER_HOSTS = new Set(["docs.google.com"]);
   function isProviderInjectionAllowed(rawUrl) {
@@ -139,8 +147,18 @@
     const existing = w.ethereum;
     const hadOther = !!existing && existing !== provider;
     if (opts.forceInject || !existing) {
-      w.ethereum = provider;
       provider.isMetaMask = !hadOther;
+      if (opts.lockEthereum) {
+        Object.freeze(Object.getPrototypeOf(provider));
+        Object.defineProperty(w, "ethereum", {
+          value: provider,
+          writable: false,
+          configurable: false,
+          enumerable: true
+        });
+      } else {
+        w.ethereum = provider;
+      }
     }
     w.autoWallet = provider;
     return provider;
@@ -201,7 +219,7 @@
       };
     }
   };
-  installProvider(transport, { forceInject: true });
+  installProvider(transport, { forceInject: true, lockEthereum: true });
   console.log("[AutoDesktop] Auto Wallet provider injected");
   function installLinkInterceptor() {
     const openExternal = (url) => {

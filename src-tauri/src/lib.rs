@@ -1092,6 +1092,11 @@ struct PendingRequest {
     /// let the user adjust the fee. `None` for message-signing methods.
     #[serde(skip_serializing_if = "Option::is_none")]
     tx: Option<PreparedTx>,
+    /// For `eth_signTypedData_v4`: the full EIP-712 payload, so the approval
+    /// window can render every field (spender/amount/deadline…). A summary
+    /// alone would make typed-data signing blind signing (permit phishing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    typed_data: Option<Value>,
 }
 
 /// A transaction with every field resolved from the node (gas/nonce/fees filled),
@@ -1239,6 +1244,7 @@ async fn handle_signing<R: Runtime>(
                 origin: origin.to_string(),
                 summary: preview_message(&message),
                 tx: None,
+                typed_data: None,
             };
             if request_approval(app, req).await.approved {
                 personal_sign(&message)
@@ -1273,6 +1279,7 @@ async fn handle_signing<R: Runtime>(
                 origin: origin.to_string(),
                 summary: preview_typed_data(&typed),
                 tx: None,
+                typed_data: Some(typed.clone()),
             };
             if request_approval(app, req).await.approved {
                 sign_typed_data(&typed)
@@ -1504,6 +1511,7 @@ async fn approve_and_send<R: Runtime>(
     origin: &str,
     tx: &Value,
 ) -> Result<Value, String> {
+    ensure_tx_chain_id_matches(tx, chain_id)?;
     let prepared = prepare_tx(chain_id, tx).await?;
     let req = PendingRequest {
         id: next_request_id(),
@@ -1511,6 +1519,7 @@ async fn approve_and_send<R: Runtime>(
         origin: origin.to_string(),
         summary: preview_tx(tx),
         tx: Some(prepared.clone()),
+        typed_data: None,
     };
 
     let decision = request_approval(app, req).await;
@@ -1595,6 +1604,7 @@ async fn handle_rpc<R: Runtime>(
                         origin: origin.to_string(),
                         summary,
                         tx: None,
+                        typed_data: None,
                     };
                     if !request_approval(app, req).await.approved {
                         return Err("User rejected adding the network (code 4001)".to_string());
@@ -2643,6 +2653,7 @@ async fn replace_activity_transaction<R: Runtime>(
             format!("Speed up pending transaction\nOriginal: {}", original.hash)
         },
         tx: Some(prepared.clone()),
+        typed_data: None,
     };
     let decision = request_approval(&app, req).await;
     if !decision.approved {
@@ -3352,12 +3363,67 @@ fn normalize_chain_id(id: &str) -> Result<String, String> {
     Ok(format!("0x{value:x}"))
 }
 
+/// http(s) only, and plaintext http only for loopback / RFC-1918 LAN hosts —
+/// a wallet must never read chain state over a cleartext link an attacker can
+/// MITM (fake balances, fake tx status), nor from a scheme that isn't HTTP.
 fn validate_rpc(rpc: &str) -> Result<(), String> {
-    if rpc.starts_with("http://") || rpc.starts_with("https://") {
-        Ok(())
-    } else {
-        Err("RPC URL must start with http:// or https://".to_string())
+    let url: tauri::Url = rpc
+        .parse()
+        .map_err(|e| format!("invalid RPC URL '{rpc}': {e}"))?;
+    match url.scheme() {
+        "https" => {
+            if url.host_str().unwrap_or("").is_empty() {
+                return Err(format!("RPC URL '{rpc}' has no host"));
+            }
+            Ok(())
+        }
+        "http" => {
+            let host = url.host_str().unwrap_or("");
+            let local = host == "localhost"
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .map(|ip| match ip {
+                        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+                        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+                    })
+                    .unwrap_or(false);
+            if local {
+                Ok(())
+            } else {
+                Err(format!(
+                    "plain http RPC is only allowed for localhost/LAN dev nodes, got '{rpc}' — use https://"
+                ))
+            }
+        }
+        _ => Err("RPC URL must start with http:// or https://".to_string()),
     }
+}
+
+/// EIP-1193: if a dApp transaction carries a `chainId`, it MUST match the chain
+/// the wallet will sign/broadcast on. The wallet's selected chain is global
+/// state — another tab or the shell may switch it after the dApp composed the
+/// tx — so a mismatch means the user would sign for the wrong network.
+fn ensure_tx_chain_id_matches(tx: &Value, current: &str) -> Result<(), String> {
+    let Some(requested) = tx.get("chainId") else {
+        return Ok(());
+    };
+    let requested = match requested {
+        Value::String(s) => normalize_chain_id(s)?,
+        Value::Number(n) => {
+            let v = n
+                .as_u64()
+                .ok_or_else(|| format!("eth_sendTransaction: bad chainId {n}"))?;
+            normalize_chain_id(&v.to_string())?
+        }
+        other => return Err(format!("eth_sendTransaction: bad chainId {other}")),
+    };
+    let current = normalize_chain_id(current)?;
+    if requested != current {
+        return Err(format!(
+            "eth_sendTransaction: transaction chainId {requested} does not match the wallet's selected chain {current} — switch chains and retry (4901)"
+        ));
+    }
+    Ok(())
 }
 
 /// The full effective chain registry (for the shell's network list + selectors).
@@ -4458,11 +4524,36 @@ mod tests {
     }
 
     #[test]
-    fn validate_rpc_requires_http_scheme() {
+    fn validate_rpc_requires_https_except_local_dev() {
         assert!(validate_rpc("https://rpc.example.com").is_ok());
+        // Plain http is fine for local/LAN dev nodes…
         assert!(validate_rpc("http://localhost:8545").is_ok());
+        assert!(validate_rpc("http://127.0.0.1:8545").is_ok());
+        assert!(validate_rpc("http://192.168.1.50:8545").is_ok());
+        assert!(validate_rpc("http://10.0.0.7:8545").is_ok());
+        // …but NOT for arbitrary internet hosts (cleartext = MITM-able RPC).
+        assert!(validate_rpc("http://rpc.example.com").is_err());
+        assert!(validate_rpc("http://8.8.8.8:8545").is_err());
         assert!(validate_rpc("ftp://nope").is_err());
         assert!(validate_rpc("rpc.example.com").is_err());
+        assert!(validate_rpc("https://").is_err());
+    }
+
+    #[test]
+    fn tx_chain_id_must_match_selected_chain() {
+        // No chainId in the tx → nothing to check (wallet's chain is used).
+        assert!(ensure_tx_chain_id_matches(&json!({"to": "0x00"}), "0x1").is_ok());
+        // Matching chainId, any accepted notation.
+        assert!(ensure_tx_chain_id_matches(&json!({"chainId": "0x1"}), "0x1").is_ok());
+        assert!(ensure_tx_chain_id_matches(&json!({"chainId": "0XA4B1"}), "0xa4b1").is_ok());
+        assert!(ensure_tx_chain_id_matches(&json!({"chainId": 137}), "0x89").is_ok());
+        // Mismatch → hard error: the wallet's global chain may have been switched
+        // (another tab / the shell) after the dApp composed this transaction.
+        let err = ensure_tx_chain_id_matches(&json!({"chainId": "0x89"}), "0x1").unwrap_err();
+        assert!(err.contains("0x89") && err.contains("0x1"), "got: {err}");
+        // Junk chainId → error, not silently ignored.
+        assert!(ensure_tx_chain_id_matches(&json!({"chainId": "zzz"}), "0x1").is_err());
+        assert!(ensure_tx_chain_id_matches(&json!({"chainId": true}), "0x1").is_err());
     }
 
     #[test]
@@ -5247,9 +5338,12 @@ mod e2e {
         });
 
         let id = wait_for_pending_id();
-        // The approval window shows a typed-data summary.
+        // The approval window shows a typed-data summary AND the full payload —
+        // the UI must be able to render every field (spender/amount/deadline…),
+        // otherwise typed-data signing is blind signing (permit-phishing risk).
         let pending = invoke(&approval, "get_pending_requests", json!({})).unwrap();
         assert_eq!(pending[0]["summary"], json!("Sign Mail for Ether Mail"));
+        assert_eq!(pending[0]["typed_data"], typed);
         invoke(&approval, "approve_request", json!({ "id": id })).expect("approve ok");
 
         let sig = signer.join().unwrap().expect("signature returned");

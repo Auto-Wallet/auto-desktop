@@ -447,6 +447,46 @@
   animation: pulseGlow 1.4s ease-in-out infinite;
 }
 
+/* typed-data (EIP-712) display + permit warning */
+.apv-typed {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.apv-permit {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 13px;
+  border: 1px solid color-mix(in srgb, var(--coral-2, #e5484d) 45%, var(--line));
+  border-radius: var(--r-md);
+  background: var(--coral-soft, rgba(229, 72, 77, 0.08));
+}
+.apv-permit-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--coral-2, #e5484d);
+}
+.apv-permit-body {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.apv-permit .apv-row {
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--coral-2, #e5484d) 18%, transparent);
+}
+.apv-permit .apv-row:last-child {
+  border-bottom: none;
+}
+.apv-row-v.danger {
+  color: var(--coral-2, #e5484d);
+  font-weight: 800;
+}
+
 .approval-foot {
   display: flex;
   gap: 11px;

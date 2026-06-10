@@ -1,6 +1,8 @@
 // Display formatting. No external deps (BigInt is enough) — keeps the bundle
 // small per the VISION.md "ultra-lightweight" principle.
 
+import { toChecksumAddress } from "./keccak";
+
 /** "0x1a2b...c3d4" from a full address. */
 export function shortAddress(addr: string, lead = 6, tail = 4): string {
   if (addr.length <= lead + tail) return addr;
@@ -21,9 +23,18 @@ export function formatUnits(value: string, decimals = 18, maxFrac = 4): string {
   return fracStr ? `${whole}.${fracStr}` : whole.toString();
 }
 
-/** Basic 0x-address shape check (not a checksum verification). */
+/**
+ * Address validity: shape, plus EIP-55 checksum when the address is mixed-case.
+ * All-lowercase / all-uppercase carry no checksum information and pass on shape
+ * alone; a mixed-case address with a broken checksum is a mangled paste and is
+ * rejected — that case-mix is exactly what EIP-55 exists to catch.
+ */
 export function isAddress(s: string): boolean {
-  return /^0x[0-9a-fA-F]{40}$/.test(s.trim());
+  const a = s.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return false;
+  const hex = a.slice(2);
+  if (hex === hex.toLowerCase() || hex === hex.toUpperCase()) return true;
+  return toChecksumAddress(a) === a;
 }
 
 /**

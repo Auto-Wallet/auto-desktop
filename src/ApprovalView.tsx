@@ -8,6 +8,15 @@ import { formatUnits, parseUnits, shortAddress, toHexQuantity } from "./lib/form
 import { isTauri } from "./lib/platform";
 import { rpc } from "./lib/rpc";
 import { simulateTx, type SimulationPreview } from "./lib/simulation";
+import {
+  detectPermit,
+  encodeErc20Approve,
+  parseApprovalDetails,
+  parseTransferDetails,
+  type ApprovalDetails,
+  type TransferDetails,
+  type TypedDataPayload,
+} from "./lib/decode";
 
 // Mirrors the Rust `PreparedTx` (snake_case from serde).
 interface TxDisplay {
@@ -31,12 +40,8 @@ interface PendingRequest {
   origin: string;
   summary: string;
   tx?: TxDisplay;
+  typed_data?: TypedDataPayload;
 }
-type ApprovalDetails = {
-  tokenAddress: string;
-  spender: string;
-  amountRaw: bigint;
-};
 type ApprovalTokenInfo = {
   symbol: string;
   decimals: number;
@@ -119,6 +124,10 @@ function ApprovalView() {
   const current = requests[0];
   const approvalDetails = useMemo(
     () => (current?.tx ? parseApprovalDetails(current.tx) : null),
+    [current?.id, current?.tx?.to, current?.tx?.data],
+  );
+  const transferDetails = useMemo(
+    () => (current?.tx ? parseTransferDetails(current.tx) : null),
     [current?.id, current?.tx?.to, current?.tx?.data],
   );
 
@@ -218,19 +227,24 @@ function ApprovalView() {
             : undefined;
         let txData: string | undefined;
         if (approvalDetails) {
-          if (!approvalInfo) {
+          if (approvalInfo) {
+            try {
+              txData = encodeErc20Approve(
+                approvalDetails.spender,
+                parseUnits(approvalAmount.trim(), approvalInfo.decimals),
+              );
+            } catch {
+              setApprovalError(t("approval.approveAmountInvalid"));
+              return;
+            }
+          } else if (!approvalError) {
+            // Token metadata still loading — re-encoding needs real decimals.
             setApprovalError(t("approval.approveTokenLoading"));
             return;
           }
-          try {
-            txData = encodeErc20Approve(
-              approvalDetails.spender,
-              parseUnits(approvalAmount.trim(), approvalInfo.decimals),
-            );
-          } catch {
-            setApprovalError(t("approval.approveAmountInvalid"));
-            return;
-          }
+          // Metadata load FAILED (approvalError shown): the editable-amount
+          // feature is unavailable, so the dApp's original calldata is sent
+          // untouched — never re-encode with guessed decimals.
         }
         args = {
           id: req.id,
@@ -313,6 +327,7 @@ function ApprovalView() {
                 <SimPreview sim={sim} pending={simPending} t={t} />
                 <TxDetails
                 tx={current.tx}
+                transferDetails={transferDetails}
                 approvalDetails={approvalDetails}
                 approvalInfo={approvalInfo}
                 approvalAmount={approvalAmount}
@@ -342,6 +357,8 @@ function ApprovalView() {
               <pre className="apv-msg">{current.tx.data && current.tx.data !== "0x" ? current.tx.data : "0x"}</pre>
             )}
           </>
+        ) : current.typed_data ? (
+          <TypedDataDetails data={current.typed_data} t={t} />
         ) : (
           <div>
             <div className="field-label" style={{ padding: "0 2px 7px" }}>
@@ -459,6 +476,7 @@ function toBigintSafe(hex: string): string {
 // Transaction details for an eth_sendTransaction approval, with an editable max fee.
 function TxDetails({
   tx,
+  transferDetails,
   approvalDetails,
   approvalInfo,
   approvalAmount,
@@ -473,6 +491,7 @@ function TxDetails({
   t,
 }: {
   tx: TxDisplay;
+  transferDetails: TransferDetails | null;
   approvalDetails: ApprovalDetails | null;
   approvalInfo: ApprovalTokenInfo | null;
   approvalAmount: string;
@@ -500,6 +519,7 @@ function TxDetails({
       <Row label={t("approval.gasLimit")} value={toBigintSafe(tx.gas)} mono />
       <Row label={t("approval.nonce")} value={toBigintSafe(tx.nonce)} mono />
       {hasData && <Row label={t("approval.data")} value={t("approval.dataBytes", { n: dataBytes })} />}
+      {transferDetails && <TransferSection tx={tx} details={transferDetails} t={t} />}
       {approvalDetails && (
         <div className="apv-approve-editor">
           <div className="apv-approve-head">
@@ -575,11 +595,21 @@ function FeeInput({
   );
 }
 
-function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Row({
+  label,
+  value,
+  mono,
+  danger,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  danger?: boolean;
+}) {
   return (
     <div className="apv-row">
       <span className="apv-row-l">{label}</span>
-      <span className={`apv-row-v${mono ? " mono" : ""}`}>{value}</span>
+      <span className={`apv-row-v${mono ? " mono" : ""}${danger ? " danger" : ""}`}>{value}</span>
     </div>
   );
 }
@@ -590,25 +620,178 @@ function errText(e: unknown): string {
   return String(e);
 }
 
-function parseApprovalDetails(tx: TxDisplay): ApprovalDetails | null {
-  if (!tx.to || !tx.data?.startsWith("0x095ea7b3")) return null;
-  const data = tx.data.slice(2);
-  if (data.length < 8 + 64 + 64) return null;
-  const spenderWord = data.slice(8, 72);
-  const amountWord = data.slice(72, 136);
-  const spender = `0x${spenderWord.slice(24)}`;
-  if (!/^0x[0-9a-fA-F]{40}$/.test(spender)) return null;
-  return {
-    tokenAddress: tx.to,
-    spender,
-    amountRaw: BigInt(`0x${amountWord}`),
-  };
+function formatDeadline(deadline: bigint | null, t: TFn): string {
+  if (deadline === null) return "—";
+  if (deadline >= 253402300800n) return t("approval.permitNeverExpires"); // ≥ year 10000
+  return new Date(Number(deadline) * 1000).toLocaleString();
 }
 
-function encodeErc20Approve(spender: string, amount: bigint): string {
-  const addr = spender.toLowerCase().replace(/^0x/, "");
-  if (!/^[0-9a-f]{40}$/.test(addr)) throw new Error("invalid spender");
-  return `0x095ea7b3${addr.padStart(64, "0")}${amount.toString(16).padStart(64, "0")}`;
+// Full EIP-712 payload display: permit warning (spender/allowance/deadline) when
+// the signature grants token spending, then domain + primaryType + the complete
+// message. A summary line alone would be blind signing.
+function TypedDataDetails({ data, t }: { data: TypedDataPayload; t: TFn }) {
+  const permit = useMemo(() => detectPermit(data), [data]);
+  const [tokenMeta, setTokenMeta] = useState<{ symbol: string; decimals: number } | null>(null);
+
+  useEffect(() => {
+    setTokenMeta(null);
+    if (!permit?.token || !permit.chainHex || permit.amountRaw === null || permit.unlimited) return;
+    let cancelled = false;
+    // Display-only enrichment: if metadata can't load, the raw amount (the
+    // ground truth) stays on screen — nothing is hidden or defaulted.
+    void Promise.all([
+      readErc20Symbol(permit.chainHex, permit.token),
+      readErc20Decimals(permit.chainHex, permit.token),
+    ])
+      .then(([symbol, decimals]) => {
+        if (!cancelled) setTokenMeta({ symbol, decimals });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [permit?.token, permit?.chainHex, permit?.amountRaw, permit?.unlimited]);
+
+  const domain = (data.domain ?? {}) as Record<string, unknown>;
+  const allowanceLabel = !permit
+    ? ""
+    : permit.unlimited
+      ? t("approval.permitAmountUnlimited")
+      : permit.amountRaw === null
+        ? "—"
+        : tokenMeta
+          ? `${formatTokenAmountForInput(permit.amountRaw, tokenMeta.decimals)} ${tokenMeta.symbol}`
+          : t("approval.rawAmount", { n: permit.amountRaw.toString() });
+
+  return (
+    <div className="apv-typed">
+      {permit && (
+        <div className="apv-permit">
+          <div className="apv-permit-title">
+            <Icon name="alert" size={15} /> {t("approval.permitWarnTitle")}
+          </div>
+          <div className="apv-permit-body">{t("approval.permitWarnBody")}</div>
+          {permit.token && (
+            <Row
+              label={t("approval.token")}
+              value={
+                tokenMeta
+                  ? `${tokenMeta.symbol} (${shortAddress(permit.token, 8, 6)})`
+                  : shortAddress(permit.token, 10, 8)
+              }
+              mono={!tokenMeta}
+            />
+          )}
+          {permit.spender && (
+            <Row label={t("approval.spender")} value={shortAddress(permit.spender, 10, 8)} mono />
+          )}
+          <Row label={t("approval.allowance")} value={allowanceLabel} danger={permit.unlimited} />
+          <Row
+            label={t("approval.deadline")}
+            value={formatDeadline(permit.deadline, t)}
+            danger={permit.deadline !== null && permit.deadline >= 253402300800n}
+          />
+        </div>
+      )}
+      <div className="apv-tx">
+        {typeof domain.name === "string" && (
+          <Row label={t("approval.typedDomain")} value={domain.name} />
+        )}
+        {typeof domain.version === "string" && (
+          <Row label={t("approval.typedVersion")} value={domain.version} />
+        )}
+        {domain.chainId != null && (
+          <Row label={t("approval.typedChainId")} value={String(domain.chainId)} mono />
+        )}
+        {typeof domain.verifyingContract === "string" && (
+          <Row
+            label={t("approval.typedContract")}
+            value={shortAddress(domain.verifyingContract, 10, 8)}
+            mono
+          />
+        )}
+        {typeof data.primaryType === "string" && (
+          <Row label={t("approval.typedType")} value={data.primaryType} mono />
+        )}
+      </div>
+      <div>
+        <div className="field-label" style={{ padding: "0 2px 7px" }}>
+          {t("approval.message")}
+        </div>
+        <pre className="apv-msg">{JSON.stringify(data.message, null, 2)}</pre>
+      </div>
+    </div>
+  );
+}
+
+// Decoded ERC-20 transfer details (read-only) for a dApp transaction.
+function TransferSection({
+  tx,
+  details,
+  t,
+}: {
+  tx: TxDisplay;
+  details: TransferDetails;
+  t: TFn;
+}) {
+  const [meta, setMeta] = useState<{ symbol: string; decimals: number } | null>(null);
+  const [metaFailed, setMetaFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMeta(null);
+    setMetaFailed(false);
+    // Display-only enrichment: on failure the raw amount + token address stay
+    // visible and a note says why — never a silently-guessed 18 decimals.
+    void Promise.all([
+      readErc20Symbol(tx.chain_id, details.tokenAddress),
+      readErc20Decimals(tx.chain_id, details.tokenAddress),
+    ])
+      .then(([symbol, decimals]) => {
+        if (!cancelled) setMeta({ symbol, decimals });
+      })
+      .catch(() => {
+        if (!cancelled) setMetaFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tx.chain_id, details.tokenAddress]);
+
+  return (
+    <div className="apv-approve-editor">
+      <div className="apv-approve-head">
+        <span>{t("approval.transferTitle")}</span>
+        <span className="apv-approve-pill">{t("approval.decoded")}</span>
+      </div>
+      <Row
+        label={t("approval.token")}
+        value={
+          meta
+            ? `${meta.symbol} (${shortAddress(details.tokenAddress, 8, 6)})`
+            : shortAddress(details.tokenAddress, 10, 8)
+        }
+        mono={!meta}
+      />
+      {details.owner && (
+        <Row label={t("approval.transferOwner")} value={shortAddress(details.owner, 10, 8)} mono />
+      )}
+      <Row
+        label={t("approval.transferRecipient")}
+        value={shortAddress(details.recipient, 10, 8)}
+        mono
+      />
+      <Row
+        label={t("approval.amount")}
+        value={
+          meta
+            ? `${formatTokenAmountForInput(details.amountRaw, meta.decimals)} ${meta.symbol}`
+            : t("approval.rawAmount", { n: details.amountRaw.toString() })
+        }
+      />
+      {metaFailed && <div className="apv-approve-error">{t("approval.tokenMetaFailed")}</div>}
+    </div>
+  );
 }
 
 async function loadApprovalTokenInfo(
@@ -645,16 +828,18 @@ async function readErc20Symbol(chainId: string, tokenAddress: string): Promise<s
 }
 
 async function readErc20Decimals(chainId: string, tokenAddress: string): Promise<number> {
-  try {
-    const raw = await rpc<string>(chainId, "eth_call", [
-      { to: tokenAddress, data: "0x313ce567" },
-      "latest",
-    ]);
-    const value = Number(BigInt(raw));
-    return Number.isFinite(value) && value >= 0 && value <= 255 ? value : 18;
-  } catch {
-    return 18;
+  // NO fallback on failure: a guessed default (18) would re-encode an edited
+  // approve at the wrong scale (e.g. USDC is 6) — a funds-loss bug. Fail loudly;
+  // callers decide whether to block (approve editor) or degrade to raw display.
+  const raw = await rpc<string>(chainId, "eth_call", [
+    { to: tokenAddress, data: "0x313ce567" },
+    "latest",
+  ]);
+  const value = Number(BigInt(raw));
+  if (!Number.isFinite(value) || value < 0 || value > 255) {
+    throw new Error(`unexpected ERC-20 decimals() result: ${raw}`);
   }
+  return value;
 }
 
 function decodeAbiString(raw: string): string {
