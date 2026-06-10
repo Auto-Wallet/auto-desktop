@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "menu-overlay",
+  "description": "Trusted local dropdown-menu overlay rendered above remote dApp child webviews.",
+  "webviews": ["menu-overlay"],
+  "permissions": ["core:default"]
+}

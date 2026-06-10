@@ -1,5 +1,5 @@
 import "./BrowserView.css";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useChains, type Chain } from "../lib/chains";
 import { shortAddress } from "../lib/format";
@@ -8,7 +8,7 @@ import { setActiveChain, useActiveChain } from "../lib/activeChain";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
 import { Avatar } from "../lib/ui";
-import { toast, useToasts } from "../lib/toast";
+import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
 import { faviconOf, hostOf, type Dapp } from "../lib/dapps";
 import {
@@ -20,6 +20,12 @@ import {
   reloadDapp,
   setDappBounds,
 } from "../lib/platform";
+import {
+  menuAnchorFor,
+  useMenuOverlay,
+  type MenuAnchor,
+  type MenuOverlayPayload,
+} from "../lib/menuOverlay";
 
 export type Tab = { id: string; dapp: Dapp };
 
@@ -39,25 +45,12 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   const chain = chains.find((c) => c.id === chainId) ?? chains[0];
   const contentRef = useRef<HTMLDivElement>(null);
   const native = isTauri();
-  const toasts = useToasts();
 
   const [focus, setFocus] = useState(false);
   const [currentUrl, setCurrentUrl] = useState(dapp.url);
   const [url, setUrl] = useState(dapp.url);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [reloading, setReloading] = useState(false);
-
-  // A topbar dropdown (chain / account) is drawn by the SHELL, but the dApp's
-  // native child webview renders ON TOP of the shell within the content rect — so a
-  // menu hanging into that rect gets occluded by the page. While any menu is open we
-  // hide the dApp webview (it's not closed — the page is preserved) and re-show it on
-  // close. `openMenus` counts open menus so two toggles can't desync the visibility.
-  const [openMenus, setOpenMenus] = useState(0);
-  const reportMenu = useCallback(
-    (open: boolean) => setOpenMenus((n) => Math.max(0, n + (open ? 1 : -1))),
-    [],
-  );
-  const menuOpen = openMenus > 0;
 
   useEffect(() => {
     setCurrentUrl(dapp.url);
@@ -102,36 +95,6 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
       void hideDapp(label);
     };
   }, [native, label, dapp.url]);
-
-  // Native child webviews render above the shell, so shell overlays cannot truly
-  // float over the dApp webview. While a top-right menu or toast is visible, keep
-  // the dApp at its original vertical position and crop only the right strip behind
-  // that overlay. Cropping the top/bottom strips made pages look pushed around.
-  useEffect(() => {
-    if (!native) return;
-    const el = contentRef.current;
-    if (!el) return;
-    const id = requestAnimationFrame(() => {
-      const full = rectOf(el);
-      const overlays = Array.from(
-        document.querySelectorAll<HTMLElement>(".chain-menu, .toast-wrap .toast"),
-      );
-      const overlayLeft = overlays
-        .map((overlay) => overlay.getBoundingClientRect())
-        .filter((overlay) => overlay.bottom > full.y && overlay.top < full.y + full.h)
-        .filter((overlay) => overlay.left < full.x + full.w && overlay.right > full.x)
-        .reduce((left, overlay) => Math.min(left, overlay.left), full.x + full.w);
-
-      if (overlayLeft >= full.x + full.w) {
-        void openDapp(label, dapp.url, full);
-        return;
-      }
-
-      const width = Math.max(1, Math.min(full.w, overlayLeft - full.x - 8));
-      void setDappBounds(label, { x: full.x, y: full.y, w: width, h: full.h });
-    });
-    return () => cancelAnimationFrame(id);
-  }, [menuOpen, native, label, dapp.url, toasts.length]);
 
   async function handleReload() {
     if (reloading) return;
@@ -185,8 +148,8 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
         </div>
 
         <div className="browser-chips">
-          <ChainChip chain={chain} chains={chains} onMenu={reportMenu} />
-          <AcctChip onMenu={reportMenu} />
+          <ChainChip chain={chain} chains={chains} />
+          <AcctChip />
         </div>
       </header>
 
@@ -216,25 +179,53 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
 // The account chip in the dApp top bar IS a wallet switcher: picking an account
 // runs setActive → selectAccount, which switches the backend's active signer and
 // pushes accountsChanged into this dApp, so the page follows the new address.
-function AcctChip({ onMenu }: { onMenu: (open: boolean) => void }) {
+// In the native app the dropdown renders in the menu-overlay child webview
+// (lib/menuOverlay.ts) — an in-shell dropdown would be covered by the dApp
+// webview; the in-shell DOM menu below remains for the browser preview.
+function AcctChip() {
   const { t } = useT();
   const accounts = useAccounts();
   const active = useActiveAccount();
+  const native = isTauri();
   const [open, setOpen] = useState(false);
-  // Tell the parent when the menu is open so it can keep the native webview below it.
-  useEffect(() => {
-    if (!open) return;
-    onMenu(true);
-    return () => onMenu(false);
-  }, [open, onMenu]);
+  const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
   const isActive = (addr: string) => addr.toLowerCase() === active.address.toLowerCase();
   function copyAddress(address: string) {
     void navigator.clipboard.writeText(address);
     toast(t("common.copied"));
   }
+  const payload = useMemo<MenuOverlayPayload | null>(
+    () =>
+      anchor
+        ? {
+            kind: "account",
+            anchor,
+            accounts: accounts.map((a) => ({ address: a.address, label: a.label })),
+            activeAddress: active.address,
+            copyTitle: t("wallet.copy"),
+          }
+        : null,
+    [anchor, accounts, active.address, t],
+  );
+  useMenuOverlay(payload, (action) => {
+    if (action.type === "copy-address") {
+      copyAddress(action.address); // keep the menu open, like the in-shell copy
+      return;
+    }
+    if (action.type === "select-account") setActive(action.address);
+    setAnchor(null);
+  });
   return (
     <div className="chain-wrap">
-      <button className="acct-chip" onClick={() => setOpen((o) => !o)} title={t("wallet.switchAccount")}>
+      <button
+        className="acct-chip"
+        onClick={(e) => {
+          if (!native) return setOpen((o) => !o);
+          const next = menuAnchorFor(e.currentTarget);
+          setAnchor((a) => (a ? null : next));
+        }}
+        title={t("wallet.switchAccount")}
+      >
         <Avatar address={active.address} size={24} />
         <span className="mono">{shortAddress(active.address, 5, 4)}</span>
         <Icon name="chevronD" size={14} />
@@ -289,17 +280,37 @@ function AcctChip({ onMenu }: { onMenu: (open: boolean) => void }) {
   );
 }
 
-function ChainChip({ chain, chains, onMenu }: { chain: Chain; chains: Chain[]; onMenu: (open: boolean) => void }) {
+// Same native-vs-preview split as AcctChip: native renders in the menu overlay.
+function ChainChip({ chain, chains }: { chain: Chain; chains: Chain[] }) {
+  const native = isTauri();
   const [open, setOpen] = useState(false);
-  // Hide the dApp webview underneath while this menu is open (see AcctChip).
-  useEffect(() => {
-    if (!open) return;
-    onMenu(true);
-    return () => onMenu(false);
-  }, [open, onMenu]);
+  const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
+  const payload = useMemo<MenuOverlayPayload | null>(
+    () =>
+      anchor
+        ? {
+            kind: "chain",
+            anchor,
+            chains: chains.map((c) => ({ id: c.id, name: c.name, symbol: c.symbol, color: c.color })),
+            activeChainId: chain.id,
+          }
+        : null,
+    [anchor, chains, chain.id],
+  );
+  useMenuOverlay(payload, (action) => {
+    if (action.type === "select-chain") void setActiveChain(action.id);
+    setAnchor(null);
+  });
   return (
     <div className="chain-wrap">
-      <button className="chain-chip" onClick={() => setOpen((o) => !o)}>
+      <button
+        className="chain-chip"
+        onClick={(e) => {
+          if (!native) return setOpen((o) => !o);
+          const next = menuAnchorFor(e.currentTarget);
+          setAnchor((a) => (a ? null : next));
+        }}
+      >
         <ChainIcon chain={chain} size={16} />
         {chain.name}
         <Icon name="chevronD" size={14} />

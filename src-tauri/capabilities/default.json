@@ -11,6 +11,8 @@
     "updater:allow-download-and-install",
     "allow-open-dapp",
     "allow-set-dapp-bounds",
+    "allow-sync-toast-overlay",
+    "allow-sync-menu-overlay",
     "allow-reload-dapp",
     "allow-hide-dapp",
     "allow-close-dapp",

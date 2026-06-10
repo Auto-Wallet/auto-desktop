@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "toast-overlay",
+  "description": "Trusted local toast overlay rendered above remote dApp child webviews.",
+  "webviews": ["toast-overlay"],
+  "permissions": ["core:default", "allow-open-external-url"]
+}

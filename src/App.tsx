@@ -8,7 +8,14 @@ import BrowserView from "./pages/BrowserView";
 import SettingsPage from "./pages/SettingsPage";
 import LockScreen from "./pages/LockScreen";
 import { ensureDapp, faviconOf, type Dapp } from "./lib/dapps";
-import { closeDapp, dappLabel, isTauri, openExternalUrl } from "./lib/platform";
+import {
+  closeDapp,
+  dappLabel,
+  isTauri,
+  openExternalUrl,
+  rectOf,
+  syncToastOverlay,
+} from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
 import { useActiveAccount, useActiveAccountSync } from "./lib/accounts";
 import { loadChains } from "./lib/chains";
@@ -17,7 +24,7 @@ import { Icon } from "./lib/icons";
 import { setThemePref, useEffectiveTheme } from "./lib/theme";
 import { shortAddress } from "./lib/format";
 import { Avatar, ToastHost } from "./lib/ui";
-import { toast } from "./lib/toast";
+import { toast, useToasts } from "./lib/toast";
 import {
   loadActivity,
   syncActivityReceipts,
@@ -66,6 +73,7 @@ function App() {
         href
           ? {
               label: t("wallet.openExplorer"),
+              url: href,
               onClick: () => void openExternalUrl(href),
             }
           : undefined,
@@ -250,8 +258,61 @@ function App() {
       </main>
 
       <ToastHost />
+      <NativeToastOverlay active={page === "browser"} />
     </div>
   );
+}
+
+function NativeToastOverlay({ active }: { active: boolean }) {
+  const toasts = useToasts();
+  useEffect(() => {
+    if (!isTauri()) return;
+    if (!active) {
+      localStorage.removeItem("autodesktop.toastOverlayPayload");
+      void syncToastOverlay(null).catch(() => undefined);
+      return;
+    }
+
+    const id = requestAnimationFrame(() => {
+      const wrap = document.querySelector<HTMLElement>(".app > .toast-wrap");
+      if (!wrap || toasts.length === 0) {
+        localStorage.removeItem("autodesktop.toastOverlayPayload");
+        void syncToastOverlay(null).catch(() => undefined);
+        return;
+      }
+      const measured = rectOf(wrap);
+      const pad = 48;
+      const leftPad = Math.min(measured.x, pad);
+      const topPad = Math.min(measured.y, pad);
+      const rect = {
+        x: measured.x - leftPad,
+        y: measured.y - topPad,
+        w: measured.w + leftPad,
+        h: measured.h + topPad,
+      };
+      const payload = {
+        toasts: toasts.map((t) => ({
+          id: t.id,
+          msg: t.msg,
+          kind: t.kind,
+          card: t.card,
+          actionLabel: t.action?.label,
+          actionUrl: t.action?.url,
+        })),
+      };
+      localStorage.setItem("autodesktop.toastOverlayPayload", JSON.stringify(payload));
+      void syncToastOverlay(rect).then(() => {
+        const channel = new BroadcastChannel("autodesktop-toast-overlay");
+        channel.postMessage(payload);
+        window.setTimeout(() => channel.postMessage(payload), 80);
+        window.setTimeout(() => channel.close(), 160);
+      }).catch(() => undefined);
+    });
+
+    return () => cancelAnimationFrame(id);
+  }, [active, toasts]);
+
+  return null;
 }
 
 function Sidebar({

@@ -6,6 +6,7 @@ import { useSyncExternalStore } from "react";
 export type ToastKind = "ok" | "info" | "warn";
 export type ToastAction = {
   label?: string;
+  url?: string;
   onClick: () => void;
 };
 export type Toast = {

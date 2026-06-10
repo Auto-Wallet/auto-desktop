@@ -1844,6 +1844,132 @@ fn set_dapp_bounds<R: Runtime>(
     Ok(())
 }
 
+/// A tiny transparent local child webview used only to draw shell toasts above a
+/// remote dApp child webview. It is positioned to the measured toast stack rect,
+/// so it does not steal clicks from the rest of the dApp page.
+#[tauri::command]
+fn sync_toast_overlay<R: Runtime>(
+    app: AppHandle<R>,
+    visible: bool,
+    x: Option<f64>,
+    y: Option<f64>,
+    w: Option<f64>,
+    h: Option<f64>,
+) -> Result<(), String> {
+    const LABEL: &str = "toast-overlay";
+
+    if !visible {
+        if let Some(overlay) = app.get_webview(LABEL) {
+            overlay.hide().map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    let x = x.unwrap_or(0.0);
+    let y = y.unwrap_or(0.0);
+    let w = w.unwrap_or(1.0).max(1.0);
+    let h = h.unwrap_or(1.0).max(1.0);
+
+    let overlay = match app.get_webview(LABEL) {
+        Some(wv) => wv,
+        None => {
+            let window = app
+                .get_window("main")
+                .ok_or("sync_toast_overlay: main window not found")?;
+            let builder = WebviewBuilder::new(
+                LABEL,
+                WebviewUrl::App("index.html?view=toast-overlay".into()),
+            )
+            .transparent(true);
+            window
+                .add_child(
+                    builder,
+                    LogicalPosition::new(x, y),
+                    LogicalSize::new(w, h),
+                )
+                .map_err(|e| e.to_string())?
+        }
+    };
+
+    let (fx, fy) = content_to_frame(&overlay, x, y);
+    overlay
+        .set_position(LogicalPosition::new(fx, fy))
+        .map_err(|e| e.to_string())?;
+    overlay
+        .set_size(LogicalSize::new(w, h))
+        .map_err(|e| e.to_string())?;
+    overlay.show().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// A transparent local child webview that renders the browser top-bar dropdown
+/// menus (account / chain switcher) ABOVE the remote dApp child webview — native
+/// child webviews stack over the shell, so an in-shell dropdown would be covered
+/// by the page. Unlike the toast overlay it spans the whole window while a menu
+/// is open: the transparent area doubles as the click-away backdrop (the overlay
+/// page posts a dismiss action back to the shell over a BroadcastChannel).
+#[tauri::command]
+fn sync_menu_overlay<R: Runtime>(
+    app: AppHandle<R>,
+    visible: bool,
+    x: Option<f64>,
+    y: Option<f64>,
+    w: Option<f64>,
+    h: Option<f64>,
+) -> Result<(), String> {
+    const LABEL: &str = "menu-overlay";
+
+    if !visible {
+        if let Some(overlay) = app.get_webview(LABEL) {
+            overlay.hide().map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    let x = x.unwrap_or(0.0);
+    let y = y.unwrap_or(0.0);
+    let w = w.unwrap_or(1.0).max(1.0);
+    let h = h.unwrap_or(1.0).max(1.0);
+
+    let window = app
+        .get_window("main")
+        .ok_or("sync_menu_overlay: main window not found")?;
+    let overlay = match app.get_webview(LABEL) {
+        Some(wv) => {
+            // Child webviews stack in creation order, so a dApp tab opened after
+            // this overlay was first created would cover it. Re-adding the
+            // overlay's native view to the window (reparent to the SAME window)
+            // puts it back on top of every webview created since.
+            wv.reparent(&window).map_err(|e| e.to_string())?;
+            wv
+        }
+        None => {
+            let builder = WebviewBuilder::new(
+                LABEL,
+                WebviewUrl::App("index.html?view=menu-overlay".into()),
+            )
+            .transparent(true);
+            window
+                .add_child(
+                    builder,
+                    LogicalPosition::new(x, y),
+                    LogicalSize::new(w, h),
+                )
+                .map_err(|e| e.to_string())?
+        }
+    };
+
+    let (fx, fy) = content_to_frame(&overlay, x, y);
+    overlay
+        .set_position(LogicalPosition::new(fx, fy))
+        .map_err(|e| e.to_string())?;
+    overlay
+        .set_size(LogicalSize::new(w, h))
+        .map_err(|e| e.to_string())?;
+    overlay.show().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Reload a tab webview. Shell-only; dApps are never granted this command.
 #[tauri::command]
 fn reload_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String> {
@@ -4151,6 +4277,8 @@ pub fn run() {
             get_pending_requests,
             open_dapp,
             set_dapp_bounds,
+            sync_toast_overlay,
+            sync_menu_overlay,
             reload_dapp,
             hide_dapp,
             close_dapp,
@@ -4560,6 +4688,8 @@ mod e2e {
                 get_pending_requests,
                 open_dapp,
                 set_dapp_bounds,
+                sync_toast_overlay,
+                sync_menu_overlay,
                 reload_dapp,
                 hide_dapp,
                 close_dapp,
@@ -5236,6 +5366,14 @@ mod e2e {
             (
                 "set_dapp_bounds",
                 json!({ "label": "dapp-9", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }),
+            ),
+            (
+                "sync_toast_overlay",
+                json!({ "visible": true, "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }),
+            ),
+            (
+                "sync_menu_overlay",
+                json!({ "visible": true, "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }),
             ),
             ("reload_dapp", json!({ "label": "dapp-9" })),
             ("hide_dapp", json!({ "label": "dapp-9" })),

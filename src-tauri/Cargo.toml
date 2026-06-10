@@ -1,6 +1,6 @@
 [package]
 name = "auto-desktop"
-version = "0.1.22"
+version = "0.1.23"
 description = "AutoDesktop — a lightweight desktop wallet & dApp browser"
 authors = ["you"]
 edition = "2021"
@@ -18,8 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# `unstable` enables multi-webview (Window::add_child) — required for the embedded dApp browser
-tauri = { version = "2", features = ["unstable"] }
+# `unstable` enables multi-webview (Window::add_child) — required for the embedded dApp browser.
+# `macos-private-api` enables transparent WKWebView overlays for shell toasts above dApps.
+tauri = { version = "2", features = ["unstable", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"

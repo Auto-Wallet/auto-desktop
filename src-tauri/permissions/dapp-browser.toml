@@ -12,6 +12,16 @@ description = "Allow the shell to reposition/resize a dapp tab webview on layout
 commands.allow = ["set_dapp_bounds"]
 
 [[permission]]
+identifier = "allow-sync-toast-overlay"
+description = "Allow the shell to position the local toast overlay above dapp webviews."
+commands.allow = ["sync_toast_overlay"]
+
+[[permission]]
+identifier = "allow-sync-menu-overlay"
+description = "Allow the shell to show the local dropdown-menu overlay above dapp webviews."
+commands.allow = ["sync_menu_overlay"]
+
+[[permission]]
 identifier = "allow-reload-dapp"
 description = "Allow the shell to reload a dapp tab webview."
 commands.allow = ["reload_dapp"]

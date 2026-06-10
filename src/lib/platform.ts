@@ -35,6 +35,17 @@ export function setDappBounds(label: string, rect: Rect): Promise<void> {
   return invoke("set_dapp_bounds", { label, ...rect });
 }
 
+/** Show or hide the native toast overlay that sits above dApp child webviews. */
+export function syncToastOverlay(rect: Rect | null): Promise<void> {
+  return invoke("sync_toast_overlay", rect ? { visible: true, ...rect } : { visible: false });
+}
+
+/** Show or hide the native dropdown-menu overlay (full-window, above dApp
+ *  child webviews — see lib/menuOverlay.ts). */
+export function syncMenuOverlay(rect: Rect | null): Promise<void> {
+  return invoke("sync_menu_overlay", rect ? { visible: true, ...rect } : { visible: false });
+}
+
 /** Reload the native dApp tab webview. */
 export function reloadDapp(label: string): Promise<void> {
   return invoke("reload_dapp", { label });
