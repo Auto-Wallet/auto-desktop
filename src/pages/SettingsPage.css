@@ -301,6 +301,18 @@ button.set-row:hover {
   min-width: 8px;
   transition: width 180ms ease;
 }
+.update-progress-fill.indeterminate {
+  width: 40%;
+  animation: update-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes update-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
 .update-manual-actions {
   display: flex;
   justify-content: flex-end;

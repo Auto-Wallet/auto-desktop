@@ -25,6 +25,7 @@ import {
   type UpdateInfo,
   type UpdateProgress,
 } from "../lib/updater";
+import { updateBarState } from "../lib/updateBar";
 import { openExternalUrl } from "../lib/platform";
 import { Icon, type IconName } from "../lib/icons";
 import { toast } from "../lib/toast";
@@ -149,15 +150,7 @@ export default function SettingsPage() {
     toast(t("settings.updateOpened", { version: updateInfo.latestVersion }));
   }
 
-  const updatePercent =
-    updateProgress?.total && updateProgress.total > 0
-      ? Math.min(
-          100,
-          Math.round((updateProgress.downloaded / updateProgress.total) * 100),
-        )
-      : null;
-  const updateFillPercent =
-    updateProgress?.phase === "installing" ? 100 : (updatePercent ?? 35);
+  const updateBar = updateProgress ? updateBarState(updateProgress) : null;
 
   return (
     <>
@@ -441,7 +434,7 @@ export default function SettingsPage() {
                   </button>
                 )}
               </div>
-              {updateProgress && (
+              {updateProgress && updateBar && (
                 <div className="update-progress">
                   <div className="update-progress-meta">
                     <span>
@@ -449,18 +442,28 @@ export default function SettingsPage() {
                         ? t("settings.installingUpdate")
                         : t("settings.downloadingUpdate")}
                     </span>
-                    {updatePercent !== null && <span>{updatePercent}%</span>}
+                    {!updateBar.indeterminate && (
+                      <span>{updateBar.percent}%</span>
+                    )}
                   </div>
                   <div
                     className="update-progress-track"
                     role="progressbar"
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-valuenow={updatePercent ?? undefined}
+                    aria-valuenow={updateBar.percent ?? undefined}
                   >
                     <div
-                      className="update-progress-fill"
-                      style={{ width: `${updateFillPercent}%` }}
+                      className={
+                        updateBar.indeterminate
+                          ? "update-progress-fill indeterminate"
+                          : "update-progress-fill"
+                      }
+                      style={
+                        updateBar.indeterminate
+                          ? undefined
+                          : { width: `${updateBar.percent}%` }
+                      }
                     />
                   </div>
                 </div>
