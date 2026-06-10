@@ -4,7 +4,7 @@
   "description": "Untrusted remote dApp tab webviews (one per open tab, labeled dapp-<id>). Granted the app-defined wallet_request bridge command (allow-wallet-request) and the narrow, http(s)-validated open_external_url command (allow-open-external-url) — and nothing else. No core:*/fs:*/shell:* and no opener:* (the page never reaches the opener plugin directly). This is the wallet's security boundary.",
   "webviews": ["dapp-*"],
   "remote": {
-    "urls": ["http://*", "https://*"]
+    "urls": ["http://*:*", "https://*:*"]
   },
   "permissions": ["allow-wallet-request", "allow-open-external-url"]
 }
