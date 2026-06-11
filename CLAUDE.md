@@ -67,8 +67,15 @@ remote URL) and the trustworthy-origin derivation — without a GUI. Notes:
 - **`e2e-windows-experimental`** — tauri-driver/WebdriverIO scaffold in `e2e/wdio/` (Windows is the one
   platform where the official WebDriver path works). Manual workflow_dispatch, non-blocking; see its README.
 
-Windows-specific gotcha already fixed once: `content_to_frame` title-bar compensation is a macOS-only
-artifact — on Windows/Linux child-webview bounds are already client-area relative, so it must pass through.
+Windows-specific gotchas already fixed once:
+- `content_to_frame` title-bar compensation is a macOS-only artifact — on Windows/Linux child-webview
+  bounds are already client-area relative, so it must pass through.
+- `cargo test` exes on Windows die at startup with `0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND`: they carry no
+  app manifest, so the pre-v6 comctl32.dll (no TaskDialogIndirect) gets loaded (known tauri::test issue,
+  tauri-apps discussion #11179). Fix lives in `build.rs::embed_test_manifest` + `test-manifest.xml`, gated
+  behind `AUTODESKTOP_TEST_MANIFEST=1`; CI sets it and runs `cargo test --lib` (all tests are lib unit
+  tests — `rustc-link-arg-tests` does NOT cover those and errors without `tests/` targets; the plain
+  link-arg must not reach the real bin, which gets its manifest from tauri-build).
 
 ## Architecture
 
