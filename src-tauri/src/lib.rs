@@ -20,6 +20,7 @@ use zeroize::Zeroizing;
 
 // Encrypted HD key vault (BIP-39/44 + Argon2id/AES-GCM). Pure crypto core; the
 // in-memory unlocked state + file I/O + Tauri commands live below in this file.
+mod smoke;
 mod vault;
 // EIP-1559 transaction encoding + signing (pure). eth_sendTransaction fills the
 // fields from the node in lib.rs, then builds + signs here.
@@ -1720,6 +1721,15 @@ async fn wallet_request<R: tauri::Runtime>(
 /// (inner_position − outer_position). Without this the dapp webview sits one
 /// title-bar too high and clips the browser bar.
 fn content_to_frame<R: Runtime>(dapp: &tauri::Webview<R>, x: f64, y: f64) -> (f64, f64) {
+    // The frame/content mismatch is a macOS (NSView-in-window-frame) artifact.
+    // On Windows/Linux child-webview bounds are relative to the client area —
+    // the same space the shell measured with getBoundingClientRect — so the
+    // rect must pass through unchanged. Applying the macOS compensation there
+    // shifts the dapp webview down by a full title bar (visible in the Windows
+    // CI smoke screenshots).
+    if !cfg!(target_os = "macos") {
+        return (x, y);
+    }
     let win = dapp.window();
     let scale = win.scale_factor().unwrap_or(1.0);
     // Title-bar inset, in logical px. The position delta is the principled source
@@ -4440,6 +4450,11 @@ pub fn run() {
                 }
                 _ => {}
             });
+
+            // CI smoke mode (no-op unless AUTODESKTOP_SMOKE_DIR is set): opens a
+            // loopback-served dApp page in a real dapp-* webview and reports
+            // whether the injected provider answered. See src/smoke.rs + ci.yml.
+            smoke::maybe_start(app.handle());
 
             Ok(())
         })

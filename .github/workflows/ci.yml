@@ -1,0 +1,256 @@
+name: CI
+
+# PR-level cross-platform checks. The whole point of the Windows jobs: the
+# developer works on macOS, so Windows-only breakage (WebView2 behavior, icon
+# assets, path/origin differences) must surface here instead of in a VM.
+#
+#   lint-assets   — icon.ico rounded-corner lint + forbidden-origin grep (fast)
+#   test          — cargo test (incl. the mock-runtime e2e) + tsc on Win/macOS
+#   smoke-windows — boots the REAL app on WebView2: dapp webview loads a
+#                   loopback page, the injected provider answers eth_chainId
+#                   through the live invoke pipeline; desktop screenshots are
+#                   uploaded so every PR shows actual Windows rendering
+#   e2e-windows-experimental — tauri-driver/WebdriverIO scaffold (manual runs)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  BUN_VERSION: "1.3.14"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  lint-assets:
+    name: Asset & origin lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Bun
+        run: |
+          set -euxo pipefail
+          for i in 1 2 3 4 5; do
+            if npm install -g "bun@${BUN_VERSION}"; then
+              bun --version
+              exit 0
+            fi
+            sleep $((i * 10))
+          done
+          exit 1
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          (cd auto-wallet-core && bun link)
+          bun install
+
+      - name: Icon lint (Windows .ico must have rounded corners baked in)
+        run: bun scripts/check-icons.ts
+
+      - name: Forbid hardcoded local-webview origins
+        run: |
+          # On Windows the local-webview origin is http://tauri.localhost, on
+          # macOS tauri://localhost. Any hardcoded form breaks the other OS —
+          # origins must be derived (e.g. webview.url()), never matched literally.
+          if git grep -n "tauri://localhost\|tauri\.localhost" -- src src-tauri/src src/injected; then
+            echo "::error::Hardcoded local-webview origin found; derive it from the webview instead."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  test:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Bun
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for i in 1 2 3 4 5; do
+            if npm install -g "bun@${BUN_VERSION}"; then
+              bun --version
+              exit 0
+            fi
+            sleep $((i * 10))
+          done
+          exit 1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: test-${{ matrix.os }}
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          (cd auto-wallet-core && bun link)
+          bun install
+          test -e node_modules/auto-wallet-core/package.json
+
+      - name: Build injected provider bundle
+        shell: bash
+        run: bun run build:injected
+
+      - name: Typecheck frontend
+        shell: bash
+        run: bunx tsc --noEmit
+
+      - name: Typecheck SDK
+        shell: bash
+        run: cd auto-wallet-core && bun install && bun run typecheck
+
+      - name: Rust tests (unit + offline mock-runtime e2e)
+        shell: bash
+        run: cd src-tauri && cargo test
+
+  # ---------------------------------------------------------------------------
+  smoke-windows:
+    name: WebView2 smoke (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Bun
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for i in 1 2 3 4 5; do
+            if npm install -g "bun@${BUN_VERSION}"; then
+              bun --version
+              exit 0
+            fi
+            sleep $((i * 10))
+          done
+          exit 1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: smoke-windows
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          (cd auto-wallet-core && bun link)
+          bun install
+          test -e node_modules/auto-wallet-core/package.json
+
+      - name: Build app (debug, no bundle)
+        shell: bash
+        run: bun run tauri build --debug --no-bundle
+
+      - name: Run smoke test against the real app
+        shell: bash
+        run: bun scripts/smoke-ci.ts src-tauri/target/debug/auto-desktop.exe
+
+      - name: Upload smoke artifacts (screenshots, result, logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke
+          path: smoke-artifacts/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Experimental: full UI-level E2E via tauri-driver + msedgedriver. The
+  # official Tauri WebDriver path supports Windows/Linux but NOT macOS, so this
+  # can only ever run here. Manual trigger + non-blocking until proven stable.
+  e2e-windows-experimental:
+    name: WebDriver E2E (Windows, experimental)
+    if: github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Bun
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for i in 1 2 3 4 5; do
+            if npm install -g "bun@${BUN_VERSION}"; then
+              bun --version
+              exit 0
+            fi
+            sleep $((i * 10))
+          done
+          exit 1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: e2e-windows
+
+      - name: Install tauri-driver
+        shell: bash
+        run: cargo install tauri-driver --locked
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          (cd auto-wallet-core && bun link)
+          bun install
+          test -e node_modules/auto-wallet-core/package.json
+
+      - name: Build app (debug, no bundle)
+        shell: bash
+        run: bun run tauri build --debug --no-bundle
+
+      - name: Run WebdriverIO suite
+        shell: bash
+        # EDGEWEBDRIVER is preinstalled on GitHub Windows runners and matches
+        # the runner's WebView2/Edge version; wdio.conf.js passes it through
+        # tauri-driver --native-driver.
+        run: |
+          cd e2e/wdio
+          bun install
+          bun run wdio run wdio.conf.js
+
+      - name: Upload wdio logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-wdio-logs
+          path: e2e/wdio/logs/
+          if-no-files-found: ignore

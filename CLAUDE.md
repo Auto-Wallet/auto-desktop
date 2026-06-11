@@ -50,6 +50,26 @@ remote URL) and the trustworthy-origin derivation — without a GUI. Notes:
 - For full UI-level E2E later, the macOS route is a community plugin (`tauri-plugin-webdriver` / CrabNebula
   `tauri-plugin-automation`) embedded in the app — not adopted yet.
 
+### Windows coverage in CI (dev machine is macOS — Windows bugs must surface in CI)
+`.github/workflows/ci.yml` runs on every PR/push-to-main:
+- **`test`** (windows-latest + macos-latest): `cargo test`, `tsc --noEmit`, SDK typecheck, injected-bundle build.
+- **`smoke-windows`** — boots the **real app on WebView2**: `src-tauri/src/smoke.rs` (active only when
+  `AUTODESKTOP_SMOKE_DIR` is set) serves a dApp page from a loopback HTTP server, opens it via the real
+  `open_dapp` path in a `dapp-*` child webview, and the page must answer `eth_chainId` through the injected
+  provider → `wallet_request` pipeline. `scripts/smoke-ci.ts` launches the binary, asserts the result, and
+  uploads **desktop screenshots** as the `windows-smoke` artifact — check those screenshots to see actual
+  Windows rendering without a VM. Run locally: `bun run tauri build --debug --no-bundle && bun run smoke src-tauri/target/debug/auto-desktop`.
+- **`lint-assets`** — `bun run check:icons` asserts every entry in `src-tauri/icons/icon.ico` has rounded
+  corners baked in (Windows renders the .ico verbatim; nothing rounds it at runtime). Regenerate with
+  `bun run icon:windows` (ImageMagick) after changing the icon. Also greps for hardcoded local-webview
+  origins: the local origin is `tauri://localhost` on macOS but `http://tauri.localhost` on Windows — always
+  derive origins (e.g. `webview.url()`), never match them literally.
+- **`e2e-windows-experimental`** — tauri-driver/WebdriverIO scaffold in `e2e/wdio/` (Windows is the one
+  platform where the official WebDriver path works). Manual workflow_dispatch, non-blocking; see its README.
+
+Windows-specific gotcha already fixed once: `content_to_frame` title-bar compensation is a macOS-only
+artifact — on Windows/Linux child-webview bounds are already client-area relative, so it must pass through.
+
 ## Architecture
 
 ### Multi-webview dApp browser (the core model)

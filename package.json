@@ -10,7 +10,10 @@
     "tauri": "tauri",
     "test": "bun test",
     "build:injected": "bun run scripts/build-injected.ts",
-    "gen:tokens": "bun run scripts/fetch-token-data.ts"
+    "gen:tokens": "bun run scripts/fetch-token-data.ts",
+    "check:icons": "bun run scripts/check-icons.ts",
+    "icon:windows": "bun run scripts/make-windows-icon.ts",
+    "smoke": "bun run scripts/smoke-ci.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -28,6 +31,7 @@
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "pngjs": "^7.0.0",
     "typescript": "~5.6.2",
     "vite": "^6.0.3"
   }

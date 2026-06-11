@@ -41,3 +41,4 @@ mnemonic*.txt
 # Local-only artifacts
 /tmp-shots
 ad-shots/
+smoke-artifacts/
