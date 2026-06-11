@@ -124,23 +124,29 @@ jobs:
         shell: bash
         run: cd auto-wallet-core && bun install && bun run typecheck
 
-      - name: Stage WebView2Loader.dll next to the test binaries (Windows)
+      - name: Diagnose test-exe DLL resolution (Windows)
         if: runner.os == 'Windows'
-        shell: bash
-        # Plain `cargo test` puts the test exe in target/debug/deps with no
-        # WebView2Loader.dll beside it (only `tauri build` stages one), so the
-        # loader resolves to an old system copy missing the expected entry
-        # points → the test process dies at startup with 0xc0000139
-        # (STATUS_ENTRYPOINT_NOT_FOUND). Build the tests, then copy the
-        # crate-vendored x64 loader next to them.
+        shell: pwsh
+        # The test exe dies at startup with 0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND
+        # even with the crate-vendored WebView2Loader.dll staged next to it.
+        # Gather the actual faulting module: run the exe directly under pwsh
+        # (different PATH than Git Bash) and dump the Application Error events,
+        # which name the DLL + missing entry point.
         run: |
-          set -euxo pipefail
           cd src-tauri
           cargo test --no-run
-          loader=$(find "$HOME/.cargo/registry/src" target/debug/build -path '*x64*' -name WebView2Loader.dll 2>/dev/null | head -1)
-          test -n "$loader"
-          cp "$loader" target/debug/deps/
-          cp "$loader" target/debug/
+          $loader = Get-ChildItem "$env:USERPROFILE\.cargo\registry\src" -Recurse -Filter WebView2Loader.dll |
+            Where-Object FullName -like '*x64*' | Select-Object -First 1
+          Copy-Item $loader.FullName target\debug\deps\ -Force
+          Copy-Item $loader.FullName target\debug\ -Force
+          $exe = (Get-ChildItem target\debug\deps -Filter 'auto_desktop_lib-*.exe' | Select-Object -First 1).FullName
+          Write-Host "== running $exe --list under pwsh =="
+          & $exe --list
+          Write-Host "exit code: $LASTEXITCODE"
+          Start-Sleep -Seconds 5
+          Write-Host "== recent Application Error events =="
+          Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'} -MaxEvents 5 -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Message
 
       - name: Rust tests (unit + offline mock-runtime e2e)
         shell: bash
