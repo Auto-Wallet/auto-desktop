@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -78,7 +78,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -124,6 +124,24 @@ jobs:
         shell: bash
         run: cd auto-wallet-core && bun install && bun run typecheck
 
+      - name: Stage WebView2Loader.dll next to the test binaries (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        # Plain `cargo test` puts the test exe in target/debug/deps with no
+        # WebView2Loader.dll beside it (only `tauri build` stages one), so the
+        # loader resolves to an old system copy missing the expected entry
+        # points → the test process dies at startup with 0xc0000139
+        # (STATUS_ENTRYPOINT_NOT_FOUND). Build the tests, then copy the
+        # crate-vendored x64 loader next to them.
+        run: |
+          set -euxo pipefail
+          cd src-tauri
+          cargo test --no-run
+          loader=$(find "$HOME/.cargo/registry/src" target/debug/build -path '*x64*' -name WebView2Loader.dll 2>/dev/null | head -1)
+          test -n "$loader"
+          cp "$loader" target/debug/deps/
+          cp "$loader" target/debug/
+
       - name: Rust tests (unit + offline mock-runtime e2e)
         shell: bash
         run: cd src-tauri && cargo test
@@ -134,7 +152,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -195,7 +213,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
