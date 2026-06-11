@@ -191,7 +191,7 @@ jobs:
 
       - name: Upload smoke artifacts (screenshots, result, logs)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-smoke
           path: smoke-artifacts/
@@ -262,7 +262,7 @@ jobs:
 
       - name: Upload wdio logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-wdio-logs
           path: e2e/wdio/logs/
