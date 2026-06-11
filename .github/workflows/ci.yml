@@ -125,8 +125,21 @@ jobs:
         run: cd auto-wallet-core && bun install && bun run typecheck
 
       - name: Rust tests (unit + offline mock-runtime e2e)
+        if: runner.os != 'Windows'
         shell: bash
         run: cd src-tauri && cargo test
+
+      - name: Rust tests (unit + offline mock-runtime e2e, Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        # --lib + AUTODESKTOP_TEST_MANIFEST: the test exe needs a Common-Controls
+        # v6 manifest embedded or it dies at startup with 0xc0000139 (see
+        # build.rs embed_test_manifest). All tests live in the lib target;
+        # --lib keeps the manifest link-arg away from the real bin, which gets
+        # its own manifest from tauri-build.
+        env:
+          AUTODESKTOP_TEST_MANIFEST: "1"
+        run: cd src-tauri && cargo test --lib
 
   # ---------------------------------------------------------------------------
   smoke-windows:
