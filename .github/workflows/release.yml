@@ -10,7 +10,12 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
+  actions: write
   contents: write
 
 env:
@@ -19,8 +24,33 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  cancel-redundant-ci:
+    name: Cancel redundant main CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel CI runs for this release commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for status in queued in_progress; do
+            gh run list \
+              --workflow CI \
+              --branch main \
+              --commit "$GITHUB_SHA" \
+              --status "$status" \
+              --json databaseId \
+              --jq '.[].databaseId' |
+            while read -r run_id; do
+              [ -n "$run_id" ] || continue
+              gh run cancel "$run_id" || true
+            done
+          done
+
+  # ---------------------------------------------------------------------------
   build-macos:
     name: macOS (${{ matrix.arch }})
+    needs: cancel-redundant-ci
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -259,6 +289,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-windows:
     name: Windows (x64)
+    needs: cancel-redundant-ci
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
