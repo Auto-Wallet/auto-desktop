@@ -32,13 +32,28 @@ export type MenuOverlayPayload =
       anchor: MenuAnchor;
       chains: { id: string; name: string; symbol: string; color: string }[];
       activeChainId: string;
+    }
+  | {
+      kind: "dialog";
+      id: string;
+      dialogKind: "alert" | "confirm" | "prompt" | "print";
+      origin: string;
+      message: string;
+      defaultValue?: string | null;
+      labels: {
+        title: string;
+        ok: string;
+        cancel: string;
+        promptPlaceholder: string;
+      };
     };
 
 export type MenuOverlayAction =
   | { type: "dismiss" }
   | { type: "select-account"; address: string }
   | { type: "copy-address"; address: string }
-  | { type: "select-chain"; id: string };
+  | { type: "select-chain"; id: string }
+  | { type: "resolve-dapp-dialog"; id: string; action: "ok" | "cancel"; value?: string | null };
 
 /** Mirrors the in-shell `.chain-menu` placement: 8px below the chip,
  *  right-aligned to it. */

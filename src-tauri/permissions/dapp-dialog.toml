@@ -1,0 +1,8 @@
+# Permission for the app-defined `dapp_dialog` command so remote dApp webviews
+# can surface JavaScript alert/confirm/prompt content through AutoDesktop UI.
+# It does not grant core events or shell access; Rust derives the caller origin
+# from the engine-set webview URL.
+[[permission]]
+identifier = "allow-dapp-dialog"
+description = "Allow remote dApp webviews to request an AutoDesktop-rendered JavaScript dialog."
+commands.allow = ["dapp_dialog"]

@@ -13,6 +13,7 @@
     "allow-set-dapp-bounds",
     "allow-sync-toast-overlay",
     "allow-sync-menu-overlay",
+    "allow-resolve-dapp-dialog",
     "allow-reload-dapp",
     "allow-hide-dapp",
     "allow-close-dapp",

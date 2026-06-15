@@ -122,3 +122,38 @@ function installLinkInterceptor() {
   );
 }
 installLinkInterceptor();
+
+// WKWebView does not surface the page's built-in JavaScript dialogs from a
+// remote child webview reliably. Replace them with an AutoDesktop-rendered
+// dialog shown by the trusted shell overlay above the dApp.
+function installDialogInterceptor() {
+  type DialogKind = 'alert' | 'confirm' | 'prompt' | 'print';
+
+  const showDialog = (kind: DialogKind, message: string, defaultValue?: string) => {
+    void getInvoke()
+      .then((invoke) => invoke('dapp_dialog', { kind, message, defaultValue }))
+      .catch((e) => console.error('[AutoDesktop] dapp_dialog failed', e));
+  };
+
+  window.alert = function (message?: unknown): void {
+    showDialog('alert', String(message ?? ''));
+  };
+
+  window.confirm = function (message?: string): boolean {
+    showDialog('confirm', String(message ?? ''));
+    // Tauri IPC is async while confirm() is synchronous. We cannot block the
+    // WKWebView main thread waiting for the custom UI, so default to the safe
+    // browser-cancel value after surfacing the dialog.
+    return false;
+  };
+
+  window.prompt = function (message?: string, defaultValue?: string): string | null {
+    showDialog('prompt', String(message ?? ''), defaultValue == null ? '' : String(defaultValue));
+    return null;
+  };
+
+  window.print = function (): void {
+    showDialog('print', 'This page requested printing.');
+  };
+}
+installDialogInterceptor();

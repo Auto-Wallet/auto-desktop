@@ -249,6 +249,29 @@
   font-family: var(--font-mono);
   font-size: 13.5px;
 }
+select.input {
+  appearance: none;
+  min-height: 46px;
+  padding-right: 42px;
+  cursor: pointer;
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-3) 50%),
+    linear-gradient(135deg, var(--ink-3) 50%, transparent 50%);
+  background-position:
+    calc(100% - 20px) 50%,
+    calc(100% - 14px) 50%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+select.input:hover:not(:disabled) {
+  border-color: var(--line-3);
+  background-color: var(--surface-2);
+}
+select.input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 .textarea {
   resize: vertical;
   line-height: 1.55;
@@ -420,6 +443,65 @@ body.menu-overlay-body #root {
   position: fixed;
   inset: 0;
   background: transparent;
+}
+.menu-overlay-root.dialog {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 12, 22, 0.42);
+  backdrop-filter: blur(3px);
+}
+.dapp-dialog-card {
+  width: min(440px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--sh-xl);
+  animation: pop 0.18s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+.dapp-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 14px;
+}
+.dapp-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+  flex: none;
+}
+.dapp-dialog-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.dapp-dialog-origin {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.dapp-dialog-message {
+  margin: 0 0 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.dapp-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 /* The shared .chain-menu styles position relative to a .chain-wrap chip; here
    the anchor arrives as window coords (inline top/right), so pin it instead. */

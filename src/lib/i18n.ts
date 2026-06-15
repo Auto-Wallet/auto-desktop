@@ -139,6 +139,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "common.copied": "Address copied",
     "common.refreshed": "Balances refreshed",
     "common.comingSoon": "Coming soon",
+    "common.ok": "OK",
+    "common.cancel": "Cancel",
     "common.confirm": "Confirm",
 
     "wallet.total": "Total balance",
@@ -298,6 +300,8 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "browser.reload": "Reload",
     "browser.reloaded": "Reloaded",
+    "browser.dialogTitle": "Page dialog",
+    "browser.promptPlaceholder": "Enter value",
 
     "settings.appearance": "Appearance",
     "settings.appearanceHint": "Light, dark, or follow the system.",
@@ -526,6 +530,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "common.copied": "地址已复制",
     "common.refreshed": "余额已刷新",
     "common.comingSoon": "即将推出",
+    "common.ok": "确定",
+    "common.cancel": "取消",
     "common.confirm": "确认",
 
     "wallet.total": "总资产",
@@ -677,6 +683,8 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "browser.reload": "刷新",
     "browser.reloaded": "已刷新",
+    "browser.dialogTitle": "网页弹窗",
+    "browser.promptPlaceholder": "输入内容",
 
     "settings.appearance": "外观",
     "settings.appearanceHint": "明亮、暗色或跟随系统。",

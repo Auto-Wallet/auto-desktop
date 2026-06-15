@@ -1,10 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "dapp",
-  "description": "Untrusted remote dApp tab webviews (one per open tab, labeled dapp-<id>). Granted the app-defined wallet_request bridge command (allow-wallet-request) and the narrow, http(s)-validated open_external_url command (allow-open-external-url) — and nothing else. No core:*/fs:*/shell:* and no opener:* (the page never reaches the opener plugin directly). This is the wallet's security boundary.",
+  "description": "Untrusted remote dApp tab webviews (one per open tab, labeled dapp-<id>). Granted only narrow app-defined commands: wallet_request, http(s)-validated open_external_url, and display-only dapp_dialog. No core:*/fs:*/shell:* and no opener:* (the page never reaches the opener plugin directly). This is the wallet's security boundary.",
   "webviews": ["dapp-*"],
   "remote": {
     "urls": ["http://*:*", "https://*:*"]
   },
-  "permissions": ["allow-wallet-request", "allow-open-external-url"]
+  "permissions": ["allow-wallet-request", "allow-open-external-url", "allow-dapp-dialog"]
 }

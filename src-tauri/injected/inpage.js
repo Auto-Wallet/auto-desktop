@@ -253,4 +253,24 @@
     }, true);
   }
   installLinkInterceptor();
+  function installDialogInterceptor() {
+    const showDialog = (kind, message, defaultValue) => {
+      getInvoke().then((invoke) => invoke("dapp_dialog", { kind, message, defaultValue })).catch((e) => console.error("[AutoDesktop] dapp_dialog failed", e));
+    };
+    window.alert = function(message) {
+      showDialog("alert", String(message ?? ""));
+    };
+    window.confirm = function(message) {
+      showDialog("confirm", String(message ?? ""));
+      return false;
+    };
+    window.prompt = function(message, defaultValue) {
+      showDialog("prompt", String(message ?? ""), defaultValue == null ? "" : String(defaultValue));
+      return null;
+    };
+    window.print = function() {
+      showDialog("print", "This page requested printing.");
+    };
+  }
+  installDialogInterceptor();
 })();

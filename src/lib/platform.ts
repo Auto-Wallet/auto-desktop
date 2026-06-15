@@ -46,6 +46,14 @@ export function syncMenuOverlay(rect: Rect | null): Promise<void> {
   return invoke("sync_menu_overlay", rect ? { visible: true, ...rect } : { visible: false });
 }
 
+export function resolveDappDialog(
+  id: string,
+  action: "ok" | "cancel",
+  value?: string | null,
+): Promise<void> {
+  return invoke("resolve_dapp_dialog", { id, action, value });
+}
+
 /** Reload the native dApp tab webview. */
 export function reloadDapp(label: string): Promise<void> {
   return invoke("reload_dapp", { label });

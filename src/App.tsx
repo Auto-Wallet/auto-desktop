@@ -14,6 +14,7 @@ import {
   isTauri,
   openExternalUrl,
   rectOf,
+  resolveDappDialog,
   syncToastOverlay,
 } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
@@ -32,9 +33,17 @@ import {
   type ActivityRecord,
 } from "./lib/activity";
 import { txExplorerUrl } from "./lib/explorer";
+import { useMenuOverlay, type MenuOverlayPayload } from "./lib/menuOverlay";
 
 type Page = "wallet" | "dapps" | "browser" | "settings";
 type Tab = { id: string; dapp: Dapp };
+type DappDialogEvent = {
+  id: string;
+  kind: "alert" | "confirm" | "prompt" | "print";
+  origin: string;
+  message: string;
+  default_value?: string | null;
+};
 
 const SIDEBAR_KEY = "autodesktop.sidebarCollapsed";
 
@@ -161,6 +170,47 @@ function App() {
   }, [activity, showTxToast]);
 
   const [page, setPage] = useState<Page>("wallet");
+  const [dappDialog, setDappDialog] =
+    useState<Extract<MenuOverlayPayload, { kind: "dialog" }> | null>(null);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<DappDialogEvent>("dapp-dialog-request", (event) => {
+      const req = event.payload;
+      if (!req?.id) return;
+      setDappDialog({
+        kind: "dialog",
+        id: req.id,
+        dialogKind: req.kind,
+        origin: req.origin,
+        message: req.message,
+        defaultValue: req.default_value,
+        labels: {
+          title: t("browser.dialogTitle"),
+          ok: t("common.ok"),
+          cancel: t("common.cancel"),
+          promptPlaceholder: t("browser.promptPlaceholder"),
+        },
+      });
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [lang]);
+  useMenuOverlay(dappDialog, (action) => {
+    if (action.type !== "resolve-dapp-dialog" && action.type !== "dismiss") return;
+    const id = action.type === "resolve-dapp-dialog" ? action.id : dappDialog?.id;
+    if (!id) return;
+    const decision = action.type === "resolve-dapp-dialog" ? action.action : "cancel";
+    const value = action.type === "resolve-dapp-dialog" ? action.value : null;
+    setDappDialog(null);
+    void resolveDappDialog(id, decision, value).catch(() => undefined);
+  });
   const [collapsed, setCollapsed] = useState<boolean>(
     () => {
       const saved = localStorage.getItem(SIDEBAR_KEY);

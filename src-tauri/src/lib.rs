@@ -1704,6 +1704,92 @@ async fn wallet_request<R: tauri::Runtime>(
 }
 
 // ---------------------------------------------------------------------------
+// dApp JavaScript dialog bridge.
+//
+// Remote WKWebView child pages do not reliably show native alert/confirm/prompt
+// sheets. The injected script replaces those APIs with this narrow command; Rust
+// derives the origin from the calling webview, forwards a display-only request to
+// the trusted shell, then waits briefly for the shell overlay to resolve it.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+struct DappDialogRequest {
+    id: String,
+    kind: String,
+    origin: String,
+    message: String,
+    default_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct DappDialogResult {
+    action: String,
+    value: Option<String>,
+}
+
+fn dapp_dialog_pending()
+-> &'static Mutex<HashMap<String, tokio::sync::oneshot::Sender<DappDialogResult>>> {
+    static PENDING: OnceLock<
+        Mutex<HashMap<String, tokio::sync::oneshot::Sender<DappDialogResult>>>,
+    > = OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn next_dapp_dialog_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    format!("dlg-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+#[tauri::command]
+async fn dapp_dialog<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    kind: String,
+    message: String,
+    default_value: Option<String>,
+) -> Result<DappDialogResult, String> {
+    if !matches!(kind.as_str(), "alert" | "confirm" | "prompt" | "print") {
+        return Err(format!("dapp_dialog: unsupported kind {kind:?}"));
+    }
+    let origin = match webview.url() {
+        Ok(url) => url.origin().ascii_serialization(),
+        Err(_) => format!("webview://{}", webview.label()),
+    };
+    let id = next_dapp_dialog_id();
+    let (tx, rx) = tokio::sync::oneshot::channel::<DappDialogResult>();
+    dapp_dialog_pending().lock().unwrap().insert(id.clone(), tx);
+
+    let req = DappDialogRequest {
+        id: id.clone(),
+        kind,
+        origin,
+        message,
+        default_value,
+    };
+    if let Err(e) = webview.app_handle().emit("dapp-dialog-request", req) {
+        dapp_dialog_pending().lock().unwrap().remove(&id);
+        return Err(format!("dapp_dialog: failed to notify shell: {e}"));
+    }
+
+    match tokio::time::timeout(Duration::from_secs(300), rx).await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(_)) => Ok(DappDialogResult::default()),
+        Err(_) => {
+            dapp_dialog_pending().lock().unwrap().remove(&id);
+            Ok(DappDialogResult::default())
+        }
+    }
+}
+
+#[tauri::command]
+fn resolve_dapp_dialog(id: String, action: String, value: Option<String>) -> Result<(), String> {
+    let Some(sender) = dapp_dialog_pending().lock().unwrap().remove(&id) else {
+        return Ok(());
+    };
+    let _ = sender.send(DappDialogResult { action, value });
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Embedded dApp browser control (VISION feature ③).
 //
 // The shell drives the native `dapp` child webview: navigate it to the chosen
@@ -4348,6 +4434,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             wallet_request,
+            dapp_dialog,
+            resolve_dapp_dialog,
             approve_request,
             reject_request,
             get_pending_requests,
@@ -4789,6 +4877,8 @@ mod e2e {
         let app = mock_builder()
             .invoke_handler(tauri::generate_handler![
                 wallet_request,
+                dapp_dialog,
+                resolve_dapp_dialog,
                 approve_request,
                 reject_request,
                 get_pending_requests,
@@ -5450,6 +5540,25 @@ mod e2e {
         );
     }
 
+    #[test]
+    fn e2e_dapp_can_request_dialog_but_only_through_narrow_command() {
+        let app = build_app();
+        let dapp = dapp_webview(app);
+
+        let err = invoke(
+            &dapp,
+            "dapp_dialog",
+            json!({ "kind": "bogus", "message": "hi", "defaultValue": null }),
+        )
+        .unwrap_err();
+        assert!(
+            err.as_str()
+                .unwrap_or_default()
+                .contains("unsupported kind"),
+            "expected dapp_dialog to reach the narrow handler, got: {err}"
+        );
+    }
+
     /// The trusted *shell* webview (local). As a local webview it may call bare
     /// app commands; the dapp-browser controls (open/close/bounds) are reachable
     /// only this way.
@@ -5483,6 +5592,10 @@ mod e2e {
             (
                 "sync_menu_overlay",
                 json!({ "visible": true, "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }),
+            ),
+            (
+                "resolve_dapp_dialog",
+                json!({ "id": "dlg-1", "action": "ok", "value": null }),
             ),
             ("reload_dapp", json!({ "label": "dapp-9" })),
             ("hide_dapp", json!({ "label": "dapp-9" })),

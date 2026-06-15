@@ -22,6 +22,11 @@ description = "Allow the shell to show the local dropdown-menu overlay above dap
 commands.allow = ["sync_menu_overlay"]
 
 [[permission]]
+identifier = "allow-resolve-dapp-dialog"
+description = "Allow the trusted shell to resolve a dapp JavaScript dialog shown in the overlay."
+commands.allow = ["resolve_dapp_dialog"]
+
+[[permission]]
 identifier = "allow-reload-dapp"
 description = "Allow the shell to reload a dapp tab webview."
 commands.allow = ["reload_dapp"]

@@ -41,7 +41,12 @@ export default function MenuOverlayView() {
       if (event.data && "state" in event.data) setMenu(event.data.state);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") post({ type: "dismiss" });
+      if (event.key !== "Escape") return;
+      if (menu?.kind === "dialog") {
+        post({ type: "resolve-dapp-dialog", id: menu.id, action: "cancel" });
+      } else {
+        post({ type: "dismiss" });
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => {
@@ -49,9 +54,17 @@ export default function MenuOverlayView() {
       channel.close();
       document.body.classList.remove("menu-overlay-body");
     };
-  }, []);
+  }, [menu]);
 
   if (!menu) return null;
+
+  if (menu.kind === "dialog") {
+    return (
+      <div className="menu-overlay-root dialog">
+        <DappDialog dialog={menu} />
+      </div>
+    );
+  }
 
   return (
     <div className="menu-overlay-root" onMouseDown={() => post({ type: "dismiss" })}>
@@ -61,6 +74,57 @@ export default function MenuOverlayView() {
         onMouseDown={(e) => e.stopPropagation()}
       >
         {menu.kind === "account" ? <AcctMenu menu={menu} /> : <ChainMenu menu={menu} />}
+      </div>
+    </div>
+  );
+}
+
+function DappDialog({ dialog }: { dialog: Extract<MenuOverlayPayload, { kind: "dialog" }> }) {
+  const [value, setValue] = useState(dialog.defaultValue ?? "");
+  const isPrompt = dialog.dialogKind === "prompt";
+  const showCancel = dialog.dialogKind === "confirm" || dialog.dialogKind === "prompt";
+
+  return (
+    <div className="dapp-dialog-card" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="dapp-dialog-head">
+        <span className="dapp-dialog-icon">
+          <Icon name="alert" size={18} />
+        </span>
+        <div>
+          <div className="dapp-dialog-title">{dialog.labels.title}</div>
+          <div className="dapp-dialog-origin">{dialog.origin}</div>
+        </div>
+      </div>
+      <div className="dapp-dialog-message">{dialog.message || "\u00a0"}</div>
+      {isPrompt && (
+        <input
+          className="input"
+          value={value}
+          autoFocus
+          placeholder={dialog.labels.promptPlaceholder}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            post({ type: "resolve-dapp-dialog", id: dialog.id, action: "ok", value });
+          }}
+        />
+      )}
+      <div className="dapp-dialog-actions">
+        {showCancel && (
+          <button
+            className="btn btn-ghost"
+            onClick={() => post({ type: "resolve-dapp-dialog", id: dialog.id, action: "cancel" })}
+          >
+            {dialog.labels.cancel}
+          </button>
+        )}
+        <button
+          className="btn btn-primary"
+          autoFocus={!isPrompt}
+          onClick={() => post({ type: "resolve-dapp-dialog", id: dialog.id, action: "ok", value })}
+        >
+          {dialog.labels.ok}
+        </button>
       </div>
     </div>
   );
