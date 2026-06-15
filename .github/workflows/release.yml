@@ -35,6 +35,7 @@ jobs:
           set -euo pipefail
           for status in queued in_progress; do
             gh run list \
+              --repo "$GITHUB_REPOSITORY" \
               --workflow CI \
               --branch main \
               --commit "$GITHUB_SHA" \
@@ -43,7 +44,7 @@ jobs:
               --jq '.[].databaseId' |
             while read -r run_id; do
               [ -n "$run_id" ] || continue
-              gh run cancel "$run_id" || true
+              gh run cancel "$run_id" --repo "$GITHUB_REPOSITORY" || true
             done
           done
 
