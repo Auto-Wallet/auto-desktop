@@ -788,6 +788,34 @@ fn current_chain() -> &'static Mutex<String> {
     CURRENT.get_or_init(|| Mutex::new("0x1".to_string()))
 }
 
+/// The one dApp tab currently visible in the browser content area. Background
+/// webviews stay alive when tabs/pages switch, but they must not be able to pop
+/// signing approvals while hidden.
+fn active_dapp_label() -> &'static Mutex<Option<String>> {
+    static ACTIVE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(None))
+}
+
+fn set_active_dapp_label(label: String) {
+    *active_dapp_label().lock().unwrap() = Some(label);
+}
+
+fn clear_active_dapp_label(label: &str) {
+    let mut active = active_dapp_label().lock().unwrap();
+    if active.as_deref() == Some(label) {
+        *active = None;
+    }
+}
+
+fn ensure_signing_webview_is_active(label: &str) -> Result<(), String> {
+    let active = active_dapp_label().lock().unwrap().clone();
+    if active.as_deref() == Some(label) {
+        Ok(())
+    } else {
+        Err("Signing request blocked because this dApp is not the active tab".to_string())
+    }
+}
+
 /// A pooled HTTP client (keeps connections warm across RPC calls).
 fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -1225,6 +1253,7 @@ async fn handle_signing<R: Runtime>(
     method: &str,
     params: &[Value],
     origin: &str,
+    webview_label: &str,
 ) -> Result<Value, String> {
     // Refuse before opening an approval window if there's no key to sign with —
     // otherwise the user would approve a request we can't fulfill.
@@ -1239,6 +1268,7 @@ async fn handle_signing<R: Runtime>(
                     .first()
                     .ok_or("personal_sign: missing message param")?,
             )?;
+            ensure_signing_webview_is_active(webview_label)?;
             let req = PendingRequest {
                 id: next_request_id(),
                 method: method.to_string(),
@@ -1258,6 +1288,7 @@ async fn handle_signing<R: Runtime>(
                 .first()
                 .ok_or("eth_sendTransaction: missing transaction param")?
                 .clone();
+            ensure_signing_webview_is_active(webview_label)?;
             let chain_id = current_chain().lock().unwrap().clone();
             approve_and_send(app, &chain_id, origin, &tx).await
         }
@@ -1274,6 +1305,7 @@ async fn handle_signing<R: Runtime>(
             };
             // Surface obvious structural errors BEFORE prompting (e.g. unknown type).
             eip712::signing_hash(&typed)?;
+            ensure_signing_webview_is_active(webview_label)?;
             let req = PendingRequest {
                 id: next_request_id(),
                 method: method.to_string(),
@@ -1575,6 +1607,7 @@ async fn handle_rpc<R: Runtime>(
     method: &str,
     params: &[Value],
     origin: &str,
+    webview_label: &str,
 ) -> Result<Value, String> {
     println!("[AutoDesktop] rpc  method={method}  origin={origin}");
     match route_method(method) {
@@ -1627,7 +1660,7 @@ async fn handle_rpc<R: Runtime>(
                 }
             }
         }
-        Route::Signing => handle_signing(app, method, params, origin).await,
+        Route::Signing => handle_signing(app, method, params, origin, webview_label).await,
         Route::Forward => forward_to_node(method, params).await,
     }
 }
@@ -1700,7 +1733,14 @@ async fn wallet_request<R: tauri::Runtime>(
         Err(_) => format!("webview://{}", webview.label()),
     };
     let app = webview.app_handle().clone();
-    handle_rpc(&app, &method, &params.unwrap_or_default(), &origin).await
+    handle_rpc(
+        &app,
+        &method,
+        &params.unwrap_or_default(),
+        &origin,
+        webview.label(),
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -1925,6 +1965,7 @@ fn open_dapp<R: Runtime>(
     dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
         .map_err(|e| e.to_string())?;
     dapp.show().map_err(|e| e.to_string())?;
+    set_active_dapp_label(label);
     Ok(())
 }
 
@@ -2093,6 +2134,7 @@ fn hide_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String>
     if let Some(dapp) = app.get_webview(&label) {
         dapp.hide().map_err(|e| e.to_string())?;
     }
+    clear_active_dapp_label(&label);
     Ok(())
 }
 
@@ -2103,6 +2145,7 @@ fn close_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String
     if let Some(dapp) = app.get_webview(&label) {
         dapp.close().map_err(|e| e.to_string())?;
     }
+    clear_active_dapp_label(&label);
     Ok(())
 }
 
@@ -4988,6 +5031,7 @@ mod e2e {
         static LOCK: Mutex<()> = Mutex::new(());
         let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         pending().lock().unwrap().clear();
+        *active_dapp_label().lock().unwrap() = None;
         *exposed_account_state().lock().unwrap() = None;
         *current_chain().lock().unwrap() = "0x1".into();
         super::install_unlocked_vault(TEST_MNEMONIC, 2).expect("unlock test vault");
@@ -5325,6 +5369,7 @@ mod e2e {
         let _guard = wallet_guard();
         let app = build_app();
         let dapp = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
         let approval = approval_webview(app); // exists → request_approval reuses it
 
         let message_text = "Hello from AutoDesktop";
@@ -5371,6 +5416,7 @@ mod e2e {
         let _guard = wallet_guard();
         let app = build_app();
         let dapp = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
         let approval = approval_webview(app);
 
         let dapp_for_thread = dapp.clone();
@@ -5400,6 +5446,7 @@ mod e2e {
         let _guard = wallet_guard();
         let app = build_app();
         let dapp = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
         let approval = approval_webview(app);
 
         let typed = json!({
@@ -5466,6 +5513,41 @@ mod e2e {
         );
     }
 
+    /// SECURITY: a hidden/background dApp webview stays alive, but it must not be
+    /// able to surface a signing approval. Switching away calls hide_dapp, which
+    /// clears the active dApp label; signing then fails before pending approval is
+    /// registered.
+    #[test]
+    fn e2e_background_dapp_signing_is_blocked_without_approval_popup() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        let shell = shell_webview(app);
+
+        invoke(
+            &shell,
+            "open_dapp",
+            json!({ "label": "dapp-0", "url": "https://metamask.github.io/test-dapp/", "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }),
+        )
+        .expect("shell can activate dapp tab");
+
+        invoke(&shell, "hide_dapp", json!({ "label": "dapp-0" }))
+            .expect("shell can hide active dapp");
+
+        let err = call(&dapp, "personal_sign", json!(["0x48656c6c6f", SPIKE_ACCOUNT]))
+            .unwrap_err();
+        assert!(
+            err.as_str()
+                .unwrap_or_default()
+                .contains("not the active tab"),
+            "expected inactive-tab signing rejection, got: {err}"
+        );
+        assert!(
+            pending().lock().unwrap().is_empty(),
+            "background signing must not register a pending approval"
+        );
+    }
+
     /// eth_sendTransaction end-to-end against a LIVE node. All fields are supplied
     /// (with a deliberately low nonce so the node rejects WITHOUT broadcasting), so
     /// only eth_sendRawTransaction hits the node — exactly the path that proves our
@@ -5479,6 +5561,7 @@ mod e2e {
         let _guard = wallet_guard(); // unlocked Anvil vault, chain 0x1
         let app = build_app();
         let dapp = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
         let approval = approval_webview(app);
 
         let tx = json!([{
@@ -5564,6 +5647,16 @@ mod e2e {
     /// only this way.
     fn shell_webview(app: &'static tauri::App<MockRuntime>) -> WebviewWindow<MockRuntime> {
         webview(app, "shell", tauri::WebviewUrl::App("index.html".into()))
+    }
+
+    fn activate_dapp_tab(app: &'static tauri::App<MockRuntime>, label: &str) {
+        let shell = shell_webview(app);
+        invoke(
+            &shell,
+            "open_dapp",
+            json!({ "label": label, "url": "https://metamask.github.io/test-dapp/", "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }),
+        )
+        .expect("shell can activate dapp tab");
     }
 
     /// SECURITY: an untrusted dApp page must NOT be able to drive the embedded
