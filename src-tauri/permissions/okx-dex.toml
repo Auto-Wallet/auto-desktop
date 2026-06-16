@@ -1,0 +1,31 @@
+# Permissions for OKX DEX aggregation calls. Granted ONLY to the trusted shell
+# webview; remote dApps never receive these commands or the OKX API credentials.
+[[permission]]
+identifier = "allow-okx-dex-supported-chains"
+description = "Allow the trusted shell to fetch OKX DEX supported chains."
+commands.allow = ["okx_dex_supported_chains"]
+
+[[permission]]
+identifier = "allow-okx-dex-tokens"
+description = "Allow the trusted shell to fetch OKX DEX token lists."
+commands.allow = ["okx_dex_tokens"]
+
+[[permission]]
+identifier = "allow-okx-dex-quote"
+description = "Allow the trusted shell to fetch OKX DEX swap quotes."
+commands.allow = ["okx_dex_quote"]
+
+[[permission]]
+identifier = "allow-okx-dex-swap"
+description = "Allow the trusted shell to prepare OKX DEX swap transactions."
+commands.allow = ["okx_dex_swap"]
+
+[[permission]]
+identifier = "allow-okx-dex-approve-transaction"
+description = "Allow the trusted shell to prepare OKX DEX approval transactions."
+commands.allow = ["okx_dex_approve_transaction"]
+
+[[permission]]
+identifier = "allow-okx-dex-history"
+description = "Allow the trusted shell to fetch OKX DEX transaction status."
+commands.allow = ["okx_dex_history"]

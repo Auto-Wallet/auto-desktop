@@ -4,8 +4,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::Sha256;
 use tauri::webview::WebviewBuilder;
 use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl};
@@ -3019,6 +3023,274 @@ fn debank_api_key() -> Option<String> {
         })
 }
 
+fn okx_api_key() -> Option<String> {
+    std::env::var("OKX_API_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| read_env_file_value("OKX_API_KEY"))
+        .or_else(|| {
+            option_env!("OKX_API_KEY")
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn okx_secret_key() -> Option<String> {
+    std::env::var("OKX_SECRET_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| read_env_file_value("OKX_SECRET_KEY"))
+        .or_else(|| {
+            option_env!("OKX_SECRET_KEY")
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn okx_passphrase() -> Option<String> {
+    std::env::var("OKX_PASSPHRASE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| read_env_file_value("OKX_PASSPHRASE"))
+        .or_else(|| {
+            option_env!("OKX_PASSPHRASE")
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OkxQuoteRequest {
+    chain_index: String,
+    amount: String,
+    from_token_address: String,
+    to_token_address: String,
+    swap_mode: Option<String>,
+    price_impact_protection_percent: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OkxSwapRequest {
+    chain_index: String,
+    amount: String,
+    from_token_address: String,
+    to_token_address: String,
+    swap_mode: Option<String>,
+    slippage_percent: String,
+    user_wallet_address: String,
+    price_impact_protection_percent: Option<String>,
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn okx_credentials() -> Result<(String, String, String), String> {
+    let api_key = okx_api_key().ok_or_else(|| "OKX_API_KEY is not configured".to_string())?;
+    let secret_key =
+        okx_secret_key().ok_or_else(|| "OKX_SECRET_KEY is not configured".to_string())?;
+    let passphrase =
+        okx_passphrase().ok_or_else(|| "OKX_PASSPHRASE is not configured".to_string())?;
+    Ok((api_key, secret_key, passphrase))
+}
+
+fn utc_timestamp_millis() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = now.as_secs() as i64;
+    let millis = now.subsec_millis();
+    let days = total_secs.div_euclid(86_400);
+    let secs_of_day = total_secs.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = secs_of_day / 3_600;
+    let minute = (secs_of_day % 3_600) / 60;
+    let second = secs_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
+}
+
+// Howard Hinnant's civil-from-days algorithm, adapted for UTC timestamp formatting.
+fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year, m as u32, d as u32)
+}
+
+fn okx_query(params: &[(&str, String)]) -> String {
+    params
+        .iter()
+        .filter(|(_, value)| !value.trim().is_empty())
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+async fn okx_get(path: &str, params: Vec<(&str, String)>) -> Result<Value, String> {
+    let (api_key, secret_key, passphrase) = okx_credentials()?;
+    let query = okx_query(&params);
+    let request_path = if query.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{query}")
+    };
+    let url = format!("https://web3.okx.com{request_path}");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("building OKX DEX client: {e}"))?;
+
+    let mut last_rate_limit = None;
+    for attempt in 0..=3 {
+        let timestamp = utc_timestamp_millis();
+        let prehash = format!("{timestamp}GET{request_path}");
+        let mut mac =
+            HmacSha256::new_from_slice(secret_key.as_bytes()).map_err(|e| e.to_string())?;
+        mac.update(prehash.as_bytes());
+        let sign = B64.encode(mac.finalize().into_bytes());
+
+        let response = client
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header("OK-ACCESS-KEY", &api_key)
+            .header("OK-ACCESS-SIGN", sign)
+            .header("OK-ACCESS-TIMESTAMP", timestamp)
+            .header("OK-ACCESS-PASSPHRASE", &passphrase)
+            .send()
+            .await
+            .map_err(|e| format!("querying OKX DEX: {e}"))?;
+
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let wait = okx_retry_after(response.headers(), attempt);
+            last_rate_limit = Some(wait);
+            if attempt < 3 {
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("querying OKX DEX: HTTP {status}: {body}"));
+        }
+
+        return response
+            .json()
+            .await
+            .map_err(|e| format!("reading OKX DEX response: {e}"));
+    }
+
+    Err(format!(
+        "OKX DEX rate limited. Retry after about {}s.",
+        last_rate_limit.unwrap_or_else(|| Duration::from_secs(4)).as_secs().max(1)
+    ))
+}
+
+fn okx_retry_after(headers: &reqwest::header::HeaderMap, attempt: u32) -> Duration {
+    if let Some(seconds) = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return Duration::from_secs(seconds.clamp(1, 20));
+    }
+    let backoff_ms = match attempt {
+        0 => 900,
+        1 => 1_800,
+        2 => 3_600,
+        _ => 5_000,
+    };
+    Duration::from_millis(backoff_ms)
+}
+
+#[tauri::command]
+async fn okx_dex_supported_chains(chain_index: Option<String>) -> Result<Value, String> {
+    let mut params = Vec::new();
+    if let Some(chain_index) = chain_index {
+        params.push(("chainIndex", chain_index));
+    }
+    okx_get("/api/v6/dex/aggregator/supported/chain", params).await
+}
+
+#[tauri::command]
+async fn okx_dex_tokens(chain_index: String) -> Result<Value, String> {
+    okx_get(
+        "/api/v6/dex/aggregator/all-tokens",
+        vec![("chainIndex", chain_index)],
+    )
+    .await
+}
+
+#[tauri::command]
+async fn okx_dex_quote(req: OkxQuoteRequest) -> Result<Value, String> {
+    let mut params = vec![
+        ("chainIndex", req.chain_index),
+        ("amount", req.amount),
+        ("fromTokenAddress", req.from_token_address),
+        ("toTokenAddress", req.to_token_address),
+        ("swapMode", req.swap_mode.unwrap_or_else(|| "exactIn".to_string())),
+    ];
+    if let Some(value) = req.price_impact_protection_percent {
+        params.push(("priceImpactProtectionPercent", value));
+    }
+    okx_get("/api/v6/dex/aggregator/quote", params).await
+}
+
+#[tauri::command]
+async fn okx_dex_swap(req: OkxSwapRequest) -> Result<Value, String> {
+    let mut params = vec![
+        ("chainIndex", req.chain_index),
+        ("amount", req.amount),
+        ("fromTokenAddress", req.from_token_address),
+        ("toTokenAddress", req.to_token_address),
+        ("swapMode", req.swap_mode.unwrap_or_else(|| "exactIn".to_string())),
+        ("slippagePercent", req.slippage_percent),
+        ("userWalletAddress", req.user_wallet_address),
+    ];
+    if let Some(value) = req.price_impact_protection_percent {
+        params.push(("priceImpactProtectionPercent", value));
+    }
+    okx_get("/api/v6/dex/aggregator/swap", params).await
+}
+
+#[tauri::command]
+async fn okx_dex_approve_transaction(
+    chain_index: String,
+    token_contract_address: String,
+    approve_amount: String,
+) -> Result<Value, String> {
+    okx_get(
+        "/api/v6/dex/aggregator/approve-transaction",
+        vec![
+            ("chainIndex", chain_index),
+            ("tokenContractAddress", token_contract_address),
+            ("approveAmount", approve_amount),
+        ],
+    )
+    .await
+}
+
+#[tauri::command]
+async fn okx_dex_history(chain_index: String, tx_hash: String) -> Result<Value, String> {
+    okx_get(
+        "/api/v6/dex/aggregator/history",
+        vec![
+            ("chainIndex", chain_index),
+            ("txHash", tx_hash),
+            ("isFromMyProject", "true".to_string()),
+        ],
+    )
+    .await
+}
+
 fn value_as_f64(value: Option<&Value>) -> Option<f64> {
     match value {
         Some(Value::Number(n)) => n.as_f64(),
@@ -4504,6 +4776,12 @@ pub fn run() {
             get_portfolio_history,
             record_portfolio_snapshot,
             get_defi_positions,
+            okx_dex_supported_chains,
+            okx_dex_tokens,
+            okx_dex_quote,
+            okx_dex_swap,
+            okx_dex_approve_transaction,
+            okx_dex_history,
             get_chains,
             add_chain,
             update_chain,

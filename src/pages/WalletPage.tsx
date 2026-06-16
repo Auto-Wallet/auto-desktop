@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./WalletPage.css";
 import { chainLogo, findChain, useChains, type Chain } from "../lib/chains";
 import {
@@ -69,6 +69,19 @@ import {
   type QuoteParams,
   type QuoteSlot,
 } from "../lib/swap";
+import {
+  OKX_NATIVE_TOKEN_ADDRESS,
+  okxApproveTransaction,
+  okxHistory,
+  okxQuote,
+  okxSupportedChains,
+  okxSwap,
+  okxTokens,
+  type OkxChain,
+  type OkxHistory,
+  type OkxQuote,
+  type OkxToken,
+} from "../lib/okxDex";
 import {
   addCustomToken,
   encodeErc20Transfer,
@@ -162,6 +175,7 @@ export default function WalletPage() {
   const [showAddToken, setShowAddToken] = useState(false);
   const [showSend, setShowSend] = useState(false);
   const [showSwap, setShowSwap] = useState(false);
+  const [showBridge, setShowBridge] = useState(false);
   const [tokenSearch, setTokenSearch] = useState("");
   const [replaceTarget, setReplaceTarget] = useState<{
     record: ActivityRecord;
@@ -171,6 +185,9 @@ export default function WalletPage() {
     undefined,
   );
   const [swapAssetKey, setSwapAssetKey] = useState<string | undefined>(
+    undefined,
+  );
+  const [bridgeAssetKey, setBridgeAssetKey] = useState<string | undefined>(
     undefined,
   );
 
@@ -394,10 +411,18 @@ export default function WalletPage() {
             />
             <QuickBtn
               icon="swap"
-              label={t("wallet.swapBridge")}
+              label={t("wallet.swap")}
               onClick={() => {
                 setSwapAssetKey(undefined);
                 setShowSwap(true);
+              }}
+            />
+            <QuickBtn
+              icon="bridge"
+              label={t("wallet.bridge")}
+              onClick={() => {
+                setBridgeAssetKey(undefined);
+                setShowBridge(true);
               }}
             />
           </div>
@@ -519,11 +544,19 @@ export default function WalletPage() {
         />
       )}
       {showSwap && (
-        <SwapModal
+        <OkxSwapModal
           assets={sendableAssets}
           initialAssetKey={swapAssetKey}
           activeAddress={active.address}
           onClose={() => setShowSwap(false)}
+        />
+      )}
+      {showBridge && (
+        <CrossChainModal
+          assets={sendableAssets}
+          initialAssetKey={bridgeAssetKey}
+          activeAddress={active.address}
+          onClose={() => setShowBridge(false)}
         />
       )}
       {replaceTarget && (
@@ -749,6 +782,23 @@ type SwapPickerItem = {
   balance?: string;
   providers?: ProviderId[];
   sourceAssetKey?: string;
+};
+
+type OkxSwapStage =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "quoting" }
+  | { kind: "approving" }
+  | { kind: "swapping" }
+  | { kind: "submitted"; hash: string }
+  | { kind: "error"; message: string };
+
+type OkxTokenChoice = {
+  key: string;
+  token: OkxToken;
+  chainName: string;
+  chainSymbol?: string;
+  balance?: string;
 };
 
 type Portfolio = {
@@ -2847,6 +2897,26 @@ function cleanDecimal(value: string): string {
     : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, "");
 }
 
+const OKX_QUOTE_DEBOUNCE_MS = 800;
+const OKX_QUOTE_THROTTLE_MS = 800;
+const OKX_QUOTE_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function trimAmount(s: string, maxDecimals: number): string {
   const n = Number.parseFloat(s);
   if (!Number.isFinite(n)) return s;
@@ -3212,7 +3282,780 @@ function SwapProviderBadges({ providers }: { providers: ProviderId[] }) {
   );
 }
 
-function SwapModal({
+function okxTokenKey(token: OkxToken): string {
+  return token.tokenContractAddress.toLowerCase();
+}
+
+function okxNativeToken(asset: SendAsset): OkxToken {
+  return {
+    chainIndex: String(numericChainId(asset.chainId) ?? ""),
+    decimals: String(asset.decimals),
+    tokenContractAddress: OKX_NATIVE_TOKEN_ADDRESS,
+    tokenLogoUrl: asset.logo,
+    tokenName: asset.chainName,
+    tokenSymbol: asset.symbol,
+  };
+}
+
+function okxAssetToken(asset: SendAsset): OkxToken {
+  if (asset.kind === "native") return okxNativeToken(asset);
+  return {
+    chainIndex: String(numericChainId(asset.chainId) ?? ""),
+    decimals: String(asset.decimals),
+    tokenContractAddress: asset.address ?? "",
+    tokenLogoUrl: asset.logo,
+    tokenName: asset.symbol,
+    tokenSymbol: asset.symbol,
+  };
+}
+
+function okxTokenForAsset(asset: SendAsset, okxTokensForChain: OkxToken[]): OkxToken {
+  if (asset.kind === "native") return okxNativeToken(asset);
+  const wanted = asset.address?.toLowerCase();
+  const exact = wanted
+    ? okxTokensForChain.find((tk) => tk.tokenContractAddress.toLowerCase() === wanted)
+    : undefined;
+  if (exact) return exact;
+  const bySymbol = okxTokensForChain.find(
+    (tk) =>
+      tk.tokenSymbol.toUpperCase() === asset.symbol.toUpperCase() &&
+      Number.parseInt(tk.decimals, 10) === asset.decimals,
+  );
+  return bySymbol ?? okxAssetToken(asset);
+}
+
+function okxTokenDecimals(token: OkxToken | null): number {
+  const parsed = Number.parseInt(token?.decimals ?? "18", 10);
+  return Number.isFinite(parsed) ? parsed : 18;
+}
+
+function okxAmountOut(quote: OkxQuote | null, token: OkxToken | null): string {
+  if (!quote || !token) return "—";
+  return trimAmount(formatUnits(quote.toTokenAmount, okxTokenDecimals(token), okxTokenDecimals(token)), 8);
+}
+
+function okxRouteLabel(quote: OkxQuote | null): string {
+  const routes = quote?.dexRouterList ?? [];
+  const names = routes
+    .map((r) => r.dexProtocol?.dexName)
+    .filter((name): name is string => !!name);
+  const uniq = [...new Set(names)].slice(0, 3);
+  if (uniq.length === 0) return "OKX DEX";
+  return uniq.join(" + ");
+}
+
+function okxIsNative(token: OkxToken | null | undefined): boolean {
+  return token?.tokenContractAddress.toLowerCase() === OKX_NATIVE_TOKEN_ADDRESS;
+}
+
+function walletKnowsToken(custom: CustomStore, chainId: string, tokenAddress: string): boolean {
+  const addr = tokenAddress.toLowerCase();
+  return tokensForChain(custom, chainId).some((tk) => tk.address.toLowerCase() === addr);
+}
+
+function okxToTokenMeta(token: OkxToken): TokenMeta {
+  return {
+    address: token.tokenContractAddress.toLowerCase(),
+    symbol: token.tokenSymbol,
+    name: token.tokenName || token.tokenSymbol,
+    decimals: okxTokenDecimals(token),
+    logo: token.tokenLogoUrl ?? "",
+  };
+}
+
+function encodeAllowanceCall(owner: string, spender: string): string {
+  const a = owner.toLowerCase().replace(/^0x/, "");
+  const s = spender.toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]{40}$/.test(a) || !/^[0-9a-f]{40}$/.test(s)) {
+    throw new Error("invalid allowance address");
+  }
+  return `0xdd62ed3e${a.padStart(64, "0")}${s.padStart(64, "0")}`;
+}
+
+function okxApprovalKey(asset: SendAsset, spender: string, amountRaw: bigint): string {
+  return `${asset.chainId}:${asset.address ?? OKX_NATIVE_TOKEN_ADDRESS}:${spender}:${amountRaw.toString()}`.toLowerCase();
+}
+
+async function pollOkxSwapStatus(
+  chainIndex: string,
+  hash: string,
+  setStatus: (status: OkxHistory | null) => void,
+) {
+  for (let i = 0; i < 60; i++) {
+    try {
+      const status = await okxHistory(chainIndex, hash);
+      setStatus(status);
+      if (status?.status && status.status !== "pending") return;
+    } catch {
+      // OKX can lag behind the source chain for the first few blocks.
+    }
+    await new Promise((r) => window.setTimeout(r, 5000));
+  }
+}
+
+function OkxTokenButton({
+  token,
+  chainName,
+  balance,
+  placeholder,
+  onClick,
+}: {
+  token: OkxToken | null;
+  chainName?: string;
+  balance?: string;
+  placeholder: string;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="okx-token-btn" onClick={onClick}>
+      {token ? (
+        <>
+          <OkxTokenMark token={token} size={34} />
+          <span className="okx-token-copy">
+            <span className="okx-token-symbol">{token.tokenSymbol}</span>
+            <span className="okx-token-sub">{chainName ?? token.tokenName}</span>
+          </span>
+          {balance && <span className="okx-token-balance">{balance}</span>}
+        </>
+      ) : (
+        <span className="okx-token-placeholder">{placeholder}</span>
+      )}
+      <Icon name="chevronDown" size={16} />
+    </button>
+  );
+}
+
+function OkxTokenMark({ token, size }: { token: OkxToken; size: number }) {
+  return (
+    <span className="okx-token-mark" style={{ width: size, height: size, fontSize: Math.max(9, size * 0.34) }}>
+      {token.tokenLogoUrl ? <img src={token.tokenLogoUrl} alt="" /> : token.tokenSymbol.slice(0, 2).toUpperCase()}
+    </span>
+  );
+}
+
+function OkxTokenPicker({
+  title,
+  tokens,
+  selectedKey,
+  onPick,
+  onClose,
+}: {
+  title: string;
+  tokens: OkxTokenChoice[];
+  selectedKey: string;
+  onPick: (item: OkxTokenChoice) => void;
+  onClose: () => void;
+}) {
+  const { t } = useT();
+  const [query, setQuery] = useState("");
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return tokens
+      .filter((item) => {
+        const { token } = item;
+        if (!q) return true;
+        return (
+          token.tokenSymbol.toLowerCase().includes(q) ||
+          token.tokenName.toLowerCase().includes(q) ||
+          token.tokenContractAddress.toLowerCase().includes(q) ||
+          item.chainName.toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 160);
+  }, [query, tokens]);
+  return (
+    <div className="okx-picker-layer" onClick={onClose}>
+      <div className="okx-picker-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="swap-picker-head">
+          <div className="swap-picker-title">{title}</div>
+          <button className="icon-btn bare" onClick={onClose}>
+            <Icon name="close" size={17} />
+          </button>
+        </div>
+        <label className="swap-picker-search wide okx-picker-search">
+          <Icon name="search" size={14} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("wallet.searchTokens")}
+            autoFocus
+          />
+        </label>
+        <div className="okx-picker-list">
+          {visible.length === 0 ? (
+            <div className="swap-picker-empty">{t("wallet.noTokensFound")}</div>
+          ) : (
+            visible.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={`okx-picker-row${item.key === selectedKey ? " on" : ""}`}
+                onClick={() => onPick(item)}
+              >
+                <OkxTokenMark token={item.token} size={36} />
+                <span className="okx-picker-main">
+                  <strong>{item.token.tokenSymbol}</strong>
+                  <span>{item.token.tokenName}</span>
+                </span>
+                <span className="okx-picker-network">
+                  <span>{item.chainName}</span>
+                  {item.balance && <b>{item.balance}</b>}
+                </span>
+                {item.key === selectedKey && <Icon name="check" size={16} />}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OkxSwapStatus({
+  hash,
+  status,
+  t,
+}: {
+  hash: string;
+  status: OkxHistory | null;
+  t: TFn;
+}) {
+  const failed = status?.status === "fail";
+  const done = status?.status === "success";
+  return (
+    <div className={`swap-status-card${done ? " done" : failed ? " failed" : " pending"}`}>
+      <span className="swap-status-ic" aria-hidden="true">
+        {!done && !failed ? <span /> : done ? <Icon name="check" size={16} /> : <Icon name="alert" size={16} />}
+      </span>
+      <div className="swap-status-main">
+        <div className="swap-status-title">
+          {done ? t("wallet.swapComplete") : failed ? status?.errorMsg || t("wallet.swapFailed") : t("wallet.okxTracking")}
+        </div>
+        <div className="swap-status-sub mono">{shortAddress(hash, 10, 8)}</div>
+      </div>
+      {!done && !failed && <div className="swap-status-bar" aria-hidden="true" />}
+    </div>
+  );
+}
+
+function OkxSwapModal({
+  assets,
+  initialAssetKey,
+  activeAddress,
+  onClose,
+}: {
+  assets: SendAsset[];
+  initialAssetKey?: string;
+  activeAddress: string;
+  onClose: () => void;
+}) {
+  const { t } = useT();
+  const quoteTimeoutText = t("wallet.quoteTimeout");
+  const custom = useCustomTokens();
+  const [chains, setChains] = useState<OkxChain[]>([]);
+  const [tokens, setTokens] = useState<OkxToken[]>([]);
+  const [sel, setSel] = useState<string>(
+    initialAssetKey && assets.some((a) => a.key === initialAssetKey)
+      ? initialAssetKey
+      : (assets[0]?.key ?? ""),
+  );
+  const [targetKey, setTargetKey] = useState("");
+  const [amount, setAmount] = useState("");
+  const [slippagePct, setSlippagePct] = useState(0.5);
+  const [slippageMode, setSlippageMode] = useState<"preset" | "custom">("preset");
+  const [customSlippage, setCustomSlippage] = useState("");
+  const [picker, setPicker] = useState<"source" | "target" | null>(null);
+  const [quote, setQuote] = useState<OkxQuote | null>(null);
+  const [allowanceOk, setAllowanceOk] = useState(false);
+  const [approved, setApproved] = useState<Set<string>>(() => new Set());
+  const [stage, setStage] = useState<OkxSwapStage>({ kind: "loading" });
+  const [status, setStatus] = useState<OkxHistory | null>(null);
+  const lastQuoteAtRef = useRef(0);
+  const quoteSeqRef = useRef(0);
+
+  const chainIds = useMemo(
+    () => new Set(chains.map((c) => Number.parseInt(c.chainIndex, 10)).filter(Number.isFinite)),
+    [chains],
+  );
+  const okxAssets = useMemo(
+    () => assets.filter((a) => {
+      const n = numericChainId(a.chainId);
+      return n != null && (chainIds.size === 0 || chainIds.has(n));
+    }),
+    [assets, chainIds],
+  );
+  const asset = okxAssets.find((a) => a.key === sel) ?? okxAssets[0];
+  const chainIndex = asset ? String(numericChainId(asset.chainId) ?? "") : "";
+  const okxChain = chains.find((c) => c.chainIndex === chainIndex);
+  const sourceToken = useMemo(
+    () => (asset ? okxTokenForAsset(asset, tokens) : null),
+    [asset, tokens],
+  );
+  const targetToken = useMemo(
+    () => tokens.find((tk) => okxTokenKey(tk) === targetKey) ?? null,
+    [targetKey, tokens],
+  );
+  const sourceBalance = asset ? `${formatUnits(asset.wei, asset.decimals)} ${asset.symbol}` : undefined;
+  const sourceChoices = useMemo(
+    () =>
+      okxAssets.map((a) => ({
+        key: a.key,
+        token: okxTokenForAsset(a, tokens),
+        chainName: a.chainName,
+        chainSymbol: a.symbol,
+        balance: `${formatUnits(a.wei, a.decimals)} ${a.symbol}`,
+      })),
+    [okxAssets, tokens],
+  );
+  const sourceKey = sourceToken ? okxTokenKey(sourceToken) : "";
+  const targetChoices = useMemo(
+    () =>
+      tokens
+        .filter((tk) => okxTokenKey(tk) !== sourceKey)
+        .map((token) => ({
+          key: okxTokenKey(token),
+          token,
+          chainName: okxChain?.chainName ?? asset?.chainName ?? token.chainIndex,
+          chainSymbol: asset?.symbol,
+        })),
+    [asset?.chainName, asset?.symbol, okxChain?.chainName, sourceKey, tokens],
+  );
+  const amountRaw = useMemo(() => {
+    if (!sourceToken) return null;
+    try {
+      return parseUnits(amount.trim() || "0", okxTokenDecimals(sourceToken));
+    } catch {
+      return null;
+    }
+  }, [amount, sourceToken]);
+  const insufficient = !!asset && !!amountRaw && amountRaw > 0n && amountRaw > BigInt(asset.wei);
+  const spender = okxChain?.dexTokenApproveAddress ?? "";
+  const approveKey = asset && spender && amountRaw ? okxApprovalKey(asset, spender, amountRaw) : "";
+  const quoteBusy = stage.kind === "quoting";
+  const effectiveSlippagePct = useMemo(() => {
+    if (slippageMode === "preset") return slippagePct;
+    const parsed = Number.parseFloat(customSlippage);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [customSlippage, slippageMode, slippagePct]);
+  const slippageInvalid =
+    effectiveSlippagePct == null ||
+    effectiveSlippagePct < 0.01 ||
+    effectiveSlippagePct > 50;
+  const needsApprove =
+    !!asset &&
+    !!sourceToken &&
+    !!quote &&
+    !quoteBusy &&
+    !okxIsNative(sourceToken) &&
+    !!amountRaw &&
+    amountRaw > 0n &&
+    !allowanceOk &&
+    !approved.has(approveKey);
+  const output = okxAmountOut(quote, targetToken);
+  const hasPositiveAmount = !!amountRaw && amountRaw > 0n;
+  const canRequestQuote = !!asset && !!sourceToken && !!targetToken && hasPositiveAmount && !insufficient;
+  const primaryDisabled =
+    !quote ||
+    quoteBusy ||
+    insufficient ||
+    slippageInvalid ||
+    stage.kind === "approving" ||
+    stage.kind === "swapping" ||
+    stage.kind === "submitted";
+  const primaryLabel = stage.kind === "quoting"
+    ? t("wallet.fetchingQuotes")
+    : stage.kind === "approving"
+      ? t("wallet.approving")
+      : stage.kind === "swapping"
+        ? t("wallet.submitting")
+        : needsApprove
+          ? t("wallet.approveToken", { symbol: sourceToken?.tokenSymbol ?? "" })
+          : slippageInvalid
+            ? t("wallet.invalidSlippage")
+            : quote
+            ? t("wallet.swapVia", { provider: "OKX" })
+            : canRequestQuote
+              ? t("wallet.waitingForQuote")
+              : t("wallet.enterAmount");
+
+  useEffect(() => {
+    let cancelled = false;
+    setStage({ kind: "loading" });
+    void okxSupportedChains()
+      .then((list) => {
+        if (cancelled) return;
+        setChains(list);
+        setStage({ kind: "idle" });
+      })
+      .catch((e) => {
+        if (!cancelled) setStage({ kind: "error", message: errText(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!asset) return;
+    if (asset.key !== sel) setSel(asset.key);
+  }, [asset, sel]);
+
+  useEffect(() => {
+    if (!chainIndex) return;
+    let cancelled = false;
+    setTokens([]);
+    setTargetKey("");
+    void okxTokens(chainIndex)
+      .then((list) => {
+        if (cancelled) return;
+        const sourceAddr = okxTokenKey(okxTokenForAsset(asset!, list));
+        setTokens(list);
+        const preferred =
+          list.find((tk) => ["USDC", "USDT"].includes(tk.tokenSymbol.toUpperCase()) && okxTokenKey(tk) !== sourceAddr) ??
+          list.find((tk) => okxTokenKey(tk) !== sourceAddr) ??
+          null;
+        setTargetKey(preferred ? okxTokenKey(preferred) : "");
+      })
+      .catch((e) => {
+        if (!cancelled) setStage({ kind: "error", message: errText(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [asset, chainIndex]);
+
+  useEffect(() => {
+    setQuote(null);
+    setStatus(null);
+    setStage((prev) => (prev.kind === "loading" ? prev : { kind: "idle" }));
+  }, [sel, targetKey, amount]);
+
+  useEffect(() => {
+    if (!asset || !sourceToken || !targetToken || !amountRaw || amountRaw <= 0n || insufficient) {
+      setQuote(null);
+      setStage((prev) => (prev.kind === "loading" ? prev : { kind: "idle" }));
+      return;
+    }
+    let cancelled = false;
+    let throttleTimer: number | undefined;
+    const requestSeq = ++quoteSeqRef.current;
+    const runQuote = async () => {
+      const now = Date.now();
+      const wait = Math.max(0, OKX_QUOTE_THROTTLE_MS - (now - lastQuoteAtRef.current));
+      if (wait > 0) {
+        throttleTimer = window.setTimeout(() => void runQuote(), wait);
+        return;
+      }
+      lastQuoteAtRef.current = Date.now();
+      setStage({ kind: "quoting" });
+      try {
+        const next = await withTimeout(
+          okxQuote({
+            chainIndex,
+            amount: amountRaw.toString(),
+            fromTokenAddress: sourceToken.tokenContractAddress,
+            toTokenAddress: targetToken.tokenContractAddress,
+            swapMode: "exactIn",
+          }),
+          OKX_QUOTE_TIMEOUT_MS,
+          quoteTimeoutText,
+        );
+        if (cancelled || requestSeq !== quoteSeqRef.current) return;
+        setQuote(next);
+        setStage({ kind: "idle" });
+      } catch (e) {
+        if (!cancelled && requestSeq === quoteSeqRef.current) {
+          setStage({ kind: "error", message: errText(e) });
+        }
+      }
+    };
+    const debounceTimer = window.setTimeout(() => void runQuote(), OKX_QUOTE_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(debounceTimer);
+      if (throttleTimer != null) window.clearTimeout(throttleTimer);
+    };
+  }, [asset, amountRaw, chainIndex, insufficient, sourceToken, targetToken, quoteTimeoutText]);
+
+  useEffect(() => {
+    if (!asset || !sourceToken || okxIsNative(sourceToken) || !spender || !amountRaw || amountRaw <= 0n) {
+      setAllowanceOk(false);
+      return;
+    }
+    let cancelled = false;
+    void rpc<string>(asset.chainId, "eth_call", [
+      { to: sourceToken.tokenContractAddress, data: encodeAllowanceCall(activeAddress, spender) },
+      "latest",
+    ])
+      .then((value) => {
+        if (!cancelled) setAllowanceOk(BigInt(value || "0x0") >= amountRaw);
+      })
+      .catch(() => {
+        if (!cancelled) setAllowanceOk(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAddress, amountRaw, asset, sourceToken, spender]);
+
+  function setMax() {
+    if (!asset) return;
+    setAmount(formatUnits(asset.wei, asset.decimals, asset.decimals));
+  }
+
+  async function approve() {
+    if (!asset || !sourceToken || !amountRaw || amountRaw <= 0n) return;
+    setStage({ kind: "approving" });
+    try {
+      const tx = await okxApproveTransaction(chainIndex, sourceToken.tokenContractAddress, amountRaw.toString());
+      const hash = await walletSend(asset.chainId, {
+        to: sourceToken.tokenContractAddress,
+        value: "0x0",
+        data: tx.data,
+        activity: {
+          kind: "contract",
+          counterparty: tx.dexContractAddress,
+          assetSymbol: sourceToken.tokenSymbol,
+          tokenAddress: sourceToken.tokenContractAddress,
+          amount: toHexQuantity(amountRaw),
+        },
+      });
+      await waitForTxSuccess(asset.chainId, hash, "OKX approve");
+      setApproved((prev) => new Set(prev).add(okxApprovalKey(asset, tx.dexContractAddress, amountRaw)));
+      setAllowanceOk(true);
+      setStage({ kind: "idle" });
+    } catch (e) {
+      setStage({ kind: "error", message: errText(e) });
+    }
+  }
+
+  async function swap() {
+    if (!asset || !sourceToken || !targetToken || !amountRaw || amountRaw <= 0n) {
+      setStage({ kind: "error", message: t("wallet.invalidAmount") });
+      return;
+    }
+    if (insufficient) {
+      setStage({ kind: "error", message: t("wallet.insufficient") });
+      return;
+    }
+    if (effectiveSlippagePct == null || slippageInvalid) {
+      setStage({ kind: "error", message: t("wallet.invalidSlippage") });
+      return;
+    }
+    setStage({ kind: "swapping" });
+    try {
+      const prepared = await okxSwap({
+        chainIndex,
+        amount: amountRaw.toString(),
+        fromTokenAddress: sourceToken.tokenContractAddress,
+        toTokenAddress: targetToken.tokenContractAddress,
+        swapMode: "exactIn",
+        slippagePercent: String(effectiveSlippagePct),
+        userWalletAddress: activeAddress,
+      });
+      const tx = prepared.tx;
+      const hash = await walletSend(asset.chainId, {
+        to: tx.to,
+        data: tx.data || "0x",
+        value: normalizeTxValue(tx.value),
+        activity: {
+          kind: "contract",
+          counterparty: tx.to,
+          assetSymbol: `${sourceToken.tokenSymbol}->${targetToken.tokenSymbol}`,
+          assetDecimals: okxTokenDecimals(sourceToken),
+          amount: toHexQuantity(amountRaw),
+        },
+      });
+      if (!okxIsNative(targetToken) && !walletKnowsToken(custom, asset.chainId, targetToken.tokenContractAddress)) {
+        addCustomToken(asset.chainId, okxToTokenMeta(targetToken));
+        toast(t("wallet.tokenAdded"));
+      }
+      setStage({ kind: "submitted", hash });
+      void pollOkxSwapStatus(chainIndex, hash, setStatus);
+    } catch (e) {
+      setStage({ kind: "error", message: errText(e) });
+    }
+  }
+
+  return (
+    <div className="scrim" onClick={onClose}>
+      <div className="modal okx-swap-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <div className="modal-title">{t("wallet.swap")}</div>
+            <div className="okx-provider-sub">OKX DEX Aggregator</div>
+          </div>
+          <button className="icon-btn bare" onClick={onClose}>
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+        <div className="modal-body">
+          {okxAssets.length === 0 ? (
+            <div className="add-note">{t("wallet.noOkxAssets")}</div>
+          ) : (
+            <>
+              <div className="okx-swap-card from">
+                <div className="swap-side-label">{t("wallet.youPay")}</div>
+                <div className="okx-swap-input">
+                  <OkxTokenButton
+                    token={sourceToken}
+                    chainName={asset?.chainName}
+                    balance={sourceBalance}
+                    placeholder={t("wallet.selectToken")}
+                    onClick={() => setPicker("source")}
+                  />
+                  <input
+                    className="okx-amount-input"
+                    inputMode="decimal"
+                    placeholder="0.0"
+                    value={amount}
+                    onChange={(e) => setAmount(cleanDecimal(e.target.value))}
+                  />
+                </div>
+                {asset && (
+                  <div className="swap-side-meta">
+                    <span>{t("wallet.available")}: {sourceBalance}</span>
+                    <button className="swap-mini-btn" onClick={setMax}>{t("wallet.max")}</button>
+                  </div>
+                )}
+              </div>
+
+              <div className="okx-swap-divider">
+                <Icon name="swap" size={17} />
+              </div>
+
+              <div className="okx-swap-card">
+                <div className="swap-side-label">{t("wallet.youReceive")}</div>
+                <div className="okx-swap-input">
+                  <OkxTokenButton
+                    token={targetToken}
+                    chainName={asset?.chainName}
+                    placeholder={tokens.length ? t("wallet.selectToken") : t("wallet.loadingTokens")}
+                    onClick={() => setPicker("target")}
+                  />
+                  <div className="okx-amount-output">
+                    {quoteBusy ? (
+                      <span className="okx-quote-loading">
+                        <span aria-hidden="true" />
+                        {t("wallet.fetchingQuotes")}
+                      </span>
+                    ) : quote ? (
+                      output
+                    ) : (
+                      <span className="okx-output-placeholder">
+                        {canRequestQuote ? t("wallet.waitingForQuote") : "0.0"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className={`okx-route-card${quote ? " ready" : " muted"}`}>
+                <div className="okx-route-head">
+                  <span>{t("wallet.okxBestRoute")}</span>
+                  <b>{quoteBusy ? t("wallet.fetchingQuotes") : okxRouteLabel(quote)}</b>
+                </div>
+                <div className="okx-route-grid">
+                  <span>{t("wallet.network")}</span>
+                  <b>{okxChain?.chainName ?? asset?.chainName ?? "—"}</b>
+                  <span>{t("wallet.priceImpact")}</span>
+                  <b>{quote?.priceImpactPercent ? `${Number(quote.priceImpactPercent).toFixed(2)}%` : "—"}</b>
+                  <span>{t("wallet.networkFee")}</span>
+                  <b>{quote?.tradeFee ? fmtUsd(Number(quote.tradeFee)) : "—"}</b>
+                </div>
+                <div className="swap-summary-row">
+                  <span>{t("wallet.slippage")}</span>
+                  <div className="swap-slippage okx-slippage">
+                    {[0.1, 0.3, 0.5].map((v) => (
+                      <button
+                        key={v}
+                        className={`swap-mini-btn${slippageMode === "preset" && slippagePct === v ? " on" : ""}`}
+                        onClick={() => {
+                          setSlippageMode("preset");
+                          setSlippagePct(v);
+                        }}
+                      >
+                        {v}%
+                      </button>
+                    ))}
+                    <label className={`okx-slippage-custom${slippageMode === "custom" ? " on" : ""}${slippageInvalid && slippageMode === "custom" ? " invalid" : ""}`}>
+                      <input
+                        inputMode="decimal"
+                        value={customSlippage}
+                        placeholder={t("wallet.customSlippage")}
+                        onFocus={() => setSlippageMode("custom")}
+                        onChange={(e) => {
+                          setSlippageMode("custom");
+                          setCustomSlippage(cleanDecimal(e.target.value).slice(0, 6));
+                        }}
+                      />
+                      <span>%</span>
+                    </label>
+                  </div>
+                </div>
+                {slippageMode === "custom" && slippageInvalid && (
+                  <div className="okx-slippage-hint">{t("wallet.slippageRange")}</div>
+                )}
+              </div>
+
+              {stage.kind === "submitted" && <OkxSwapStatus hash={stage.hash} status={status} t={t} />}
+              {stage.kind === "error" && (
+                <div className="lock-err">
+                  <Icon name="alert" size={16} /> {stage.message}
+                </div>
+              )}
+
+              <div className="swap-footer">
+                <button className="btn btn-ghost swap-footer-btn" onClick={onClose}>
+                  {t("wallet.cancel")}
+                </button>
+                {needsApprove ? (
+                  <button className="btn btn-aurora swap-footer-btn primary" disabled={primaryDisabled} onClick={() => void approve()}>
+                    {primaryLabel}
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-aurora swap-footer-btn primary"
+                    disabled={primaryDisabled}
+                    onClick={() => void swap()}
+                  >
+                    {primaryLabel}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        {picker === "source" && (
+          <OkxTokenPicker
+            title={t("wallet.selectFromAsset")}
+            tokens={sourceChoices}
+            selectedKey={asset?.key ?? ""}
+            onPick={(item) => {
+              setSel(item.key);
+              setPicker(null);
+            }}
+            onClose={() => setPicker(null)}
+          />
+        )}
+        {picker === "target" && (
+          <OkxTokenPicker
+            title={t("wallet.selectToAsset")}
+            tokens={targetChoices}
+            selectedKey={targetKey}
+            onPick={(item) => {
+              setTargetKey(item.key);
+              setPicker(null);
+            }}
+            onClose={() => setPicker(null)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CrossChainModal({
   assets,
   initialAssetKey,
   activeAddress,
@@ -3505,7 +4348,7 @@ function SwapModal({
       <div className="modal swap-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <div className="modal-title">{t("wallet.swapBridge")}</div>
+            <div className="modal-title">{t("wallet.bridge")}</div>
             <div className="swap-provider-sub">XFlows · Relay</div>
           </div>
           <button className="icon-btn bare" onClick={onClose}>
@@ -3643,7 +4486,7 @@ function SwapModal({
                   ? t("wallet.submitting")
                   : selectedProvider
                     ? t("wallet.swapVia", { provider: providerName(selectedProvider) })
-                    : t("wallet.swapBridge")}
+                    : t("wallet.bridge")}
               </button>
             )}
           </div>
