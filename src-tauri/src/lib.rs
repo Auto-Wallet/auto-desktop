@@ -10,6 +10,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
+use tauri::menu::{Menu, SubmenuBuilder};
 use tauri::webview::WebviewBuilder;
 use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl};
@@ -35,6 +36,8 @@ mod eip712;
 mod ledger;
 
 const DEFI_PROVIDER_TIMEOUT: Duration = Duration::from_secs(12);
+const DEBUG_SHELL_CONSOLE_MENU_ID: &str = "debug-shell-console";
+const DEBUG_DAPP_CONSOLE_MENU_ID: &str = "debug-dapp-console";
 
 #[derive(Serialize)]
 struct Wallet {
@@ -809,6 +812,53 @@ fn clear_active_dapp_label(label: &str) {
     if active.as_deref() == Some(label) {
         *active = None;
     }
+}
+
+fn toggle_devtools<R: Runtime>(webview: &tauri::Webview<R>) {
+    if webview.is_devtools_open() {
+        webview.close_devtools();
+    } else {
+        webview.open_devtools();
+    }
+}
+
+fn handle_debug_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
+    match menu_id {
+        DEBUG_SHELL_CONSOLE_MENU_ID => {
+            if let Some(shell) = app.get_webview("shell") {
+                toggle_devtools(&shell);
+            } else {
+                println!("[AutoDesktop] debug menu: shell webview not found");
+            }
+        }
+        DEBUG_DAPP_CONSOLE_MENU_ID => {
+            let active = active_dapp_label().lock().unwrap().clone();
+            let Some(label) = active else {
+                println!("[AutoDesktop] debug menu: no active dApp webview");
+                return;
+            };
+            if let Some(dapp) = app.get_webview(&label) {
+                toggle_devtools(&dapp);
+            } else {
+                println!("[AutoDesktop] debug menu: active dApp webview {label:?} not found");
+            }
+        }
+        _ => {}
+    }
+}
+
+fn install_debug_menu<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
+    let menu = Menu::default(app.handle())?;
+    let debug_menu = SubmenuBuilder::new(app, "Debug")
+        .text(DEBUG_SHELL_CONSOLE_MENU_ID, "Toggle Main Window Console")
+        .text(DEBUG_DAPP_CONSOLE_MENU_ID, "Toggle dApp Page Console")
+        .build()?;
+    menu.append(&debug_menu)?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        handle_debug_menu_event(app, event.id().as_ref());
+    });
+    Ok(())
 }
 
 fn ensure_signing_webview_is_active(label: &str) -> Result<(), String> {
@@ -4811,6 +4861,7 @@ pub fn run() {
             if let Err(e) = boot_load_ledger_only(app.handle()) {
                 println!("[AutoDesktop] warn: could not restore Ledger wallets: {e}");
             }
+            install_debug_menu(app)?;
             let (startup_size, should_maximize) = startup_window_size(app);
             // Container window (no webview of its own).
             let window = WindowBuilder::new(app, "main")
