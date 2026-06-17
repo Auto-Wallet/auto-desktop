@@ -104,6 +104,7 @@ import { toast } from "../lib/toast";
 import { rpc } from "../lib/rpc";
 
 const PINNED_ACCOUNT_STORAGE_KEY = "autodesktop:pinned-wallet-addresses";
+const DEFI_ENABLED_ACCOUNT_STORAGE_KEY = "autodesktop:defi-enabled-wallet-addresses";
 
 function loadPinnedAccounts(): string[] {
   if (typeof window === "undefined") return [];
@@ -124,6 +125,29 @@ function savePinnedAccounts(addresses: string[]) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(
     PINNED_ACCOUNT_STORAGE_KEY,
+    JSON.stringify(addresses),
+  );
+}
+
+function loadDefiEnabledAccounts(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(DEFI_ENABLED_ACCOUNT_STORAGE_KEY) ?? "[]",
+    );
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((v): v is string => typeof v === "string")
+      .map((v) => v.toLowerCase());
+  } catch {
+    return [];
+  }
+}
+
+function saveDefiEnabledAccounts(addresses: string[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    DEFI_ENABLED_ACCOUNT_STORAGE_KEY,
     JSON.stringify(addresses),
   );
 }
@@ -190,8 +214,13 @@ export default function WalletPage() {
   const [bridgeAssetKey, setBridgeAssetKey] = useState<string | undefined>(
     undefined,
   );
+  const [defiEnabledAddresses, setDefiEnabledAddresses] = useState<string[]>(
+    loadDefiEnabledAccounts,
+  );
 
   const isWatch = !active.signer;
+  const activeAddressKey = active.address.toLowerCase();
+  const defiEnabled = defiEnabledAddresses.includes(activeAddressKey);
   const accountActivity = useMemo(
     () =>
       activity.filter(
@@ -255,7 +284,11 @@ export default function WalletPage() {
     () => computeWalletAssetsOverOneUsd(allRows, prices.status === "loading"),
     [allRows, prices.status],
   );
-  const defi = useDefiPositions(active.address, walletAssetsOverOneUsd);
+  const defi = useDefiPositions(
+    active.address,
+    walletAssetsOverOneUsd,
+    defiEnabled,
+  );
   const rows = useMemo(
     () =>
       filter === "all" ? allRows : allRows.filter((r) => r.chainId === filter),
@@ -286,8 +319,19 @@ export default function WalletPage() {
     refreshTokens();
     refreshPrices();
     refreshTokenPrices();
-    void defi.refresh(true);
+    if (defiEnabled) void defi.refresh(true);
     toast(t("common.refreshed"));
+  }
+
+  function setDefiEnabled(enabled: boolean) {
+    setDefiEnabledAddresses((prev) => {
+      const withoutActive = prev.filter(
+        (address) => address !== activeAddressKey,
+      );
+      const next = enabled ? [...withoutActive, activeAddressKey] : withoutActive;
+      saveDefiEnabledAccounts(next);
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -309,6 +353,7 @@ export default function WalletPage() {
     refreshPrices,
     refreshTokenPrices,
     defi.refresh,
+    defiEnabled,
     trend.recordNow,
   ]);
 
@@ -514,7 +559,12 @@ export default function WalletPage() {
                   <Icon name="plus" size={16} /> {t("wallet.addToken")}
                 </button>
               </section>
-              <DefiSection t={t} defi={defi} />
+              <DefiSection
+                t={t}
+                defi={defi}
+                enabled={defiEnabled}
+                onEnabledChange={setDefiEnabled}
+              />
             </>
           ) : (
             <ActivityList
@@ -607,7 +657,17 @@ function SectionSearch({
   );
 }
 
-function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
+function DefiSection({
+  t,
+  defi,
+  enabled,
+  onEnabledChange,
+}: {
+  t: TFn;
+  defi: DefiState;
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+}) {
   const [query, setQuery] = useState("");
   const positions = useMemo(
     () => filterDefiPositions(defi.positions, query),
@@ -625,20 +685,46 @@ function DefiSection({ t, defi }: { t: TFn; defi: DefiState }) {
           </div>
         </div>
         <div className="asset-section-tools">
-          {isRefreshing && (
+          <div className="defi-toggle-label">
+            <span>{t("wallet.defiEnabled")}</span>
+            <button
+              type="button"
+              className={`toggle${enabled ? " on" : ""}`}
+              role="switch"
+              aria-checked={enabled}
+              aria-label={t("wallet.defiEnabled")}
+              title={enabled ? t("wallet.defiDisable") : t("wallet.defiEnable")}
+              onClick={() => onEnabledChange(!enabled)}
+            >
+              <i />
+            </button>
+          </div>
+          {enabled && isRefreshing && (
             <span className="section-refreshing">
               <Icon name="refresh" size={13} />
               {t("wallet.refreshingDefi")}
             </span>
           )}
-          <SectionSearch
-            value={query}
-            onChange={setQuery}
-            placeholder={t("wallet.searchDefiPositions")}
-          />
+          {enabled && (
+            <SectionSearch
+              value={query}
+              onChange={setQuery}
+              placeholder={t("wallet.searchDefiPositions")}
+            />
+          )}
         </div>
       </div>
-      {defi.status === "loading" && defi.positions.length === 0 ? (
+      {!enabled ? (
+        <div className="defi-empty">
+          <div className="defi-empty-ic">
+            <Icon name="bridge" size={18} />
+          </div>
+          <div>
+            <div className="defi-empty-title">{t("wallet.defiDisabled")}</div>
+            <div className="defi-empty-sub">{t("wallet.defiDisabledHint")}</div>
+          </div>
+        </div>
+      ) : defi.status === "loading" && defi.positions.length === 0 ? (
         <div className="defi-list">
           <div className="defi-card">
             <span className="skeleton" style={{ width: 38, height: 38 }} />
@@ -1657,7 +1743,16 @@ function AccountSwitcher() {
           <div className="acct-menu scroll">
             <div className="acct-menu-head">
               <span>{t("wallet.wallets")}</span>
-              <span>{vault.wallets.length}</span>
+              <div className="acct-menu-head-actions">
+                <span>{vault.wallets.length}</span>
+                <button
+                  type="button"
+                  className="acct-add-wallet-top"
+                  onClick={() => setAdding(true)}
+                >
+                  <Icon name="plus" size={13} /> {t("wallet.addWallet")}
+                </button>
+              </div>
             </div>
             <label className="acct-search">
               <Icon name="search" size={15} />

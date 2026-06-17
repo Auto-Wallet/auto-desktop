@@ -125,6 +125,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.netChainId": "Chain ID",
     "settings.netSymbol": "Symbol",
     "settings.netRpc": "RPC URL",
+    "settings.netExplorer": "Explorer URL",
     "settings.netDecimals": "Decimals",
     "settings.save": "Save",
     "settings.cancel": "Cancel",
@@ -152,6 +153,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.trendCollecting": "Collecting",
     "wallet.defiHoldings": "DeFi positions",
     "wallet.defiHoldingsHint": "Deposits, lending, staking, and LP positions",
+    "wallet.defiEnabled": "DeFi",
+    "wallet.defiEnable": "Enable DeFi lookup for this address",
+    "wallet.defiDisable": "Disable DeFi lookup for this address",
+    "wallet.defiDisabled": "DeFi lookup is off for this address",
+    "wallet.defiDisabledHint":
+      "Turn it on only for addresses where you want to query DeFi positions.",
     "wallet.searchDefiPositions": "Search DeFi",
     "wallet.refreshingDefi": "Refreshing DeFi",
     "wallet.noDefiMatches": "No matching DeFi positions.",
@@ -313,6 +320,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "browser.reload": "Reload",
     "browser.reloaded": "Reloaded",
+    "browser.loadingDapp": "Loading dApp",
     "browser.dialogTitle": "Page dialog",
     "browser.promptPlaceholder": "Enter value",
 
@@ -529,6 +537,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.netChainId": "链 ID",
     "settings.netSymbol": "货币符号",
     "settings.netRpc": "RPC 地址",
+    "settings.netExplorer": "区块浏览器地址",
     "settings.netDecimals": "精度",
     "settings.save": "保存",
     "settings.cancel": "取消",
@@ -556,6 +565,11 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.trendCollecting": "收集中",
     "wallet.defiHoldings": "DeFi 持仓",
     "wallet.defiHoldingsHint": "存款、借贷、质押和 LP 仓位",
+    "wallet.defiEnabled": "DeFi",
+    "wallet.defiEnable": "为此地址开启 DeFi 查询",
+    "wallet.defiDisable": "为此地址关闭 DeFi 查询",
+    "wallet.defiDisabled": "此地址未开启 DeFi 查询",
+    "wallet.defiDisabledHint": "只在需要查看 DeFi 持仓的地址上开启，避免浪费额度。",
     "wallet.searchDefiPositions": "搜索 DeFi",
     "wallet.refreshingDefi": "刷新 DeFi 中",
     "wallet.noDefiMatches": "没有匹配的 DeFi 持仓。",
@@ -709,6 +723,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "browser.reload": "刷新",
     "browser.reloaded": "已刷新",
+    "browser.loadingDapp": "正在加载 dApp",
     "browser.dialogTitle": "网页弹窗",
     "browser.promptPlaceholder": "输入内容",
 

@@ -15,6 +15,25 @@ beforeEach(() => {
 });
 
 describe("DeFi refresh state", () => {
+  test("does not call the DeFi endpoint while disabled", async () => {
+    let calls = 0;
+    const harness = createHarness({
+      invokeDefiPositions: async () => {
+        calls += 1;
+        return response("DeBank", [position("should-not-load")]);
+      },
+    });
+
+    await harness.controller.refresh({
+      address: ADDRESS_A,
+      hasWalletAssetsOverOneUsd: true,
+      enabled: false,
+    });
+
+    expect(calls).toBe(0);
+    expect(harness.state).toEqual({ status: "idle", positions: [] });
+  });
+
   test("sets ok with DeBank positions after a successful refresh", async () => {
     const harness = createHarness();
 

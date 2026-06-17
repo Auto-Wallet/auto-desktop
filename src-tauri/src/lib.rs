@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
 use tauri::menu::{Menu, SubmenuBuilder};
-use tauri::webview::WebviewBuilder;
+use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl};
 
@@ -521,6 +521,12 @@ struct ChainCfg {
     decimals: u32,
     /// Brand color for the chain dot (frontend display).
     color: String,
+    #[serde(
+        default,
+        rename = "explorerUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    explorer_url: Option<String>,
     /// Built-in chains can be edited (rpc/name/symbol) but not removed.
     builtin: bool,
 }
@@ -634,6 +640,37 @@ struct DefiPositionsResponse {
     positions: Vec<DefiPosition>,
 }
 
+fn default_explorer_url(chain_id: &str) -> Option<String> {
+    let base = match chain_id.to_lowercase().as_str() {
+        "0x1" => "https://etherscan.io/tx/",
+        "0x2105" => "https://basescan.org/tx/",
+        "0xa" => "https://optimistic.etherscan.io/tx/",
+        "0xa4b1" => "https://arbiscan.io/tx/",
+        "0x89" => "https://polygonscan.com/tx/",
+        "0x38" => "https://bscscan.com/tx/",
+        "0xa86a" => "https://snowtrace.io/tx/",
+        "0xe708" => "https://lineascan.build/tx/",
+        "0x13e31" => "https://blastscan.io/tx/",
+        "0x144" => "https://era.zksync.network/tx/",
+        "0x44d" => "https://zkevm.polygonscan.com/tx/",
+        "0x92" => "https://sonicscan.org/tx/",
+        "0xc4" => "https://www.oklink.com/xlayer/tx/",
+        "0x1e0" => "https://worldscan.org/tx/",
+        "0x250" => "https://astar.subscan.io/evm_transaction/",
+        "0x378" => "https://wanscan.org/tx/",
+        "0x440" => "https://andromeda-explorer.metis.io/tx/",
+        "0xa4ec" => "https://celoscan.io/tx/",
+        _ => return None,
+    };
+    Some(base.to_string())
+}
+
+fn hydrate_chain_defaults(chain: &mut ChainCfg) {
+    if chain.explorer_url.is_none() {
+        chain.explorer_url = default_explorer_url(&chain.id);
+    }
+}
+
 fn builtin_chains() -> Vec<ChainCfg> {
     fn c(id: &str, name: &str, symbol: &str, rpc: &str, color: &str) -> ChainCfg {
         ChainCfg {
@@ -643,6 +680,7 @@ fn builtin_chains() -> Vec<ChainCfg> {
             rpc: rpc.into(),
             decimals: 18,
             color: color.into(),
+            explorer_url: default_explorer_url(id),
             builtin: true,
         }
     }
@@ -1005,6 +1043,15 @@ fn handle_wallet_method(
                 .and_then(|v| v.as_u64())
                 .filter(|d| *d != 0)
                 .unwrap_or(18) as u32;
+            let explorer_url = p
+                .get("blockExplorerUrls")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.iter().find_map(|u| u.as_str()))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            if let Some(url) = explorer_url.as_deref() {
+                validate_explorer_url(url)?;
+            }
             Ok(WalletOutcome::AddChain(ChainCfg {
                 id,
                 name,
@@ -1012,6 +1059,7 @@ fn handle_wallet_method(
                 rpc,
                 decimals,
                 color: "#6b7280".to_string(),
+                explorer_url,
                 builtin: false,
             }))
         }
@@ -1973,12 +2021,29 @@ fn create_dapp_webview<R: Runtime>(
         .get_window("main")
         .ok_or("create_dapp_webview: main window not found")?;
     let builder = WebviewBuilder::new(label, WebviewUrl::External(url))
-        .on_page_load(|_webview, payload| {
+        .on_page_load(|webview, payload| {
             println!(
                 "[AutoDesktop] dapp page-load {:?}  url={}",
                 payload.event(),
                 payload.url()
             );
+            if payload.event() == PageLoadEvent::Finished {
+                let should_show = active_dapp_label()
+                    .lock()
+                    .unwrap()
+                    .as_deref()
+                    == Some(webview.label());
+                if should_show {
+                    let _ = webview.show();
+                }
+                let _ = webview.app_handle().emit(
+                    "dapp-load-finished",
+                    DappNavigationEvent {
+                        label: webview.label().to_string(),
+                        url: payload.url().to_string(),
+                    },
+                );
+            }
         })
         .initialization_script(INPAGE_PROVIDER);
     window
@@ -2009,16 +2074,20 @@ fn open_dapp<R: Runtime>(
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("open_dapp: refusing non-http(s) url: {url}"));
     }
-    let dapp = match app.get_webview(&label) {
-        Some(wv) => wv,
-        None => create_dapp_webview(&app, &label, parsed, x, y, w, h)?,
+    let (dapp, newly_created) = match app.get_webview(&label) {
+        Some(wv) => (wv, false),
+        None => (create_dapp_webview(&app, &label, parsed, x, y, w, h)?, true),
     };
     let (fx, fy) = content_to_frame(&dapp, x, y);
     dapp.set_position(LogicalPosition::new(fx, fy))
         .map_err(|e| e.to_string())?;
     dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
         .map_err(|e| e.to_string())?;
-    dapp.show().map_err(|e| e.to_string())?;
+    if newly_created {
+        dapp.hide().map_err(|e| e.to_string())?;
+    } else {
+        dapp.show().map_err(|e| e.to_string())?;
+    }
     set_active_dapp_label(label);
     Ok(())
 }
@@ -2343,8 +2412,11 @@ fn chains_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 fn load_chains<R: Runtime>(app: &AppHandle<R>) {
     let Ok(path) = chains_path(app) else { return };
     if let Ok(bytes) = std::fs::read(&path) {
-        if let Ok(list) = serde_json::from_slice::<Vec<ChainCfg>>(&bytes) {
+        if let Ok(mut list) = serde_json::from_slice::<Vec<ChainCfg>>(&bytes) {
             if !list.is_empty() {
+                for chain in &mut list {
+                    hydrate_chain_defaults(chain);
+                }
                 *chains_state().lock().unwrap() = list;
             }
         }
@@ -3860,6 +3932,21 @@ fn validate_rpc(rpc: &str) -> Result<(), String> {
     }
 }
 
+fn validate_explorer_url(url: &str) -> Result<(), String> {
+    let parsed: tauri::Url = url
+        .parse()
+        .map_err(|e| format!("invalid explorer URL '{url}': {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {
+            if parsed.host_str().unwrap_or("").is_empty() {
+                return Err(format!("explorer URL '{url}' has no host"));
+            }
+            Ok(())
+        }
+        _ => Err("explorer URL must start with http:// or https://".to_string()),
+    }
+}
+
 /// EIP-1193: if a dApp transaction carries a `chainId`, it MUST match the chain
 /// the wallet will sign/broadcast on. The wallet's selected chain is global
 /// state — another tab or the shell may switch it after the dApp composed the
@@ -3911,6 +3998,14 @@ fn add_chain<R: Runtime>(app: AppHandle<R>, mut chain: ChainCfg) -> Result<Vec<C
     if chain.color.trim().is_empty() {
         chain.color = "#6b7280".to_string();
     }
+    chain.explorer_url = match chain.explorer_url {
+        Some(url) if !url.trim().is_empty() => {
+            let url = url.trim().to_string();
+            validate_explorer_url(&url)?;
+            Some(url)
+        }
+        _ => None,
+    };
     {
         let mut chains = chains_state().lock().unwrap();
         if chains.iter().any(|c| c.id.eq_ignore_ascii_case(&chain.id)) {
@@ -3949,6 +4044,14 @@ fn update_chain<R: Runtime>(app: AppHandle<R>, chain: ChainCfg) -> Result<Vec<Ch
         if !chain.color.trim().is_empty() {
             existing.color = chain.color;
         }
+        existing.explorer_url = match chain.explorer_url {
+            Some(url) if !url.trim().is_empty() => {
+                let url = url.trim().to_string();
+                validate_explorer_url(&url)?;
+                Some(url)
+            }
+            _ => None,
+        };
     }
     save_chains(&app)?;
     Ok(chains_state().lock().unwrap().clone())

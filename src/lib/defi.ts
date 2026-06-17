@@ -43,6 +43,7 @@ export type DefiState =
 export function useDefiPositions(
   address: string | undefined,
   hasWalletAssetsOverOneUsd: boolean | undefined = false,
+  enabled = true,
 ): DefiState & {
   refresh: (force?: boolean) => Promise<void>;
 } {
@@ -68,19 +69,24 @@ export function useDefiPositions(
     [],
   );
   useEffect(() => {
+    if (!enabled) {
+      setState({ status: "idle", positions: [] });
+      return undefined;
+    }
     if (!address) return undefined;
     const cached = getCachedDefiState(address);
     if (cached) setState(cached);
     return subscribeDefiState(address, setState);
-  }, [address]);
+  }, [address, enabled]);
 
   const refresh = useCallback(async (force = false) => {
     await controllerRef.current?.refresh({
       address,
       hasWalletAssetsOverOneUsd,
+      enabled,
       force,
     });
-  }, [address, hasWalletAssetsOverOneUsd]);
+  }, [address, hasWalletAssetsOverOneUsd, enabled]);
 
   useEffect(() => {
     void refresh();
@@ -97,6 +103,7 @@ type DefiRefreshRequest = {
 type DefiRefreshInput = {
   address: string | undefined;
   hasWalletAssetsOverOneUsd: boolean | undefined;
+  enabled?: boolean;
   force?: boolean;
 };
 
@@ -129,9 +136,10 @@ export function createDefiRefreshController({
     async refresh({
       address,
       hasWalletAssetsOverOneUsd,
+      enabled = true,
       force = false,
     }: DefiRefreshInput) {
-      if (!address || !isAvailable()) {
+      if (!enabled || !address || !isAvailable()) {
         requestId += 1;
         inFlightKey = null;
         activeAddress = null;

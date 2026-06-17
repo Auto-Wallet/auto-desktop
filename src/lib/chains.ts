@@ -21,6 +21,8 @@ export type Chain = {
   decimals: number;
   /** Brand color for the chain dot/badge. */
   color: string;
+  /** Block explorer transaction URL base, e.g. https://etherscan.io/tx/. */
+  explorerUrl?: string;
   /** Built-in chains can be edited (rpc/name/symbol) but not removed. */
   builtin: boolean;
 };

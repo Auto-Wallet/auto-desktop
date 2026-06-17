@@ -29,6 +29,8 @@ import {
 
 export type Tab = { id: string; dapp: Dapp };
 
+const loadedDappLabels = new Set<string>();
+
 // The chrome around one open dApp tab (VISION feature ③), restyled to Aurora:
 // top bar with back/reload, the URL, the active chain + account chips, content
 // below. Each tab is a persistent native `dapp-<id>` child webview (Rust-side,
@@ -51,11 +53,13 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   const [url, setUrl] = useState(dapp.url);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [reloading, setReloading] = useState(false);
+  const [dappLoading, setDappLoading] = useState(() => !loadedDappLabels.has(label));
 
   useEffect(() => {
     setCurrentUrl(dapp.url);
     setUrl(dapp.url);
-  }, [dapp.url]);
+    setDappLoading(!loadedDappLabels.has(label));
+  }, [dapp.url, label]);
 
   useEffect(() => {
     if (!native) return;
@@ -74,6 +78,39 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
       unlisten?.();
     };
   }, [native, label]);
+
+  useEffect(() => {
+    if (!native) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ label: string; url: string }>("dapp-load-finished", (event) => {
+      if (event.payload?.label !== label) return;
+      loadedDappLabels.add(label);
+      setCurrentUrl(event.payload.url);
+      setUrl(event.payload.url);
+      setDappLoading(false);
+
+      const el = contentRef.current;
+      if (el) void openDapp(label, event.payload.url, rectOf(el));
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [native, label]);
+
+  useEffect(() => {
+    if (!native || !dappLoading) return undefined;
+    const timer = window.setTimeout(() => {
+      const el = contentRef.current;
+      if (el) void openDapp(label, currentUrl, rectOf(el));
+      setDappLoading(false);
+    }, 20_000);
+    return () => window.clearTimeout(timer);
+  }, [native, dappLoading, label, currentUrl]);
 
   // Show this tab's native webview over the content rect, track resizes, and hide
   // it (NOT close — the tab persists) when this view unmounts/switches away.
@@ -99,6 +136,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   async function handleReload() {
     if (reloading) return;
     setReloading(true);
+    setDappLoading(true);
     try {
       if (native) {
         await reloadDapp(label);
@@ -154,6 +192,9 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
       </header>
 
       <section className="browser-content" ref={contentRef}>
+        {dappLoading && (
+          <DappLoadingOverlay name={dapp.name} host={hostOf(dapp.url)} label={t("browser.loadingDapp")} />
+        )}
         {native ? (
           <div className="native-placeholder" />
         ) : (
@@ -163,7 +204,11 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
               className="dapp-frame"
               src={dapp.url}
               title={dapp.name}
-              onLoad={() => setReloading(false)}
+              onLoad={() => {
+                loadedDappLabels.add(label);
+                setDappLoading(false);
+                setReloading(false);
+              }}
             />
             <div className="frame-note">
               <Icon name="shieldCheck" size={15} /> In the desktop app, <b>{hostOf(dapp.url)}</b> loads in a
@@ -172,6 +217,32 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
           </>
         )}
       </section>
+    </div>
+  );
+}
+
+function DappLoadingOverlay({
+  name,
+  host,
+  label,
+}: {
+  name: string;
+  host: string;
+  label: string;
+}) {
+  return (
+    <div className="dapp-loading" role="status" aria-live="polite">
+      <div className="dapp-loading-orbit">
+        <span />
+        <img src={faviconOf(`https://${host}`)} alt="" />
+      </div>
+      <div className="dapp-loading-title">{label}</div>
+      <div className="dapp-loading-sub">
+        {name} · {host}
+      </div>
+      <div className="dapp-loading-bar">
+        <i />
+      </div>
     </div>
   );
 }

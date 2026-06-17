@@ -198,6 +198,7 @@ export default function SettingsPage() {
                         </div>
                         <div className="chain-meta">
                           {c.symbol} · {c.id} · {safeHost(c.rpc)}
+                          {c.explorerUrl ? ` · ${safeHost(c.explorerUrl)}` : ""}
                         </div>
                       </div>
                     </button>
@@ -631,6 +632,7 @@ function NetworkForm({
   const [id, setId] = useState(initial?.id ?? "");
   const [symbol, setSymbol] = useState(initial?.symbol ?? "ETH");
   const [rpc, setRpc] = useState(initial?.rpc ?? "");
+  const [explorerUrl, setExplorerUrl] = useState(initial?.explorerUrl ?? "");
   const [decimals, setDecimals] = useState(String(initial?.decimals ?? 18));
   const [color, setColor] = useState(initial?.color ?? "#5b4bf0");
   const [error, setError] = useState<string | null>(null);
@@ -645,6 +647,7 @@ function NetworkForm({
         name: name.trim(),
         symbol: symbol.trim() || "ETH",
         rpc: rpc.trim(),
+        explorerUrl: explorerUrl.trim() || undefined,
         decimals: parseInt(decimals, 10) || 18,
         color,
       };
@@ -706,6 +709,16 @@ function NetworkForm({
             value={rpc}
             onChange={(e) => setRpc(e.target.value)}
             placeholder="https://…"
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+          />
+        </div>
+        <div className="field net-wide">
+          <label className="field-label">{t("settings.netExplorer")}</label>
+          <input
+            className="input mono"
+            value={explorerUrl}
+            onChange={(e) => setExplorerUrl(e.target.value)}
+            placeholder="https://etherscan.io/tx/"
             onKeyDown={(e) => e.key === "Enter" && submit()}
           />
         </div>

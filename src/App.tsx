@@ -19,7 +19,7 @@ import {
 } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
 import { useActiveAccount, useActiveAccountSync } from "./lib/accounts";
-import { loadChains } from "./lib/chains";
+import { findChain, loadChains } from "./lib/chains";
 import { useT } from "./lib/i18n";
 import { Icon } from "./lib/icons";
 import { setThemePref, useEffectiveTheme } from "./lib/theme";
@@ -75,7 +75,7 @@ function App() {
         if (notifiedTxRef.current.has(key)) return;
         notifiedTxRef.current.add(key);
       }
-      const href = record ? txExplorerUrl(undefined, record) : null;
+      const href = record ? txExplorerUrl(findChain(record.chainId), record) : null;
       toast(
         t(messageKey, { hash: hash ? shortAddress(hash, 8, 6) : "" }),
         kind,

@@ -85,6 +85,31 @@
   text-transform: uppercase;
   color: var(--ink-4);
 }
+.acct-menu-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.acct-add-wallet-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--brand-ink);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.acct-add-wallet-top:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
 .acct-search {
   display: flex;
   align-items: center;
@@ -1919,6 +1944,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  flex-wrap: wrap;
   min-width: min(360px, 50%);
 }
 .asset-section-title {
@@ -1960,6 +1986,15 @@
 }
 .section-refreshing svg {
   animation: spin 0.9s linear infinite;
+}
+.defi-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 .section-search:focus-within {
   border-color: var(--brand);

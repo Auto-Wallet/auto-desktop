@@ -235,6 +235,83 @@
 .native-placeholder {
   height: 100%;
 }
+.dapp-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px;
+  background: var(--surface-2);
+  color: var(--ink);
+  text-align: center;
+}
+.dapp-loading-orbit {
+  position: relative;
+  width: 74px;
+  height: 74px;
+  display: grid;
+  place-items: center;
+}
+.dapp-loading-orbit span {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--brand) 16%, transparent);
+  border-top-color: var(--brand);
+  border-right-color: color-mix(in srgb, var(--coral) 72%, var(--brand));
+  animation: dapp-load-spin 0.9s linear infinite;
+}
+.dapp-loading-orbit img {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--sh-sm);
+}
+.dapp-loading-title {
+  font-size: 14px;
+  font-weight: 800;
+}
+.dapp-loading-sub {
+  max-width: min(420px, 100%);
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dapp-loading-bar {
+  width: min(220px, 55vw);
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--line-2);
+}
+.dapp-loading-bar i {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand), var(--coral));
+  animation: dapp-load-slide 1.15s ease-in-out infinite;
+}
+@keyframes dapp-load-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes dapp-load-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
 .dapp-frame {
   width: 100%;
   height: 100%;
@@ -261,4 +338,11 @@
   font-family: var(--font-mono);
   font-size: 11px;
   color: #c9c4ff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dapp-loading-orbit span,
+  .dapp-loading-bar i {
+    animation: none;
+  }
 }

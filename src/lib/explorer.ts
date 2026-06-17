@@ -3,12 +3,22 @@ import type { ActivityRecord } from "./activity";
 export type ExplorerChain = {
   id: string;
   name: string;
+  explorerUrl?: string;
 };
+
+function txUrlFromBase(base: string, hash: string): string {
+  const trimmed = base.trim();
+  if (trimmed.includes("{hash}")) return trimmed.replace("{hash}", hash);
+  if (trimmed.endsWith("/") || trimmed.endsWith("=")) return `${trimmed}${hash}`;
+  return `${trimmed}/${hash}`;
+}
 
 export function txExplorerUrl(
   chain: ExplorerChain | undefined,
   record: ActivityRecord,
 ): string | null {
+  if (chain?.explorerUrl) return txUrlFromBase(chain.explorerUrl, record.hash);
+
   const id = record.chainId.toLowerCase();
   const name = (chain?.name ?? record.chainName).toLowerCase();
   const bases: Record<string, string> = {
