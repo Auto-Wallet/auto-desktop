@@ -135,8 +135,8 @@ function ApprovalView() {
   // changes (so the user starts from the suggested max fee, in Gwei).
   useEffect(() => {
     if (current?.tx) {
-      setMaxFeeGwei(formatUnits(current.tx.max_fee_per_gas, 9, 6));
-      setMaxPrioGwei(formatUnits(current.tx.max_priority_fee_per_gas, 9, 6));
+      setMaxFeeGwei(formatUnits(current.tx.max_fee_per_gas, 9, 9));
+      setMaxPrioGwei(formatUnits(current.tx.max_priority_fee_per_gas, 9, 9));
       setFeeError(false);
       setPrioError(false);
     }

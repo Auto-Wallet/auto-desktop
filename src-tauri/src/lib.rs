@@ -1480,16 +1480,25 @@ fn hex_to_u128(hex: &str) -> Result<u128, String> {
         .map_err(|e| format!("bad quantity {hex}: {e}"))
 }
 
+fn is_nonzero_quantity(hex: &str) -> bool {
+    hex_to_u128(hex).map(|value| value > 0).unwrap_or(false)
+}
+
 fn resolve_provided_fees(tx: &Value) -> Option<(String, String)> {
     if let (Some(prio), Some(max)) = (
         tx_field(tx, "maxPriorityFeePerGas"),
         tx_field(tx, "maxFeePerGas"),
     ) {
-        return Some((prio.to_string(), max.to_string()));
+        if is_nonzero_quantity(max) {
+            return Some((prio.to_string(), max.to_string()));
+        }
     }
-    tx_field(tx, "gasPrice").map(|gas_price| {
+    tx_field(tx, "gasPrice").and_then(|gas_price| {
+        if !is_nonzero_quantity(gas_price) {
+            return None;
+        }
         let fee = gas_price.to_string();
-        (fee.clone(), fee)
+        Some((fee.clone(), fee))
     })
 }
 
@@ -5110,6 +5119,16 @@ mod tests {
             resolve_provided_fees(&tx),
             Some(("0x59682f00".to_string(), "0x59682f00".to_string()))
         );
+    }
+
+    #[test]
+    fn zero_eip1559_fees_are_not_treated_as_provided() {
+        let tx = json!({
+            "maxPriorityFeePerGas": "0x0",
+            "maxFeePerGas": "0x0",
+        });
+
+        assert_eq!(resolve_provided_fees(&tx), None);
     }
 
     #[test]

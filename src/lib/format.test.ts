@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isAddress } from "./format";
+import { formatUnits, isAddress } from "./format";
 
 describe("isAddress (EIP-55)", () => {
   test("accepts correctly checksummed mixed-case addresses (EIP-55 spec vectors)", () => {
@@ -25,5 +25,11 @@ describe("isAddress (EIP-55)", () => {
     expect(isAddress("0x123")).toBe(false);
     expect(isAddress("5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed")).toBe(false);
     expect(isAddress("0xZZZeb6053F3E94C9b9A09f33669435E7Ef1BeAed")).toBe(false);
+  });
+});
+
+describe("formatUnits", () => {
+  test("keeps wei-sized gas fees visible when formatting as Gwei", () => {
+    expect(formatUnits("0x3", 9, 9)).toBe("0.000000003");
   });
 });
