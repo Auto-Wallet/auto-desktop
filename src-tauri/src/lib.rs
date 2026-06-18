@@ -1480,6 +1480,19 @@ fn hex_to_u128(hex: &str) -> Result<u128, String> {
         .map_err(|e| format!("bad quantity {hex}: {e}"))
 }
 
+fn resolve_provided_fees(tx: &Value) -> Option<(String, String)> {
+    if let (Some(prio), Some(max)) = (
+        tx_field(tx, "maxPriorityFeePerGas"),
+        tx_field(tx, "maxFeePerGas"),
+    ) {
+        return Some((prio.to_string(), max.to_string()));
+    }
+    tx_field(tx, "gasPrice").map(|gas_price| {
+        let fee = gas_price.to_string();
+        (fee.clone(), fee)
+    })
+}
+
 fn bump_estimated_gas(gas: &str) -> Result<String, String> {
     let value = hex_to_u128(gas)?;
     // Add a 20% safety margin to node gas estimates. Some contracts pass
@@ -1509,14 +1522,12 @@ fn preview_tx(tx: &Value) -> String {
 }
 
 /// Resolve the EIP-1559 fee fields on a specific chain: use the caller's if both
-/// are given, else suggest `maxPriorityFeePerGas` from the node (1 gwei fallback)
-/// and `maxFeePerGas = 2*baseFee + priority` from the pending block's base fee.
+/// EIP-1559 values are given, map legacy `gasPrice` to an equivalent type-2 cap,
+/// else suggest `maxPriorityFeePerGas` from the node (1 gwei fallback) and
+/// `maxFeePerGas = 2*baseFee + priority` from the pending block's base fee.
 async fn resolve_fees_on(chain: &ChainCfg, tx: &Value) -> Result<(String, String), String> {
-    if let (Some(prio), Some(max)) = (
-        tx_field(tx, "maxPriorityFeePerGas"),
-        tx_field(tx, "maxFeePerGas"),
-    ) {
-        return Ok((prio.to_string(), max.to_string()));
+    if let Some(fees) = resolve_provided_fees(tx) {
+        return Ok(fees);
     }
     let priority = match node_rpc_call(chain, "eth_maxPriorityFeePerGas", &[]).await {
         Ok(v) => v
@@ -5089,6 +5100,16 @@ mod tests {
             assert_eq!(chains.iter().filter(|x| x.id == c.id).count(), 1);
             assert!(c.builtin);
         }
+    }
+
+    #[test]
+    fn provided_legacy_gas_price_maps_to_eip1559_fees() {
+        let tx = json!({ "gasPrice": "0x59682f00" }); // 1.5 gwei
+
+        assert_eq!(
+            resolve_provided_fees(&tx),
+            Some(("0x59682f00".to_string(), "0x59682f00".to_string()))
+        );
     }
 
     #[test]
