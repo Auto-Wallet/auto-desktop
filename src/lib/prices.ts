@@ -20,6 +20,13 @@ export type PriceState =
   | { status: "ok"; prices: Record<string, Price> }
   | { status: "error"; message: string };
 
+const ZERO_PRICE: Price = { usd: 0, change24h: 0 };
+
+export function priceForChainAsset(chainName: string, price: Price | undefined): Price | undefined {
+  if (/testnet/i.test(chainName)) return ZERO_PRICE;
+  return price;
+}
+
 // Token/native SYMBOL (uppercased) -> CoinGecko coin id. An unknown symbol simply
 // gets no price (never a fabricated one).
 const SYMBOL_TO_ID: Record<string, string> = {

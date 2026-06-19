@@ -48,6 +48,7 @@ import {
   usePrices,
   useTokenPrices,
   tkPriceKey,
+  priceForChainAsset,
   type Price,
   type PriceState,
   type PricedToken,
@@ -952,10 +953,10 @@ function buildRows(
       color: c.color,
       logo: chainLogo(c.id),
       state: balances[c.id],
-      price:
-        prices.status === "ok"
-          ? prices.prices[c.symbol.toUpperCase()]
-          : undefined,
+      price: priceForChainAsset(
+        c.name,
+        prices.status === "ok" ? prices.prices[c.symbol.toUpperCase()] : undefined,
+      ),
     });
     for (const tk of tokensForChain(custom, c.id)) {
       const st = tokenBalances[tokenKey(c.id, tk.address)];
@@ -974,7 +975,7 @@ function buildRows(
         color: seedColor(tk.address),
         logo: tk.logo || undefined,
         state: st,
-        price: tokenPrices[tkPriceKey(c.id, tk.address)],
+        price: priceForChainAsset(c.name, tokenPrices[tkPriceKey(c.id, tk.address)]),
         isCustom: cust,
       });
     }
