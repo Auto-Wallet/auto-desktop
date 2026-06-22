@@ -34,8 +34,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Bun
         run: |
@@ -52,7 +50,6 @@ jobs:
       - name: Install dependencies
         run: |
           set -euxo pipefail
-          (cd auto-wallet-core && bun link)
           bun install
 
       - name: Icon lint (Windows .ico must have rounded corners baked in)
@@ -79,8 +76,6 @@ jobs:
         os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Bun
         shell: bash
@@ -108,9 +103,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          (cd auto-wallet-core && bun link)
           bun install
-          test -e node_modules/auto-wallet-core/package.json
 
       - name: Build injected provider bundle
         shell: bash
@@ -119,10 +112,6 @@ jobs:
       - name: Typecheck frontend
         shell: bash
         run: bunx tsc --noEmit
-
-      - name: Typecheck SDK
-        shell: bash
-        run: cd auto-wallet-core && bun install && bun run typecheck
 
       - name: Rust tests (unit + offline mock-runtime e2e)
         if: runner.os != 'Windows'
@@ -148,8 +137,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Bun
         shell: bash
@@ -177,9 +164,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          (cd auto-wallet-core && bun link)
           bun install
-          test -e node_modules/auto-wallet-core/package.json
 
       - name: Build app (debug, no bundle)
         shell: bash
@@ -209,8 +194,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Bun
         shell: bash
@@ -242,9 +225,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          (cd auto-wallet-core && bun link)
           bun install
-          test -e node_modules/auto-wallet-core/package.json
 
       - name: Build app (debug, no bundle)
         shell: bash

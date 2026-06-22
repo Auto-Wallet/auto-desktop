@@ -65,8 +65,6 @@ jobs:
             runner: macos-26-intel
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Bun
         shell: bash
@@ -95,11 +93,7 @@ jobs:
       - name: Install dependencies
         run: |
           set -euxo pipefail
-          # The auto-wallet-core SDK is a git submodule consumed via `link:`.
-          # Register it as a bun link, then install so node_modules resolves it.
-          (cd auto-wallet-core && bun link)
           bun install
-          test -e node_modules/auto-wallet-core/package.json
 
       - name: Import Apple certificate
         env:
@@ -297,8 +291,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Bun
         shell: bash
@@ -325,9 +317,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          (cd auto-wallet-core && bun link)
           bun install
-          test -e node_modules/auto-wallet-core/package.json
 
       - name: Build executable + NSIS updater installer
         env:
