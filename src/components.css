@@ -9,7 +9,7 @@
   display: block;
   border-radius: 50%;
   flex: none;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.07);
+  box-shadow: inset 0 0 0 1px var(--img-outline);
 }
 .avatar.sq {
   border-radius: 30%;
@@ -31,10 +31,12 @@
   border: 1px solid transparent;
   white-space: nowrap;
   color: var(--ink);
-  transition: transform 0.1s, filter 0.14s, background 0.14s, border-color 0.14s, color 0.14s;
+  transition-property: transform, filter, background-color, border-color, color, box-shadow;
+  transition-duration: 0.14s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
-.btn:active {
-  transform: translateY(1px);
+.btn:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .btn:disabled {
   opacity: 0.5;
@@ -106,7 +108,21 @@
   background: var(--surface);
   color: var(--ink-2);
   cursor: pointer;
-  transition: background 0.13s, color 0.13s, border-color 0.13s;
+  position: relative;
+  transition-property: transform, background-color, color, border-color;
+  transition-duration: 0.13s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.icon-btn::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+}
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .icon-btn:hover {
   background: var(--surface-2);
@@ -136,7 +152,12 @@
   border: 1px solid var(--line-2);
   color: var(--ink);
   cursor: pointer;
-  transition: background 0.13s, border-color 0.13s;
+  transition-property: transform, background-color, border-color;
+  transition-duration: 0.13s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.chip:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .chip:hover {
   background: var(--surface-2);
@@ -201,7 +222,12 @@
   padding: 7px 16px;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.13s, background 0.13s;
+  transition-property: transform, color, background-color;
+  transition-duration: 0.13s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.seg button:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .seg button.on {
   background: var(--surface);
@@ -233,7 +259,9 @@
   font-size: 14.5px;
   padding: 12px 14px;
   outline: none;
-  transition: border-color 0.14s, box-shadow 0.14s;
+  transition-property: border-color, box-shadow;
+  transition-duration: 0.14s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 .input::placeholder,
 .textarea::placeholder {
@@ -286,8 +314,13 @@ select.input:disabled {
   border: none;
   cursor: pointer;
   position: relative;
-  transition: background 0.18s;
+  transition-property: transform, background-color;
+  transition-duration: 0.18s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
   flex: none;
+}
+.toggle:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .toggle.on {
   background: var(--brand);
@@ -300,7 +333,9 @@ select.input:disabled {
   height: 18px;
   border-radius: 50%;
   background: #fff;
-  transition: transform 0.18s;
+  transition-property: transform;
+  transition-duration: 0.18s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
   box-shadow: var(--sh-sm);
 }
 .toggle.on i {
@@ -603,7 +638,7 @@ body.menu-overlay-body #root {
 .chain-dot {
   border-radius: 50%;
   flex: none;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+  box-shadow: inset 0 0 0 1px var(--img-outline);
 }
 .chain-icon {
   display: inline-grid;
@@ -611,7 +646,7 @@ body.menu-overlay-body #root {
   flex: none;
   border-radius: 50%;
   overflow: hidden;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 0 0 1px var(--img-outline);
 }
 .chain-icon img,
 .chain-icon-fallback {
@@ -622,6 +657,8 @@ body.menu-overlay-body #root {
 }
 .chain-icon img {
   object-fit: cover;
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .chain-icon-fallback {
   display: grid;

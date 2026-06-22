@@ -4843,7 +4843,7 @@ const MEDIUM_SCREEN_H: f64 = 1117.0;
 const LARGE_SCREEN_W: f64 = 2560.0;
 const LARGE_SCREEN_H: f64 = 1440.0;
 
-/// The real EIP-1193/EIP-6963 provider from auto-wallet-core, bundled to a
+/// The real EIP-1193/EIP-6963 provider from the frontend wallet core, bundled to a
 /// self-contained IIFE by `bun run build:injected` and embedded at compile time.
 /// Injected into every dApp webview before page scripts.
 const INPAGE_PROVIDER: &str = include_str!("../injected/inpage.js");

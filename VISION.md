@@ -16,7 +16,7 @@ RabbyDesktop is no longer maintained and its codebase is too heavy. We want the 
 - **Ultra-lightweight / small installer / minimal features** — every dependency and feature is weighed against installer size and simplicity. When in doubt, leave it out.
 - **Native, not Electron** — Tauri 2 + system WebView.
 - **The security boundary is sacred** — untrusted dApp webviews get only the wallet bridge; keys never enter any webview (see CLAUDE.md).
-- **Share logic via the SDK** — portable wallet logic lives in `auto-wallet-core` so both wallets benefit; Tauri-specific glue stays here.
+- **Own the desktop wallet core here** — portable wallet-facing TypeScript lives in `src/wallet-core`; Tauri-specific glue stays outside it.
 - **v1 must include Ledger** (via a Rust `hidapi` transport, since WKWebView has no WebHID).
 
 ## The 6 core features (the product)
@@ -24,7 +24,7 @@ RabbyDesktop is no longer maintained and its codebase is too heavy. We want the 
 1. **Overall layout** — a ~1280×720 resizable window with a collapsible left sidebar. The home page is **Wallet**: shows the wallet's assets across chains, supports multi-chain viewing, adding custom tokens, and conveniently switching between wallet addresses.
 2. **dApps page** — freely add DeFi apps, each shown as a small card (logo + name; the name can be fetched automatically or edited by hand). **Must support search and pinning.**
 3. **Embedded dApp browser** — opening an app loads its web page, RabbyDesktop-style: the sidebar lists page tabs, the top bar shows the URL / current wallet / current chain, and the page content fills the area below.
-4. **Reuse auto-wallet** — embed/reuse the existing auto-wallet wallet logic (via the SDK).
+4. **Reuse proven wallet logic where it helps** — keep the desktop wallet core in-repo, and port useful auto-wallet behavior deliberately instead of coupling the two products through a separate package.
 5. **Connect the wallet and send transactions from within web pages.**
 6. **Settings** (bottom-left of the sidebar) — manage Chains, language, about, check for updates, and so on.
 

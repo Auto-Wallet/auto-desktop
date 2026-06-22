@@ -1,5 +1,5 @@
 // Bundles the dApp-page injection entry (src/injected/inpage.tauri.ts) plus its
-// auto-wallet-core imports into a single self-contained IIFE that Rust embeds via
+// wallet-core imports into a single self-contained IIFE that Rust embeds via
 // include_str!(../injected/inpage.js) and injects as a webview init script.
 //
 // Run: bun run build:injected   (must run before `cargo build` / `tauri dev`)

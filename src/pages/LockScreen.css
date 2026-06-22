@@ -59,6 +59,8 @@
   height: 60px;
   border-radius: 18px;
   box-shadow: var(--sh-md);
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .lock-brand h1 {
   font-family: var(--font-display);
@@ -100,12 +102,17 @@
   padding: 15px 16px;
   cursor: pointer;
   font: inherit;
-  transition: border-color 0.14s, background 0.14s, transform 0.1s;
+  transition-property: border-color, background-color, transform;
+  transition-duration: 0.14s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 .opt:hover {
   border-color: var(--brand);
   background: var(--brand-soft);
   transform: translateY(-1px);
+}
+.opt:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .opt-ic {
   width: 42px;
@@ -222,7 +229,9 @@
   height: 4px;
   border-radius: 2px;
   background: var(--line-2);
-  transition: background 0.2s;
+  transition-property: background-color;
+  transition-duration: 0.2s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 .pw-strength.s1 i:nth-child(1) {
   background: var(--down);
@@ -396,11 +405,16 @@
   padding: 9px 12px;
   cursor: pointer;
   font: inherit;
-  transition: border-color 0.14s, background 0.14s;
+  transition-property: border-color, background-color, transform;
+  transition-duration: 0.14s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 .ledger-acct:hover {
   border-color: var(--brand);
   background: var(--brand-soft);
+}
+.ledger-acct:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .ledger-idx {
   font-family: var(--font-mono);

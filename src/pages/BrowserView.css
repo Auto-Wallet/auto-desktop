@@ -24,7 +24,9 @@
   background: var(--surface);
   border: 1px solid var(--line-2);
   border-radius: var(--r-pill);
-  transition: border-color 0.13s, box-shadow 0.13s;
+  transition-property: border-color, box-shadow;
+  transition-duration: 0.13s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
   cursor: text;
 }
 .browser-reload.loading svg {
@@ -53,6 +55,8 @@
   height: 16px;
   border-radius: 4px;
   flex: none;
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .url-bar input {
   flex: 1;
@@ -270,6 +274,8 @@
   border-radius: 10px;
   background: var(--surface);
   box-shadow: var(--sh-sm);
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .dapp-loading-title {
   font-size: 14px;

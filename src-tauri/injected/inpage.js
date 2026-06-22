@@ -1,5 +1,5 @@
 (() => {
-  // ../auto-wallet-core/src/provider/provider.ts
+  // src/wallet-core/provider/provider.ts
   class AutoWalletProvider {
     isAutoWallet = true;
     isMetaMask = false;
@@ -107,7 +107,7 @@
     const value = /^0x[0-9a-fA-F]+$/i.test(s) ? BigInt(s.toLowerCase()) : /^[0-9]+$/.test(s) ? BigInt(s) : null;
     return value && value > 0n ? `0x${value.toString(16)}` : null;
   }
-  // ../auto-wallet-core/src/provider/inject.ts
+  // src/wallet-core/provider/inject.ts
   var BLOCKED_PROVIDER_HOSTS = new Set(["docs.google.com"]);
   function isProviderInjectionAllowed(rawUrl) {
     let url;

@@ -236,6 +236,8 @@ button.set-row:hover {
   border-radius: 16px;
   flex: none;
   box-shadow: var(--sh-sm);
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .about-meta {
   flex: 1;

@@ -86,12 +86,17 @@
   border-radius: var(--r-lg);
   box-shadow: var(--sh-sm);
   cursor: pointer;
-  transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s;
+  transition-property: transform, box-shadow, border-color;
+  transition-duration: 0.12s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 .dapp-card:hover {
   transform: translateY(-3px);
   box-shadow: var(--sh-md);
   border-color: var(--line-2);
+}
+.dapp-card:active {
+  transform: scale(0.96);
 }
 .dapp-top {
   position: absolute;
@@ -139,7 +144,8 @@
   border-radius: 15px;
   object-fit: cover;
   background: var(--surface-3);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
   margin-top: 6px;
 }
 .dapp-logo.fb {

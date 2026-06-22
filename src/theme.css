@@ -80,6 +80,7 @@
   --sh-lg: 0 18px 44px rgba(24, 21, 31, 0.13), 0 4px 12px rgba(24, 21, 31, 0.07);
   --sh-xl: 0 32px 80px rgba(24, 21, 31, 0.2), 0 8px 24px rgba(24, 21, 31, 0.1);
   --sh-brand: 0 10px 30px rgba(91, 75, 240, 0.32);
+  --img-outline: rgba(0, 0, 0, 0.1);
 
   --font-display: "Space Grotesk", system-ui, sans-serif;
   --font: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
@@ -155,6 +156,7 @@
   --sh-lg: 0 18px 44px rgba(0, 0, 0, 0.55);
   --sh-xl: 0 32px 80px rgba(0, 0, 0, 0.6);
   --sh-brand: 0 10px 30px rgba(91, 75, 240, 0.45);
+  --img-outline: rgba(255, 255, 255, 0.1);
 
   color-scheme: dark;
 }
@@ -171,12 +173,16 @@ body,
   width: 100%;
 }
 
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 body {
   font-family: var(--font);
   background: var(--bg);
   color: var(--ink);
   overflow: hidden;
-  -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
@@ -197,9 +203,26 @@ select {
 }
 .mono {
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 .disp {
   font-family: var(--font-display);
+}
+
+h1,
+h2,
+h3,
+.page-title,
+.modal-title {
+  text-wrap: balance;
+}
+
+p,
+li,
+.toast-msg,
+.field-label,
+.dapp-dialog-message {
+  text-wrap: pretty;
 }
 
 /* custom scrollbars */

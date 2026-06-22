@@ -8,29 +8,28 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 **AutoDesktop** — a lightweight, RabbyDesktop-style desktop wallet & dApp browser built on **Tauri 2 + React + TypeScript**. It embeds remote dApp web pages and injects an EIP-1193 wallet provider (`window.ethereum`) into them, like a browser-extension wallet but native.
 
-It is one of three sibling packages (kept as separate directories/repos, linked via `bun link`):
+The desktop app now owns its wallet core directly:
 
-- `../auto-wallet-core` — **shared, platform-agnostic SDK** (EIP-1193/6963 provider, platform adapter interfaces, and—over time—the ported wallet logic). Source of truth for both wallets.
-- `../auto-wallet` — the existing Chrome MV3 **browser-extension** wallet. AutoDesktop reuses its logic via the SDK; it will migrate onto the SDK later.
-- this repo (`auto-desktop`) — the Tauri desktop app: implements the **Tauri-side** adapters and all native/window/webview concerns.
+- `src/wallet-core` — EIP-1193/6963 provider, platform adapter interfaces, and portable wallet-facing TypeScript.
+- `../auto-wallet` — the existing Chrome MV3 browser-extension wallet. It is maintained separately and does not consume this core.
+- `src-tauri` plus `src` — Tauri backend, native/window/webview concerns, and trusted React UI.
 
 Use **bun** (not npm) for everything.
 
 ## Commands
 
 ```bash
-bun install                 # install deps (also relinks the SDK if package.json says link:auto-wallet-core)
+bun install                 # install deps
 bun run tauri dev           # run the app (beforeDevCommand runs build:injected + vite, then cargo builds)
 bun run tauri build         # production bundle (.app/.dmg)
 
-bun run build:injected      # rebuild the injected provider IIFE (see "Injection pipeline" — REQUIRED after editing src/injected/* or the SDK provider)
-bunx tsc --noEmit           # typecheck the frontend (incl. the injection entry + SDK imports)
+bun run build:injected      # rebuild the injected provider IIFE (see "Injection pipeline" — REQUIRED after editing src/injected/* or src/wallet-core/*)
+bunx tsc --noEmit           # typecheck the frontend (incl. the injection entry + wallet-core imports)
 
 cd src-tauri && cargo test  # Rust unit tests + offline E2E (deterministic, no network)
 cd src-tauri && cargo test -- --ignored   # LIVE E2E: forwards to real public RPC nodes (network)
 cd src-tauri && cargo check # fast Rust typecheck
 
-cd ../auto-wallet-core && bun run typecheck   # typecheck the SDK
 ```
 
 When the dev server is killed, a stray `vite` may keep port 1420 held; free it with `lsof -ti tcp:1420 | xargs kill -9` before re-running.
@@ -76,12 +75,12 @@ Non-obvious ACL facts (verified): app commands work from local webviews with no 
 **Signing/approval flow:** a Signing method suspends in `request_approval` (a per-request `tokio::oneshot` + a 300s timeout) and opens a **separate top-level approval window** (`index.html?view=approval` → `ApprovalView.tsx`) — separate because the dapp webview renders on top of the shell, so an in-shell modal can't cover it. The window's `approve_request`/`reject_request` resolve the channel; approve → the backend signs (Rust-side key, never in any webview), reject → EIP-1193 `4001`. ⚠️ The active key is currently the **publicly-known Anvil #0 dev key** (`DEV_PRIVKEY_HEX`, labeled in `lib.rs`) — the encrypted password-unlocked vault is the next slice. Only `personal_sign` is wired so far; other signing methods reject up-front.
 
 ### Injection pipeline (how the provider gets into dApp pages)
-`src/injected/inpage.tauri.ts` (defines the Tauri `invoke`-based `ProviderTransport`, calls the SDK's `installProvider`) → bundled to a self-contained IIFE by `scripts/build-injected.ts` (`Bun.build`, `format: iife`) → written to `src-tauri/injected/inpage.js` → embedded in Rust via `include_str!` → set as the dapp webview's `initialization_script`.
+`src/injected/inpage.tauri.ts` (defines the Tauri `invoke`-based `ProviderTransport`, calls `src/wallet-core`'s `installProvider`) → bundled to a self-contained IIFE by `scripts/build-injected.ts` (`Bun.build`, `format: iife`) → written to `src-tauri/injected/inpage.js` → embedded in Rust via `include_str!` → set as the dapp webview's `initialization_script`.
 
-**`include_str!` is compile-time**, so editing `src/injected/*` or the SDK provider requires `bun run build:injected` **and** a Rust rebuild. `bun run tauri dev` does this automatically on startup (beforeDevCommand), but Tauri's file watcher will **not** rebuild the bundle mid-session.
+**`include_str!` is compile-time**, so editing `src/injected/*` or `src/wallet-core/*` requires `bun run build:injected` **and** a Rust rebuild. `bun run tauri dev` does this automatically on startup (beforeDevCommand), but Tauri's file watcher will **not** rebuild the bundle mid-session.
 
-### SDK relationship
-`auto-wallet-core` exports raw TS source (no build step in dev; consumers bundle it). It is consumed two ways here: type-only by the React shell, and bundled into the injected IIFE by `bun build`. Platform differences live behind adapter interfaces in `auto-wallet-core/src/adapters/` — `ProviderTransport`, `StorageAdapter`, `ConfirmAdapter`, `HidTransport`. AutoDesktop supplies the Tauri implementations; keep portable logic in the SDK, Tauri-specific glue here.
+### Wallet core relationship
+`src/wallet-core` is first-party AutoDesktop source. It is consumed by the injected IIFE through `bun build`, and its adapter boundaries (`ProviderTransport`, `StorageAdapter`, `ConfirmAdapter`, `HidTransport`) keep browser-page provider logic separate from Tauri-specific glue.
 
 ## Platform constraints (macOS / WKWebView)
 - **No WebHID/WebUSB** in WKWebView → Ledger/hardware support must go through a Rust `hidapi` transport behind `HidTransport`, not `@ledgerhq/hw-transport-webhid`.

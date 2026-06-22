@@ -1,9 +1,9 @@
 // AutoDesktop injection entry. Bundled to a self-contained IIFE
 // (scripts/build-injected.ts → src-tauri/injected/inpage.js) and injected into
 // every dApp webview as an initialization_script. It wires the Tauri transport
-// to the shared EIP-1193/6963 provider from auto-wallet-core.
+// to AutoDesktop's EIP-1193/6963 provider.
 
-import { installProvider, type ProviderTransport } from 'auto-wallet-core';
+import { installProvider, type ProviderTransport } from '../wallet-core';
 
 type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 

@@ -652,6 +652,8 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .okx-amount-input,
 .okx-amount-output {
@@ -993,6 +995,8 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .swap-provider-badges {
   display: inline-flex;
@@ -1915,7 +1919,12 @@
   font-weight: 700;
   color: var(--ink-2);
   cursor: pointer;
-  transition: all 0.12s;
+  transition-property: transform, background-color, border-color, color;
+  transition-duration: 0.12s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.cf-pill:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .cf-pill:hover {
   background: var(--surface-2);
@@ -2104,7 +2113,8 @@
   border-radius: 50%;
   object-fit: cover;
   background: var(--surface-2, rgba(127, 127, 127, 0.12));
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .coin-chain {
   position: absolute;
@@ -2579,6 +2589,8 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  outline: 1px solid var(--img-outline);
+  outline-offset: -1px;
 }
 .defi-main {
   flex: 1;

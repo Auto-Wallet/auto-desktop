@@ -7,26 +7,28 @@ AutoDesktop is the desktop counterpart to the **Auto Wallet** browser extension.
 > **Product north star & the 6 core features:** [VISION.md](VISION.md)
 > **How to work in this repo (architecture, security boundary, conventions):** [CLAUDE.md](CLAUDE.md)
 
-## Sibling packages
+## Related Code
 
-AutoDesktop is one of three packages kept as separate repos, linked via `bun link`:
+AutoDesktop owns its wallet core in this repo:
 
-| Package | Role |
+| Path | Role |
 | --- | --- |
-| `auto-wallet-core` (`../auto-wallet-core`) | Shared, platform-agnostic SDK — EIP-1193/6963 provider, platform adapter interfaces, and (over time) the ported wallet logic. Source of truth for both wallets. |
-| `auto-wallet` (`../auto-wallet`) | The existing Chrome MV3 browser-extension wallet. Will migrate onto the SDK. |
-| **`auto-desktop`** (this repo) | The Tauri desktop app — implements the Tauri-side adapters and all native/window/webview concerns. |
+| `src/wallet-core` | EIP-1193/6963 provider, platform adapter interfaces, and portable wallet-facing TypeScript. |
+| `src` | Trusted React shell UI plus the dApp injection entry. |
+| `src-tauri` | Tauri backend, native/window/webview concerns, key custody, signing, and RPC forwarding. |
+
+The existing Chrome MV3 browser-extension wallet (`../auto-wallet`) is maintained separately and does not consume this core.
 
 ## Quick start
 
 Use **bun** (not npm) for everything.
 
 ```bash
-bun install                 # install deps (also relinks the SDK)
+bun install                 # install deps
 bun run tauri dev           # run the app (builds the injected provider + vite + cargo)
 bun run tauri build         # production bundle (.app / .dmg)
 
-bun run build:injected      # rebuild the injected provider IIFE (required after editing src/injected/* or the SDK provider)
+bun run build:injected      # rebuild the injected provider IIFE (required after editing src/injected/* or src/wallet-core/*)
 bunx tsc --noEmit           # typecheck the frontend
 
 cd src-tauri && cargo test           # Rust unit tests + offline in-process E2E (deterministic, no network)
@@ -48,7 +50,7 @@ If the dev server is killed, a stray `vite` may hold port 1420 — free it with 
 
 ### Pending
 
-- **Ledger** (hardware wallet) — v1 requirement. WKWebView has no WebHID, so this needs a Rust `hidapi` transport behind the SDK's `HidTransport`. Presented in onboarding as an honest placeholder until wired.
+- **Ledger** (hardware wallet) — v1 requirement. WKWebView has no WebHID, so this needs a Rust `hidapi` transport behind `HidTransport`. Presented in onboarding as an honest placeholder until wired.
 - **Multi-wallet** — currently a single vault; importing a private key is the *first* wallet, not multiple independent secrets coexisting.
 - Custom ERC-20 tokens on the Wallet page, collapsible sidebar / editable URL bar.
 
@@ -78,7 +80,7 @@ The caller origin is derived from the engine-set `webview.url()`, never from a J
 
 ### Injection pipeline
 
-`src/injected/inpage.tauri.ts` (a Tauri `invoke`-based `ProviderTransport` calling the SDK's `installProvider`) → bundled to a self-contained IIFE by `scripts/build-injected.ts` → written to `src-tauri/injected/inpage.js` → embedded in Rust via `include_str!` → set as each dapp webview's `initialization_script`. Because `include_str!` is compile-time, editing `src/injected/*` or the SDK provider requires `bun run build:injected` **and** a Rust rebuild (`tauri dev` does this on startup, but not on mid-session file changes).
+`src/injected/inpage.tauri.ts` (a Tauri `invoke`-based `ProviderTransport` calling `src/wallet-core`'s `installProvider`) → bundled to a self-contained IIFE by `scripts/build-injected.ts` → written to `src-tauri/injected/inpage.js` → embedded in Rust via `include_str!` → set as each dapp webview's `initialization_script`. Because `include_str!` is compile-time, editing `src/injected/*` or `src/wallet-core/*` requires `bun run build:injected` **and** a Rust rebuild (`tauri dev` does this on startup, but not on mid-session file changes).
 
 ## Project layout
 
@@ -87,6 +89,7 @@ src/                    React shell (trusted UI)
   pages/                WalletPage, DappsPage, BrowserView, SettingsPage, LockScreen, ApprovalView
   lib/                  vault, chains, accounts, activeChain, useBalances, rpc, i18n, dapps, platform…
   injected/             inpage.tauri.ts — the provider transport bundled into dApp pages
+  wallet-core/          EIP-1193/6963 provider and wallet adapter interfaces
 src-tauri/src/          Rust backend
   lib.rs                window/webview setup, wallet bridge, vault + chain commands, in-process E2E
   vault.rs              BIP-39/32/44 derivation + Argon2id/AES-GCM keystore (pure crypto core)
