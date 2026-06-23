@@ -38,6 +38,7 @@ mod ledger;
 const DEFI_PROVIDER_TIMEOUT: Duration = Duration::from_secs(12);
 const DEBUG_SHELL_CONSOLE_MENU_ID: &str = "debug-shell-console";
 const DEBUG_DAPP_CONSOLE_MENU_ID: &str = "debug-dapp-console";
+const DAPP_LAYOUT_INVALIDATED_EVENT: &str = "dapp-layout-invalidated";
 
 #[derive(Serialize)]
 struct Wallet {
@@ -877,6 +878,10 @@ fn handle_debug_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
             };
             if let Some(dapp) = app.get_webview(&label) {
                 toggle_devtools(&dapp);
+                let _ = app.emit(
+                    DAPP_LAYOUT_INVALIDATED_EVENT,
+                    DappLayoutInvalidatedEvent { label },
+                );
             } else {
                 println!("[AutoDesktop] debug menu: active dApp webview {label:?} not found");
             }
@@ -2285,6 +2290,11 @@ fn close_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String
 struct DappNavigationEvent {
     label: String,
     url: String,
+}
+
+#[derive(Serialize, Clone)]
+struct DappLayoutInvalidatedEvent {
+    label: String,
 }
 
 fn registrable_site(host: &str) -> String {

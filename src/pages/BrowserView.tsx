@@ -122,11 +122,31 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     void openDapp(label, dapp.url, rectOf(el));
 
     const sync = () => void setDappBounds(label, rectOf(el));
+    const syncAfterLayoutSettles = () => {
+      sync();
+      requestAnimationFrame(() => {
+        sync();
+        requestAnimationFrame(sync);
+      });
+      window.setTimeout(sync, 80);
+      window.setTimeout(sync, 250);
+    };
     const ro = new ResizeObserver(sync);
     ro.observe(el);
     window.addEventListener("resize", sync);
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ label: string }>("dapp-layout-invalidated", (event) => {
+      if (event.payload.label !== label) return;
+      syncAfterLayoutSettles();
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
 
     return () => {
+      disposed = true;
+      unlisten?.();
       ro.disconnect();
       window.removeEventListener("resize", sync);
       void hideDapp(label);
