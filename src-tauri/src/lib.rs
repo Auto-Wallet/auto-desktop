@@ -861,7 +861,7 @@ fn toggle_devtools<R: Runtime>(webview: &tauri::Webview<R>) {
     }
 }
 
-fn handle_debug_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
+fn handle_debug_menu_event<R: Runtime + 'static>(app: &AppHandle<R>, menu_id: &str) {
     match menu_id {
         DEBUG_SHELL_CONSOLE_MENU_ID => {
             if let Some(shell) = app.get_webview("shell") {
@@ -878,6 +878,7 @@ fn handle_debug_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
             };
             if let Some(dapp) = app.get_webview(&label) {
                 toggle_devtools(&dapp);
+                repair_dapp_bounds_after_devtools(app.clone(), label.clone());
                 let _ = app.emit(
                     DAPP_LAYOUT_INVALIDATED_EVENT,
                     DappLayoutInvalidatedEvent { label },
@@ -890,7 +891,7 @@ fn handle_debug_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
     }
 }
 
-fn install_debug_menu<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
+fn install_debug_menu<R: Runtime + 'static>(app: &tauri::App<R>) -> tauri::Result<()> {
     let menu = Menu::default(app.handle())?;
     let debug_menu = SubmenuBuilder::new(app, "Debug")
         .text(DEBUG_SHELL_CONSOLE_MENU_ID, "Toggle Main Window Console")
@@ -2030,6 +2031,68 @@ fn validate_dapp_label(label: &str) -> Result<(), String> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DappBounds {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+fn dapp_bounds_state() -> &'static Mutex<HashMap<String, DappBounds>> {
+    static BOUNDS: OnceLock<Mutex<HashMap<String, DappBounds>>> = OnceLock::new();
+    BOUNDS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_dapp_bounds(label: &str, bounds: DappBounds) {
+    dapp_bounds_state()
+        .lock()
+        .unwrap()
+        .insert(label.to_string(), bounds);
+}
+
+fn forget_dapp_bounds(label: &str) {
+    dapp_bounds_state().lock().unwrap().remove(label);
+}
+
+fn last_dapp_bounds(label: &str) -> Option<DappBounds> {
+    dapp_bounds_state().lock().unwrap().get(label).copied()
+}
+
+fn apply_dapp_bounds<R: Runtime>(
+    dapp: &tauri::Webview<R>,
+    bounds: DappBounds,
+) -> Result<(), String> {
+    let (fx, fy) = content_to_frame(dapp, bounds.x, bounds.y);
+    dapp.set_position(LogicalPosition::new(fx, fy))
+        .map_err(|e| e.to_string())?;
+    dapp.set_size(LogicalSize::new(bounds.w.max(1.0), bounds.h.max(1.0)))
+        .map_err(|e| e.to_string())
+}
+
+fn repair_dapp_bounds_after_devtools<R: Runtime + 'static>(app: AppHandle<R>, label: String) {
+    const REPAIR_DELAYS_MS: [u64; 7] = [0, 50, 150, 300, 700, 1200, 2000];
+
+    tauri::async_runtime::spawn(async move {
+        for delay_ms in REPAIR_DELAYS_MS {
+            if delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            let Some(bounds) = last_dapp_bounds(&label) else {
+                println!("[AutoDesktop] dapp devtools repair: no bounds for {label}");
+                return;
+            };
+            let Some(dapp) = app.get_webview(&label) else {
+                println!("[AutoDesktop] dapp devtools repair: webview {label:?} not found");
+                return;
+            };
+            if let Err(e) = apply_dapp_bounds(&dapp, bounds) {
+                println!("[AutoDesktop] dapp devtools repair failed for {label}: {e}");
+            }
+        }
+    });
+}
+
 /// Create a tab webview (remote, untrusted) as a child of the main window, with
 /// the EIP-1193 provider injected. capabilities/dapp.json (`webviews: ["dapp-*"]`)
 /// grants it ONLY allow-wallet-request.
@@ -2096,15 +2159,13 @@ fn open_dapp<R: Runtime>(
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("open_dapp: refusing non-http(s) url: {url}"));
     }
+    let bounds = DappBounds { x, y, w, h };
+    remember_dapp_bounds(&label, bounds);
     let (dapp, newly_created) = match app.get_webview(&label) {
         Some(wv) => (wv, false),
         None => (create_dapp_webview(&app, &label, parsed, x, y, w, h)?, true),
     };
-    let (fx, fy) = content_to_frame(&dapp, x, y);
-    dapp.set_position(LogicalPosition::new(fx, fy))
-        .map_err(|e| e.to_string())?;
-    dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
-        .map_err(|e| e.to_string())?;
+    apply_dapp_bounds(&dapp, bounds)?;
     if newly_created {
         dapp.hide().map_err(|e| e.to_string())?;
     } else {
@@ -2126,12 +2187,10 @@ fn set_dapp_bounds<R: Runtime>(
     h: f64,
 ) -> Result<(), String> {
     validate_dapp_label(&label)?;
+    let bounds = DappBounds { x, y, w, h };
+    remember_dapp_bounds(&label, bounds);
     if let Some(dapp) = app.get_webview(&label) {
-        let (fx, fy) = content_to_frame(&dapp, x, y);
-        dapp.set_position(LogicalPosition::new(fx, fy))
-            .map_err(|e| e.to_string())?;
-        dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
-            .map_err(|e| e.to_string())?;
+        apply_dapp_bounds(&dapp, bounds)?;
     }
     Ok(())
 }
@@ -2282,6 +2341,7 @@ fn close_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String
     if let Some(dapp) = app.get_webview(&label) {
         dapp.close().map_err(|e| e.to_string())?;
     }
+    forget_dapp_bounds(&label);
     clear_active_dapp_label(&label);
     Ok(())
 }
