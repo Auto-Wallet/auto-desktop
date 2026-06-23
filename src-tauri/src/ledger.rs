@@ -215,9 +215,7 @@ fn map_sw(sw: u16) -> String {
 fn parse_address_response(data: &[u8]) -> Result<String, String> {
     let pk_len = *data.first().ok_or("empty address response")? as usize;
     let addr_len_idx = 1 + pk_len;
-    let addr_len = *data
-        .get(addr_len_idx)
-        .ok_or("truncated address response")? as usize;
+    let addr_len = *data.get(addr_len_idx).ok_or("truncated address response")? as usize;
     let start = addr_len_idx + 1;
     let ascii = data
         .get(start..start + addr_len)
@@ -349,7 +347,10 @@ fn exchange_signing(
 pub fn get_address(path: &str) -> Result<String, String> {
     let api = HidApi::new().map_err(|e| format!("HID init failed: {e}"))?;
     let device = open_ledger(&api)?;
-    let resp = exchange(&device, &apdu(INS_GET_ADDRESS, 0x00, 0x00, &path_apdu_bytes(path)?)?)?;
+    let resp = exchange(
+        &device,
+        &apdu(INS_GET_ADDRESS, 0x00, 0x00, &path_apdu_bytes(path)?)?,
+    )?;
     parse_address_response(&resp)
 }
 
@@ -417,10 +418,7 @@ mod tests {
     fn parses_ledger_live_path() {
         // m/44'/60'/0'/0/0 → 5 hardened/normal components.
         let comps = parse_bip32_path("m/44'/60'/0'/0/0").unwrap();
-        assert_eq!(
-            comps,
-            vec![44 | HARDENED, 60 | HARDENED, HARDENED, 0, 0]
-        );
+        assert_eq!(comps, vec![44 | HARDENED, 60 | HARDENED, HARDENED, 0, 0]);
         // The APDU bytes: count, then 4 BE bytes per component.
         let bytes = path_apdu_bytes("m/44'/60'/0'/0/0").unwrap();
         assert_eq!(
@@ -494,9 +492,13 @@ mod tests {
     fn check_sw_maps_status_words() {
         assert_eq!(check_sw(&[0xde, 0xad, 0x90, 0x00]).unwrap(), &[0xde, 0xad]);
         assert!(check_sw(&[0x69, 0x85]).unwrap_err().contains("rejected"));
-        assert!(check_sw(&[0x6e, 0x00]).unwrap_err().contains("Ethereum app"));
+        assert!(check_sw(&[0x6e, 0x00])
+            .unwrap_err()
+            .contains("Ethereum app"));
         assert!(check_sw(&[0x69, 0x82]).unwrap_err().contains("Unlock"));
-        assert!(check_sw(&[0x6a, 0x80]).unwrap_err().contains("blind signing"));
+        assert!(check_sw(&[0x6a, 0x80])
+            .unwrap_err()
+            .contains("blind signing"));
     }
 
     #[test]

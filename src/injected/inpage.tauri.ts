@@ -128,6 +128,12 @@ installLinkInterceptor();
 // dialog shown by the trusted shell overlay above the dApp.
 function installDialogInterceptor() {
   type DialogKind = 'alert' | 'confirm' | 'prompt' | 'print';
+  type DialogResult = { action?: string; value?: string | null };
+
+  const syncDialogUrl = () => {
+    const w = window as unknown as { __AUTO_DESKTOP_DIALOG_SYNC_URL__?: string | null };
+    return w.__AUTO_DESKTOP_DIALOG_SYNC_URL__ || null;
+  };
 
   const showDialog = (kind: DialogKind, message: string, defaultValue?: string) => {
     void getInvoke()
@@ -135,21 +141,35 @@ function installDialogInterceptor() {
       .catch((e) => console.error('[AutoDesktop] dapp_dialog failed', e));
   };
 
+  const showDialogSync = (kind: DialogKind, message: string, defaultValue?: string): DialogResult => {
+    const url = syncDialogUrl();
+    if (!url) return { action: 'cancel', value: null };
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url, false);
+      xhr.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
+      xhr.send(JSON.stringify({ kind, message, default_value: defaultValue ?? null }));
+      if (xhr.status < 200 || xhr.status >= 300) return { action: 'cancel', value: null };
+      const result = JSON.parse(xhr.responseText) as DialogResult;
+      return result && typeof result === 'object' ? result : { action: 'cancel', value: null };
+    } catch (e) {
+      console.error('[AutoDesktop] dapp_dialog sync failed', e);
+      return { action: 'cancel', value: null };
+    }
+  };
+
   window.alert = function (message?: unknown): void {
     showDialog('alert', String(message ?? ''));
   };
 
   window.confirm = function (message?: string): boolean {
-    showDialog('confirm', String(message ?? ''));
-    // Tauri IPC is async while confirm() is synchronous. We cannot block the
-    // WKWebView main thread waiting for the custom UI, so default to the safe
-    // browser-cancel value after surfacing the dialog.
-    return false;
+    return showDialogSync('confirm', String(message ?? '')).action === 'ok';
   };
 
   window.prompt = function (message?: string, defaultValue?: string): string | null {
-    showDialog('prompt', String(message ?? ''), defaultValue == null ? '' : String(defaultValue));
-    return null;
+    const result = showDialogSync('prompt', String(message ?? ''), defaultValue == null ? '' : String(defaultValue));
+    if (result.action !== 'ok') return null;
+    return typeof result.value === 'string' ? result.value : '';
   };
 
   window.print = function (): void {

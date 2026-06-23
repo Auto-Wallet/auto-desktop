@@ -53,9 +53,11 @@ pub fn maybe_start<R: Runtime>(app: &AppHandle<R>) {
     let dir = PathBuf::from(dir);
     std::fs::create_dir_all(&dir).expect("smoke: cannot create AUTODESKTOP_SMOKE_DIR");
 
-    let listener =
-        TcpListener::bind("127.0.0.1:0").expect("smoke: cannot bind loopback listener");
-    let port = listener.local_addr().expect("smoke: listener has no addr").port();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("smoke: cannot bind loopback listener");
+    let port = listener
+        .local_addr()
+        .expect("smoke: listener has no addr")
+        .port();
     std::thread::spawn(move || serve(listener, dir));
 
     let url = format!("http://127.0.0.1:{port}/");
@@ -87,8 +89,7 @@ fn serve(listener: TcpListener, dir: PathBuf) {
             // Write-then-rename so the CI poller never reads a partial file.
             let tmp = dir.join("smoke-result.json.tmp");
             std::fs::write(&tmp, payload.as_bytes()).expect("smoke: write result");
-            std::fs::rename(&tmp, dir.join("smoke-result.json"))
-                .expect("smoke: rename result");
+            std::fs::rename(&tmp, dir.join("smoke-result.json")).expect("smoke: rename result");
             let _ = stream.write_all(
                 b"HTTP/1.1 204 No Content\r\nconnection: close\r\ncontent-length: 0\r\n\r\n",
             );

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as B64;
@@ -1889,17 +1891,250 @@ struct DappDialogResult {
     value: Option<String>,
 }
 
-fn dapp_dialog_pending()
--> &'static Mutex<HashMap<String, tokio::sync::oneshot::Sender<DappDialogResult>>> {
+#[derive(Debug, Clone, Deserialize)]
+struct SyncDappDialogPayload {
+    kind: String,
+    message: String,
+    default_value: Option<String>,
+}
+
+fn dapp_dialog_pending(
+) -> &'static Mutex<HashMap<String, tokio::sync::oneshot::Sender<DappDialogResult>>> {
     static PENDING: OnceLock<
         Mutex<HashMap<String, tokio::sync::oneshot::Sender<DappDialogResult>>>,
     > = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn dapp_dialog_sync_pending() -> &'static Mutex<HashMap<String, mpsc::Sender<DappDialogResult>>> {
+    static PENDING: OnceLock<Mutex<HashMap<String, mpsc::Sender<DappDialogResult>>>> =
+        OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn next_dapp_dialog_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     format!("dlg-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+fn dapp_dialog_sync_port() -> &'static OnceLock<u16> {
+    static PORT: OnceLock<u16> = OnceLock::new();
+    &PORT
+}
+
+fn dapp_dialog_sync_url() -> Option<String> {
+    dapp_dialog_sync_port().get().map(|port| {
+        // Use IPv4 localhost deliberately: remote dApp pages can synchronously
+        // XHR to loopback, while Tauri app-command IPC is Promise-only.
+        format!("http://127.0.0.1:{port}/dapp-dialog")
+    })
+}
+
+fn start_dapp_dialog_sync_server<R: tauri::Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    if dapp_dialog_sync_port().get().is_some() {
+        return Ok(());
+    }
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("dapp dialog sync bridge bind failed: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("dapp dialog sync bridge local_addr failed: {e}"))?
+        .port();
+    let _ = dapp_dialog_sync_port().set(port);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else {
+                continue;
+            };
+            let app = app.clone();
+            std::thread::spawn(move || handle_dapp_dialog_sync_stream(app, stream));
+        }
+    });
+    Ok(())
+}
+
+fn clean_header_value(value: &str) -> String {
+    value.chars().filter(|c| *c != '\r' && *c != '\n').collect()
+}
+
+fn http_origin(headers: &HashMap<String, String>) -> String {
+    headers
+        .get("origin")
+        .map(|s| clean_header_value(s))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "*".to_string())
+}
+
+fn write_dialog_http_response(
+    stream: &mut TcpStream,
+    status: &str,
+    origin: &str,
+    body: &str,
+    content_type: &str,
+) {
+    let response = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {}\r\n\
+         Access-Control-Allow-Origin: {}\r\n\
+         Access-Control-Allow-Methods: POST, OPTIONS\r\n\
+         Access-Control-Allow-Headers: content-type\r\n\
+         Access-Control-Allow-Private-Network: true\r\n\
+         Vary: Origin\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        body.as_bytes().len(),
+        clean_header_value(origin),
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
+fn read_dialog_http_request(
+    stream: &mut TcpStream,
+) -> Result<(String, String, HashMap<String, String>, Vec<u8>), String> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut data = Vec::new();
+    let mut buf = [0u8; 4096];
+    let mut header_end = None;
+    let mut content_len = 0usize;
+
+    loop {
+        let n = stream
+            .read(&mut buf)
+            .map_err(|e| format!("dialog bridge read failed: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+        if data.len() > 128 * 1024 {
+            return Err("dialog bridge request too large".into());
+        }
+        if header_end.is_none() {
+            header_end = data
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|p| p + 4);
+            if let Some(end) = header_end {
+                let header_text = String::from_utf8_lossy(&data[..end]);
+                for line in header_text.lines().skip(1) {
+                    let Some((name, value)) = line.split_once(':') else {
+                        continue;
+                    };
+                    if name.eq_ignore_ascii_case("content-length") {
+                        content_len = value.trim().parse::<usize>().unwrap_or(0);
+                    }
+                }
+            }
+        }
+        if let Some(end) = header_end {
+            if data.len() >= end + content_len {
+                break;
+            }
+        }
+    }
+
+    let end = header_end.ok_or("dialog bridge missing HTTP headers")?;
+    let header_text = String::from_utf8_lossy(&data[..end]);
+    let mut lines = header_text.lines();
+    let request_line = lines.next().ok_or("dialog bridge missing request line")?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
+    let mut headers = HashMap::new();
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+    }
+    let body = data[end..(end + content_len).min(data.len())].to_vec();
+    Ok((method, path, headers, body))
+}
+
+fn handle_dapp_dialog_sync_stream<R: tauri::Runtime>(app: AppHandle<R>, mut stream: TcpStream) {
+    let Ok((method, path, headers, body)) = read_dialog_http_request(&mut stream) else {
+        write_dialog_http_response(
+            &mut stream,
+            "400 Bad Request",
+            "*",
+            r#"{"action":"cancel","value":null}"#,
+            "application/json",
+        );
+        return;
+    };
+    let origin = http_origin(&headers);
+    if method == "OPTIONS" {
+        write_dialog_http_response(&mut stream, "204 No Content", &origin, "", "text/plain");
+        return;
+    }
+    if method != "POST" || path != "/dapp-dialog" {
+        write_dialog_http_response(
+            &mut stream,
+            "404 Not Found",
+            &origin,
+            r#"{"action":"cancel","value":null}"#,
+            "application/json",
+        );
+        return;
+    }
+    let Ok(payload) = serde_json::from_slice::<SyncDappDialogPayload>(&body) else {
+        write_dialog_http_response(
+            &mut stream,
+            "400 Bad Request",
+            &origin,
+            r#"{"action":"cancel","value":null}"#,
+            "application/json",
+        );
+        return;
+    };
+    if !matches!(
+        payload.kind.as_str(),
+        "alert" | "confirm" | "prompt" | "print"
+    ) {
+        write_dialog_http_response(
+            &mut stream,
+            "400 Bad Request",
+            &origin,
+            r#"{"action":"cancel","value":null}"#,
+            "application/json",
+        );
+        return;
+    }
+
+    let id = next_dapp_dialog_id();
+    let (tx, rx) = mpsc::channel::<DappDialogResult>();
+    dapp_dialog_sync_pending()
+        .lock()
+        .unwrap()
+        .insert(id.clone(), tx);
+    let req = DappDialogRequest {
+        id: id.clone(),
+        kind: payload.kind,
+        origin: origin.clone(),
+        message: payload.message,
+        default_value: payload.default_value,
+    };
+    if let Err(e) = app.emit("dapp-dialog-request", req) {
+        dapp_dialog_sync_pending().lock().unwrap().remove(&id);
+        println!("[AutoDesktop] warn: dapp dialog sync emit failed: {e}");
+        write_dialog_http_response(
+            &mut stream,
+            "500 Internal Server Error",
+            &origin,
+            r#"{"action":"cancel","value":null}"#,
+            "application/json",
+        );
+        return;
+    }
+
+    let result = rx
+        .recv_timeout(Duration::from_secs(300))
+        .unwrap_or_default();
+    dapp_dialog_sync_pending().lock().unwrap().remove(&id);
+    let body = serde_json::to_string(&result)
+        .unwrap_or_else(|_| r#"{"action":"cancel","value":null}"#.to_string());
+    write_dialog_http_response(&mut stream, "200 OK", &origin, &body, "application/json");
 }
 
 #[tauri::command]
@@ -1944,10 +2179,14 @@ async fn dapp_dialog<R: tauri::Runtime>(
 
 #[tauri::command]
 fn resolve_dapp_dialog(id: String, action: String, value: Option<String>) -> Result<(), String> {
-    let Some(sender) = dapp_dialog_pending().lock().unwrap().remove(&id) else {
+    let result = DappDialogResult { action, value };
+    if let Some(sender) = dapp_dialog_pending().lock().unwrap().remove(&id) {
+        let _ = sender.send(result);
         return Ok(());
-    };
-    let _ = sender.send(DappDialogResult { action, value });
+    }
+    if let Some(sender) = dapp_dialog_sync_pending().lock().unwrap().remove(&id) {
+        let _ = sender.send(result);
+    }
     Ok(())
 }
 
@@ -2048,11 +2287,8 @@ fn create_dapp_webview<R: Runtime>(
                 payload.url()
             );
             if payload.event() == PageLoadEvent::Finished {
-                let should_show = active_dapp_label()
-                    .lock()
-                    .unwrap()
-                    .as_deref()
-                    == Some(webview.label());
+                let should_show =
+                    active_dapp_label().lock().unwrap().as_deref() == Some(webview.label());
                 if should_show {
                     let _ = webview.show();
                 }
@@ -2065,7 +2301,7 @@ fn create_dapp_webview<R: Runtime>(
                 );
             }
         })
-        .initialization_script(INPAGE_PROVIDER);
+        .initialization_script(dapp_initialization_script());
     window
         .add_child(
             builder,
@@ -2172,11 +2408,7 @@ fn sync_toast_overlay<R: Runtime>(
             )
             .transparent(true);
             window
-                .add_child(
-                    builder,
-                    LogicalPosition::new(x, y),
-                    LogicalSize::new(w, h),
-                )
+                .add_child(builder, LogicalPosition::new(x, y), LogicalSize::new(w, h))
                 .map_err(|e| e.to_string())?
         }
     };
@@ -2240,11 +2472,7 @@ fn sync_menu_overlay<R: Runtime>(
             )
             .transparent(true);
             window
-                .add_child(
-                    builder,
-                    LogicalPosition::new(x, y),
-                    LogicalSize::new(w, h),
-                )
+                .add_child(builder, LogicalPosition::new(x, y), LogicalSize::new(w, h))
                 .map_err(|e| e.to_string())?
         }
     };
@@ -2355,13 +2583,7 @@ fn open_external_url<R: Runtime>(
                 webview
                     .eval(format!("window.location.assign({js_target});"))
                     .map_err(|e| e.to_string())?;
-                let _ = app.emit(
-                    "dapp-navigated",
-                    DappNavigationEvent {
-                        label,
-                        url: target,
-                    },
-                );
+                let _ = app.emit("dapp-navigated", DappNavigationEvent { label, url: target });
                 return Ok(());
             }
         }
@@ -2823,7 +3045,9 @@ async fn receipt_status(chain: &ChainCfg, hash: &str) -> Result<Option<String>, 
 }
 
 #[tauri::command]
-async fn sync_activity_receipts<R: Runtime>(app: AppHandle<R>) -> Result<Vec<ActivityRecord>, String> {
+async fn sync_activity_receipts<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<ActivityRecord>, String> {
     let mut records = load_activity_records(&app);
     let pending: Vec<(usize, String, String)> = records
         .iter()
@@ -3332,7 +3556,10 @@ async fn okx_get(path: &str, params: Vec<(&str, String)>) -> Result<Value, Strin
 
     Err(format!(
         "OKX DEX rate limited. Retry after about {}s.",
-        last_rate_limit.unwrap_or_else(|| Duration::from_secs(4)).as_secs().max(1)
+        last_rate_limit
+            .unwrap_or_else(|| Duration::from_secs(4))
+            .as_secs()
+            .max(1)
     ))
 }
 
@@ -3378,7 +3605,10 @@ async fn okx_dex_quote(req: OkxQuoteRequest) -> Result<Value, String> {
         ("amount", req.amount),
         ("fromTokenAddress", req.from_token_address),
         ("toTokenAddress", req.to_token_address),
-        ("swapMode", req.swap_mode.unwrap_or_else(|| "exactIn".to_string())),
+        (
+            "swapMode",
+            req.swap_mode.unwrap_or_else(|| "exactIn".to_string()),
+        ),
     ];
     if let Some(value) = req.price_impact_protection_percent {
         params.push(("priceImpactProtectionPercent", value));
@@ -3393,7 +3623,10 @@ async fn okx_dex_swap(req: OkxSwapRequest) -> Result<Value, String> {
         ("amount", req.amount),
         ("fromTokenAddress", req.from_token_address),
         ("toTokenAddress", req.to_token_address),
-        ("swapMode", req.swap_mode.unwrap_or_else(|| "exactIn".to_string())),
+        (
+            "swapMode",
+            req.swap_mode.unwrap_or_else(|| "exactIn".to_string()),
+        ),
         ("slippagePercent", req.slippage_percent),
         ("userWalletAddress", req.user_wallet_address),
     ];
@@ -4848,6 +5081,13 @@ const LARGE_SCREEN_H: f64 = 1440.0;
 /// Injected into every dApp webview before page scripts.
 const INPAGE_PROVIDER: &str = include_str!("../injected/inpage.js");
 
+fn dapp_initialization_script() -> String {
+    let sync_url = serde_json::to_string(&dapp_dialog_sync_url()).unwrap_or_else(|_| "null".into());
+    format!(
+        "Object.defineProperty(window, '__AUTO_DESKTOP_DIALOG_SYNC_URL__', {{ value: {sync_url}, configurable: false }});\n{INPAGE_PROVIDER}"
+    )
+}
+
 fn startup_window_size<R: Runtime>(app: &tauri::App<R>) -> (LogicalSize<f64>, bool) {
     let preferred = LogicalSize::new(WIN_W, WIN_H);
     let Ok(Some(monitor)) = app.primary_monitor() else {
@@ -4983,6 +5223,9 @@ pub fn run() {
             // (Migrates a legacy vault.json into wallets/ as a side effect.)
             if let Err(e) = boot_load_ledger_only(app.handle()) {
                 println!("[AutoDesktop] warn: could not restore Ledger wallets: {e}");
+            }
+            if let Err(e) = start_dapp_dialog_sync_server(app.handle().clone()) {
+                println!("[AutoDesktop] warn: {e}");
             }
             install_debug_menu(app)?;
             let (startup_size, should_maximize) = startup_window_size(app);
@@ -6006,8 +6249,12 @@ mod e2e {
         invoke(&shell, "hide_dapp", json!({ "label": "dapp-0" }))
             .expect("shell can hide active dapp");
 
-        let err = call(&dapp, "personal_sign", json!(["0x48656c6c6f", SPIKE_ACCOUNT]))
-            .unwrap_err();
+        let err = call(
+            &dapp,
+            "personal_sign",
+            json!(["0x48656c6c6f", SPIKE_ACCOUNT]),
+        )
+        .unwrap_err();
         assert!(
             err.as_str()
                 .unwrap_or_default()

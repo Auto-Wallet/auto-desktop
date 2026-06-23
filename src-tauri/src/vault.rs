@@ -72,13 +72,7 @@ pub fn derive_account(mnemonic: &str, index: u32) -> Result<(SigningKey, String)
     // BIP-39 seed (empty passphrase — the standard for EVM wallets).
     let seed = Zeroizing::new(m.to_seed_normalized(""));
 
-    let path = [
-        44 | HARDENED,
-        60 | HARDENED,
-        0 | HARDENED,
-        0,
-        index,
-    ];
+    let path = [44 | HARDENED, 60 | HARDENED, 0 | HARDENED, 0, index];
     let (mut key, mut chain_code) = master_key(seed.as_slice())?;
     for &child in &path {
         let (k, c) = ckd_priv(&key, &chain_code, child)?;
@@ -95,7 +89,10 @@ pub fn derive_account(mnemonic: &str, index: u32) -> Result<(SigningKey, String)
 /// Used by the "import private key" onboarding path. Rejects wrong-length input
 /// and out-of-range/zero scalars (fail loud — no silent fallback).
 pub fn parse_private_key(input: &str) -> Result<SigningKey, String> {
-    let body = input.trim().strip_prefix("0x").unwrap_or_else(|| input.trim());
+    let body = input
+        .trim()
+        .strip_prefix("0x")
+        .unwrap_or_else(|| input.trim());
     if body.len() != 64 {
         return Err("private key must be 32 bytes (64 hex characters)".to_string());
     }
@@ -258,8 +255,7 @@ fn derive_kek(
     t_cost: u32,
     p_cost: u32,
 ) -> Result<Zeroizing<[u8; 32]>, String> {
-    let params =
-        Params::new(m_cost, t_cost, p_cost, Some(32)).map_err(|e| e.to_string())?;
+    let params = Params::new(m_cost, t_cost, p_cost, Some(32)).map_err(|e| e.to_string())?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut kek = Zeroizing::new([0u8; 32]);
     argon2
@@ -342,8 +338,7 @@ mod tests {
     // Anvil/Hardhat's well-known dev mnemonic. Its m/44'/60'/0'/0/0 account is the
     // exact key/address hard-coded as DEV_PRIVKEY_HEX/SPIKE_ACCOUNT today, so it is a
     // strong external oracle for the whole BIP-39→44 pipeline. NOT a real secret.
-    const TEST_MNEMONIC: &str =
-        "test test test test test test test test test test test junk";
+    const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
     #[test]
     fn derive_matches_known_anvil_vectors() {
@@ -377,17 +372,15 @@ mod tests {
     #[test]
     fn parse_private_key_matches_anvil_account_0() {
         // Anvil #0's well-known key must yield Anvil #0's address (oracle).
-        let key = parse_private_key(
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        )
-        .unwrap();
+        let key =
+            parse_private_key("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+                .unwrap();
         let addr = crate::address_from_verifying_key(key.verifying_key());
         assert_eq!(addr, "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
         // The same key without the 0x prefix must parse identically.
-        let key2 = parse_private_key(
-            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        )
-        .unwrap();
+        let key2 =
+            parse_private_key("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+                .unwrap();
         assert_eq!(key2.to_bytes(), key.to_bytes());
     }
 
@@ -425,7 +418,10 @@ mod tests {
         // No encrypted secret at rest, and the crypto fields are omitted from JSON.
         assert!(ks.ciphertext.is_none() && ks.salt.is_none());
         let json = serde_json::to_string(&ks).unwrap();
-        assert!(!json.contains("ciphertext"), "ledger keystore must not serialize a ciphertext");
+        assert!(
+            !json.contains("ciphertext"),
+            "ledger keystore must not serialize a ciphertext"
+        );
         let back: Keystore = serde_json::from_str(&json).unwrap();
         assert_eq!(back.kind, "ledger");
         assert_eq!(back.path.as_deref(), Some("m/44'/60'/0'/0/0"));
@@ -447,7 +443,13 @@ mod tests {
             index: 0,
             address: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266".to_string(),
         }];
-        let ks = seal("correct horse battery staple", TEST_MNEMONIC, "hd", accounts.clone()).unwrap();
+        let ks = seal(
+            "correct horse battery staple",
+            TEST_MNEMONIC,
+            "hd",
+            accounts.clone(),
+        )
+        .unwrap();
         // The mnemonic must NOT appear in any plaintext field.
         assert!(!ks.ciphertext.as_deref().unwrap().contains("test"));
         assert_eq!(ks.kind, "hd");

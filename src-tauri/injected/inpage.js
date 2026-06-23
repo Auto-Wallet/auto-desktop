@@ -254,19 +254,42 @@
   }
   installLinkInterceptor();
   function installDialogInterceptor() {
+    const syncDialogUrl = () => {
+      const w = window;
+      return w.__AUTO_DESKTOP_DIALOG_SYNC_URL__ || null;
+    };
     const showDialog = (kind, message, defaultValue) => {
       getInvoke().then((invoke) => invoke("dapp_dialog", { kind, message, defaultValue })).catch((e) => console.error("[AutoDesktop] dapp_dialog failed", e));
+    };
+    const showDialogSync = (kind, message, defaultValue) => {
+      const url = syncDialogUrl();
+      if (!url)
+        return { action: "cancel", value: null };
+      try {
+        const xhr = new XMLHttpRequest;
+        xhr.open("POST", url, false);
+        xhr.setRequestHeader("Content-Type", "text/plain;charset=UTF-8");
+        xhr.send(JSON.stringify({ kind, message, default_value: defaultValue ?? null }));
+        if (xhr.status < 200 || xhr.status >= 300)
+          return { action: "cancel", value: null };
+        const result = JSON.parse(xhr.responseText);
+        return result && typeof result === "object" ? result : { action: "cancel", value: null };
+      } catch (e) {
+        console.error("[AutoDesktop] dapp_dialog sync failed", e);
+        return { action: "cancel", value: null };
+      }
     };
     window.alert = function(message) {
       showDialog("alert", String(message ?? ""));
     };
     window.confirm = function(message) {
-      showDialog("confirm", String(message ?? ""));
-      return false;
+      return showDialogSync("confirm", String(message ?? "")).action === "ok";
     };
     window.prompt = function(message, defaultValue) {
-      showDialog("prompt", String(message ?? ""), defaultValue == null ? "" : String(defaultValue));
-      return null;
+      const result = showDialogSync("prompt", String(message ?? ""), defaultValue == null ? "" : String(defaultValue));
+      if (result.action !== "ok")
+        return null;
+      return typeof result.value === "string" ? result.value : "";
     };
     window.print = function() {
       showDialog("print", "This page requested printing.");

@@ -92,8 +92,14 @@ pub fn hash_struct(struct_type: &str, data: &Value, types: &Value) -> Result<[u8
         .and_then(|v| v.as_array())
         .ok_or_else(|| format!("unknown type {struct_type}"))?;
     for f in fields {
-        let name = f.get("name").and_then(|v| v.as_str()).ok_or("field missing name")?;
-        let ftype = f.get("type").and_then(|v| v.as_str()).ok_or("field missing type")?;
+        let name = f
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or("field missing name")?;
+        let ftype = f
+            .get("type")
+            .and_then(|v| v.as_str())
+            .ok_or("field missing type")?;
         let value = data
             .get(name)
             .ok_or_else(|| format!("missing field '{name}' for {struct_type}"))?;
@@ -121,7 +127,9 @@ fn encode_field(field_type: &str, value: &Value, types: &Value) -> Result<[u8; 3
     }
     // Atomic types.
     match field_type {
-        "string" => Ok(keccak(value.as_str().ok_or("string value expected")?.as_bytes())),
+        "string" => Ok(keccak(
+            value.as_str().ok_or("string value expected")?.as_bytes(),
+        )),
         "bytes" => Ok(keccak(&parse_hex(value)?)),
         "bool" => {
             let mut o = [0u8; 32];
@@ -140,7 +148,9 @@ fn encode_field(field_type: &str, value: &Value, types: &Value) -> Result<[u8; 3
         t if t.starts_with("int") => parse_int256(value),
         t if t.starts_with("bytes") => {
             // bytesN — left-aligned (the value is exactly N bytes).
-            let n: usize = t[5..].parse().map_err(|_| format!("bad fixed-bytes type {t}"))?;
+            let n: usize = t[5..]
+                .parse()
+                .map_err(|_| format!("bad fixed-bytes type {t}"))?;
             let b = parse_hex(value)?;
             if b.len() != n {
                 return Err(format!("{t} expects {n} bytes, got {}", b.len()));
@@ -178,7 +188,11 @@ fn parse_uint256(v: &Value) -> Result<[u8; 32], String> {
     }
     let s = v.as_str().ok_or("uint value expected a number or string")?;
     if let Some(hexpart) = s.strip_prefix("0x") {
-        let padded = if hexpart.len() % 2 == 1 { format!("0{hexpart}") } else { hexpart.to_string() };
+        let padded = if hexpart.len() % 2 == 1 {
+            format!("0{hexpart}")
+        } else {
+            hexpart.to_string()
+        };
         let bytes = hex::decode(&padded).map_err(|e| format!("bad uint hex: {e}"))?;
         if bytes.len() > 32 {
             return Err("uint256 exceeds 32 bytes".to_string());
@@ -218,7 +232,9 @@ fn parse_int256(v: &Value) -> Result<[u8; 32], String> {
 fn decimal_to_be32(s: &str) -> Result<[u8; 32], String> {
     let mut out = [0u8; 32];
     for ch in s.chars() {
-        let d = ch.to_digit(10).ok_or_else(|| format!("bad decimal digit in {s}"))? as u32;
+        let d = ch
+            .to_digit(10)
+            .ok_or_else(|| format!("bad decimal digit in {s}"))? as u32;
         let mut carry = d;
         for i in (0..32).rev() {
             let cur = out[i] as u32 * 10 + carry;

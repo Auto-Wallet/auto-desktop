@@ -59,7 +59,11 @@ fn strip_leading_zeros(b: &[u8]) -> Vec<u8> {
 pub fn parse_quantity(hex: &str) -> Result<Vec<u8>, String> {
     let s = hex.strip_prefix("0x").unwrap_or(hex);
     // Allow an odd number of nibbles (e.g. "0x1").
-    let padded = if s.len() % 2 == 1 { format!("0{s}") } else { s.to_string() };
+    let padded = if s.len() % 2 == 1 {
+        format!("0{s}")
+    } else {
+        s.to_string()
+    };
     let bytes = hex::decode(&padded).map_err(|e| format!("bad quantity {hex}: {e}"))?;
     Ok(strip_leading_zeros(&bytes))
 }
@@ -186,7 +190,7 @@ mod tests {
         assert_eq!(rlp_bytes(b""), vec![0x80]);
         assert_eq!(rlp_bytes(&[0x0f]), vec![0x0f]); // single byte < 0x80
         assert_eq!(rlp_bytes(&[0x00]), vec![0x00]); // a literal zero byte string
-        // long string (56 bytes) → 0xb8, len, bytes…
+                                                    // long string (56 bytes) → 0xb8, len, bytes…
         let long = vec![0x61u8; 56];
         let enc = rlp_bytes(&long);
         assert_eq!(&enc[..2], &[0xb8, 56]);
@@ -219,9 +223,17 @@ mod tests {
         assert_eq!(parse_quantity("0x1").unwrap(), vec![0x01]); // odd nibble count
         assert_eq!(parse_quantity("0x00").unwrap(), Vec::<u8>::new()); // zero → empty
         assert_eq!(parse_address("0x").unwrap(), Vec::<u8>::new()); // contract creation
-        assert_eq!(parse_address(&format!("0x{}", "11".repeat(20))).unwrap().len(), 20);
+        assert_eq!(
+            parse_address(&format!("0x{}", "11".repeat(20)))
+                .unwrap()
+                .len(),
+            20
+        );
         assert!(parse_address("0x1234").is_err()); // wrong length
-        assert_eq!(parse_data("0xdeadbeef").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            parse_data("0xdeadbeef").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
     }
 
     #[test]
@@ -242,7 +254,7 @@ mod tests {
             max_fee_per_gas: parse_quantity("0x77359400").unwrap(),          // 2 gwei
             gas_limit: parse_quantity("0x5208").unwrap(),                    // 21000
             to: parse_address("0x70997970c51812dc3a010c7d01b50e0d17dc79c8").unwrap(),
-            value: parse_quantity("0xde0b6b3a7640000").unwrap(),            // 1e18 wei
+            value: parse_quantity("0xde0b6b3a7640000").unwrap(), // 1e18 wei
             data: parse_data("0x").unwrap(),
         };
 
@@ -267,7 +279,11 @@ mod tests {
         // ETH transfer the body is short, so we decode the outer list and walk items.
         let items = decode_list_items(&raw[1..]); // skip the 0x02 type byte
         let n = items.len();
-        let y = if items[n - 3].is_empty() { 0u8 } else { items[n - 3][0] };
+        let y = if items[n - 3].is_empty() {
+            0u8
+        } else {
+            items[n - 3][0]
+        };
         let r = left_pad32(&items[n - 2]);
         let s = left_pad32(&items[n - 1]);
         (r, s, y)
