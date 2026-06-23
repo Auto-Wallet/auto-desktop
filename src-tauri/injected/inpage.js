@@ -254,42 +254,91 @@
   }
   installLinkInterceptor();
   function installDialogInterceptor() {
-    const syncDialogUrl = () => {
-      const w = window;
-      return w.__AUTO_DESKTOP_DIALOG_SYNC_URL__ || null;
-    };
-    const showDialog = (kind, message, defaultValue) => {
-      getInvoke().then((invoke) => invoke("dapp_dialog", { kind, message, defaultValue })).catch((e) => console.error("[AutoDesktop] dapp_dialog failed", e));
-    };
-    const showDialogSync = (kind, message, defaultValue) => {
-      const url = syncDialogUrl();
-      if (!url)
-        return { action: "cancel", value: null };
-      try {
-        const xhr = new XMLHttpRequest;
-        xhr.open("POST", url, false);
-        xhr.setRequestHeader("Content-Type", "text/plain;charset=UTF-8");
-        xhr.send(JSON.stringify({ kind, message, default_value: defaultValue ?? null }));
-        if (xhr.status < 200 || xhr.status >= 300)
-          return { action: "cancel", value: null };
-        const result = JSON.parse(xhr.responseText);
-        return result && typeof result === "object" ? result : { action: "cancel", value: null };
-      } catch (e) {
-        console.error("[AutoDesktop] dapp_dialog sync failed", e);
-        return { action: "cancel", value: null };
+    let lastTrigger = null;
+    let replaying = false;
+    let cachedResult = null;
+    let pendingSignature = null;
+    const signature = (kind, message, defaultValue) => JSON.stringify([kind, message, defaultValue ?? null]);
+    const targetStillUsable = (target) => target instanceof HTMLElement && document.contains(target);
+    const recordTrigger = (event) => {
+      if (replaying)
+        return;
+      const target = event.target;
+      if (event.type === "click") {
+        lastTrigger = { target, type: "click" };
+        return;
       }
+      if (event instanceof KeyboardEvent && (event.key === "Enter" || event.key === " ")) {
+        lastTrigger = { target, type: "keydown", key: event.key };
+      }
+    };
+    document.addEventListener("click", recordTrigger, true);
+    document.addEventListener("keydown", recordTrigger, true);
+    const replayLastTrigger = () => {
+      const trigger = lastTrigger;
+      if (!trigger || !targetStillUsable(trigger.target))
+        return;
+      replaying = true;
+      try {
+        if (trigger.type === "click") {
+          trigger.target.click();
+        } else {
+          trigger.target.dispatchEvent(new KeyboardEvent("keydown", { key: trigger.key, bubbles: true, cancelable: true }));
+        }
+      } catch (e) {
+        console.error("[AutoDesktop] dapp dialog replay failed", e);
+      } finally {
+        window.setTimeout(() => {
+          replaying = false;
+        }, 0);
+      }
+    };
+    const takeCachedResult = (kind, message, defaultValue) => {
+      const cached = cachedResult;
+      if (!cached)
+        return null;
+      if (cached.kind !== kind || cached.message !== message || (cached.defaultValue ?? "") !== (defaultValue ?? "")) {
+        return null;
+      }
+      cachedResult = null;
+      return cached.result;
+    };
+    const showDialog = (kind, message, defaultValue) => getInvoke().then((invoke) => invoke("dapp_dialog", { kind, message, defaultValue })).catch((e) => {
+      console.error("[AutoDesktop] dapp_dialog failed", e);
+      return { action: "cancel", value: null };
+    });
+    const requestReplayableDialog = (kind, message, defaultValue) => {
+      const sig = signature(kind, message, defaultValue);
+      if (pendingSignature === sig)
+        return;
+      pendingSignature = sig;
+      showDialog(kind, message, defaultValue).then((result) => {
+        pendingSignature = null;
+        if (result.action !== "ok")
+          return;
+        cachedResult = { kind, message, defaultValue, result };
+        window.setTimeout(replayLastTrigger, 0);
+      });
     };
     window.alert = function(message) {
       showDialog("alert", String(message ?? ""));
     };
     window.confirm = function(message) {
-      return showDialogSync("confirm", String(message ?? "")).action === "ok";
+      const text = String(message ?? "");
+      const cached = takeCachedResult("confirm", text);
+      if (cached)
+        return cached.action === "ok";
+      requestReplayableDialog("confirm", text);
+      return false;
     };
     window.prompt = function(message, defaultValue) {
-      const result = showDialogSync("prompt", String(message ?? ""), defaultValue == null ? "" : String(defaultValue));
-      if (result.action !== "ok")
-        return null;
-      return typeof result.value === "string" ? result.value : "";
+      const text = String(message ?? "");
+      const fallback = defaultValue == null ? "" : String(defaultValue);
+      const cached = takeCachedResult("prompt", text, fallback);
+      if (cached)
+        return typeof cached.value === "string" ? cached.value : "";
+      requestReplayableDialog("prompt", text, fallback);
+      return null;
     };
     window.print = function() {
       showDialog("print", "This page requested printing.");
