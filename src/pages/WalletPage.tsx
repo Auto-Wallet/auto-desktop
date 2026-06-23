@@ -202,6 +202,7 @@ export default function WalletPage() {
   const [showSwap, setShowSwap] = useState(false);
   const [showBridge, setShowBridge] = useState(false);
   const [tokenSearch, setTokenSearch] = useState("");
+  const [showZeroTokenBalances, setShowZeroTokenBalances] = useState(false);
   const [replaceTarget, setReplaceTarget] = useState<{
     record: ActivityRecord;
     action: "speedup" | "cancel";
@@ -278,7 +279,16 @@ export default function WalletPage() {
   // not change the total.
   const allRows = useMemo(
     () =>
-      buildRows(chains, custom, balances, tokenBalances, prices, tokenPrices),
+      buildRows(chains, custom, balances, tokenBalances, prices, tokenPrices, {
+        includeZeroDefaultTokens: false,
+      }),
+    [chains, custom, balances, tokenBalances, prices, tokenPrices],
+  );
+  const tokenListRows = useMemo(
+    () =>
+      buildRows(chains, custom, balances, tokenBalances, prices, tokenPrices, {
+        includeZeroDefaultTokens: true,
+      }),
     [chains, custom, balances, tokenBalances, prices, tokenPrices],
   );
   const walletAssetsOverOneUsd = useMemo(
@@ -292,12 +302,25 @@ export default function WalletPage() {
   );
   const rows = useMemo(
     () =>
-      filter === "all" ? allRows : allRows.filter((r) => r.chainId === filter),
-    [allRows, filter],
+      filter === "all"
+        ? tokenListRows
+        : tokenListRows.filter((r) => r.chainId === filter),
+    [tokenListRows, filter],
   );
-  const visibleRows = useMemo(
+  const searchedRows = useMemo(
     () => filterTokenRows(rows, tokenSearch),
     [rows, tokenSearch],
+  );
+  const hiddenZeroTokenCount = useMemo(
+    () => searchedRows.filter(isZeroBalanceRow).length,
+    [searchedRows],
+  );
+  const visibleRows = useMemo(
+    () =>
+      showZeroTokenBalances
+        ? searchedRows
+        : searchedRows.filter((row) => !isZeroBalanceRow(row)),
+    [searchedRows, showZeroTokenBalances],
   );
   const portfolio = useMemo(
     () => computePortfolio(allRows, prices.status === "loading", defi),
@@ -552,6 +575,19 @@ export default function WalletPage() {
                   </div>
                 ) : (
                   <div className="section-empty">{t("wallet.noTokenMatches")}</div>
+                )}
+                {(showZeroTokenBalances || hiddenZeroTokenCount > 0) && (
+                  <button
+                    type="button"
+                    className="zero-token-toggle"
+                    onClick={() => setShowZeroTokenBalances((show) => !show)}
+                  >
+                    {showZeroTokenBalances
+                      ? t("wallet.hideZeroTokens")
+                      : t("wallet.showZeroTokens", {
+                          count: hiddenZeroTokenCount,
+                        })}
+                  </button>
                 )}
                 <button
                   className="add-token"
@@ -938,6 +974,7 @@ function buildRows(
   tokenBalances: Record<string, TokenBalance>,
   prices: PriceState,
   tokenPrices: Record<string, Price>,
+  options: { includeZeroDefaultTokens: boolean },
 ): DisplayRow[] {
   const rows: DisplayRow[] = [];
   for (const c of shown) {
@@ -961,7 +998,7 @@ function buildRows(
     for (const tk of tokensForChain(custom, c.id)) {
       const st = tokenBalances[tokenKey(c.id, tk.address)];
       const cust = isCustomToken(custom, c.id, tk.address);
-      if (!cust && !isHeld(st)) continue; // hide zero-balance default tokens
+      if (!options.includeZeroDefaultTokens && !cust && !isHeld(st)) continue;
       rows.push({
         key: `erc20:${c.id}:${tk.address}`,
         chainId: c.id,
@@ -989,6 +1026,10 @@ function buildRows(
       return b.usd - a.usd || a.index - b.index;
     })
     .map(({ row }) => row);
+}
+
+function isZeroBalanceRow(row: DisplayRow): boolean {
+  return row.state !== undefined && row.state.status === "ok" && BigInt(row.state.wei) === 0n;
 }
 
 function rowUsdValue(row: DisplayRow): number | null {
