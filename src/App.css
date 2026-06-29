@@ -4,6 +4,7 @@
    ============================================================ */
 
 .app {
+  box-sizing: border-box;
   display: flex;
   height: 100vh;
   height: 100dvh;
@@ -37,6 +38,7 @@
 
 /* ---- Sidebar ---- */
 .sidebar {
+  box-sizing: border-box;
   width: 240px;
   min-width: 240px;
   height: 100%;
