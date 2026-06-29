@@ -6,6 +6,7 @@
 .app {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background: var(--bg);
   overflow: hidden;
@@ -43,6 +44,7 @@
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
+  min-height: 0;
   padding: 12px 12px 12px;
   transition: width 0.26s cubic-bezier(0.4, 0, 0.2, 1),
     min-width 0.26s cubic-bezier(0.4, 0, 0.2, 1);
@@ -238,6 +240,7 @@
 
 /* sidebar footer */
 .side-foot {
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: 6px;

@@ -11,6 +11,7 @@ import { ensureDapp, faviconOf, type Dapp } from "./lib/dapps";
 import {
   closeDapp,
   dappLabel,
+  hideDapp,
   isTauri,
   openExternalUrl,
   rectOf,
@@ -261,6 +262,13 @@ function App() {
       setPage(next ? "browser" : "dapps");
     }
   }
+
+  useEffect(() => {
+    if (!isTauri() || page === "browser") return;
+    for (const tab of tabs) {
+      void hideDapp(dappLabel(tab.id)).catch(() => undefined);
+    }
+  }, [page, tabs]);
 
   if (vault.phase === "loading") {
     return (

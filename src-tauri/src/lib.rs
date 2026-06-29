@@ -2063,23 +2063,47 @@ fn apply_dapp_bounds<R: Runtime>(
     dapp: &tauri::Webview<R>,
     bounds: DappBounds,
 ) -> Result<(), String> {
-    raise_dapp_above_shell(dapp)?;
     let (fx, fy) = content_to_frame(dapp, bounds.x, bounds.y);
-    dapp.set_position(LogicalPosition::new(fx, fy))
-        .map_err(|e| e.to_string())?;
-    dapp.set_size(LogicalSize::new(bounds.w.max(1.0), bounds.h.max(1.0)))
-        .map_err(|e| e.to_string())
+    set_dapp_bounds_atomically(dapp, fx, fy, bounds.w, bounds.h)
 }
 
 #[cfg(target_os = "windows")]
-fn raise_dapp_above_shell<R: Runtime>(dapp: &tauri::Webview<R>) -> Result<(), String> {
+fn set_dapp_bounds_atomically<R: Runtime>(
+    dapp: &tauri::Webview<R>,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    let rect = tauri::Rect {
+        position: LogicalPosition::new(x, y).into(),
+        size: LogicalSize::new(w.max(1.0), h.max(1.0)).into(),
+    };
     let window = dapp.window();
-    dapp.reparent(&window).map_err(|e| e.to_string())
+
+    // WebView2 child views can briefly reset to the full parent bounds while
+    // being reparented, which steals every click from the shell. Keep it hidden
+    // during the native move, then apply the measured content rect again after
+    // reparenting puts it above the shell webview.
+    let _ = dapp.hide();
+    dapp.set_bounds(rect).map_err(|e| e.to_string())?;
+    dapp.reparent(&window).map_err(|e| e.to_string())?;
+    dapp.set_bounds(rect).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
-fn raise_dapp_above_shell<R: Runtime>(_dapp: &tauri::Webview<R>) -> Result<(), String> {
-    Ok(())
+fn set_dapp_bounds_atomically<R: Runtime>(
+    dapp: &tauri::Webview<R>,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    dapp.set_position(LogicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
+        .map_err(|e| e.to_string())
 }
 
 fn repair_active_dapp_after_shell_resize<R: Runtime>(app: &AppHandle<R>) {
