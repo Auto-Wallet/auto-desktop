@@ -2063,11 +2063,41 @@ fn apply_dapp_bounds<R: Runtime>(
     dapp: &tauri::Webview<R>,
     bounds: DappBounds,
 ) -> Result<(), String> {
+    raise_dapp_above_shell(dapp)?;
     let (fx, fy) = content_to_frame(dapp, bounds.x, bounds.y);
     dapp.set_position(LogicalPosition::new(fx, fy))
         .map_err(|e| e.to_string())?;
     dapp.set_size(LogicalSize::new(bounds.w.max(1.0), bounds.h.max(1.0)))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn raise_dapp_above_shell<R: Runtime>(dapp: &tauri::Webview<R>) -> Result<(), String> {
+    let window = dapp.window();
+    dapp.reparent(&window).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn raise_dapp_above_shell<R: Runtime>(_dapp: &tauri::Webview<R>) -> Result<(), String> {
+    Ok(())
+}
+
+fn repair_active_dapp_after_shell_resize<R: Runtime>(app: &AppHandle<R>) {
+    let Some(label) = active_dapp_label().lock().unwrap().clone() else {
+        return;
+    };
+    let Some(bounds) = last_dapp_bounds(&label) else {
+        return;
+    };
+    let Some(dapp) = app.get_webview(&label) else {
+        return;
+    };
+    if let Err(e) = apply_dapp_bounds(&dapp, bounds) {
+        println!("[AutoDesktop] dapp resize repair failed for {label}: {e}");
+    }
+    if let Err(e) = dapp.show() {
+        println!("[AutoDesktop] dapp resize show failed for {label}: {e}");
+    }
 }
 
 fn repair_dapp_bounds_after_devtools<R: Runtime + 'static>(app: AppHandle<R>, label: String) {
@@ -3044,6 +3074,11 @@ async fn replace_activity_transaction<R: Runtime>(
 
 #[tauri::command]
 fn get_close_behavior<R: Runtime>(app: AppHandle<R>) -> CloseBehavior {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        return CloseBehavior::Quit;
+    }
     load_app_prefs(&app).close_behavior
 }
 
@@ -3052,6 +3087,12 @@ fn set_close_behavior<R: Runtime>(
     app: AppHandle<R>,
     close_behavior: CloseBehavior,
 ) -> Result<CloseBehavior, String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        let _ = close_behavior;
+        return Ok(CloseBehavior::Quit);
+    }
     let prefs = AppPrefs { close_behavior };
     save_app_prefs(&app, &prefs)?;
     Ok(close_behavior)
@@ -4959,6 +5000,18 @@ fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+fn should_hide_on_close<R: Runtime>(app: &AppHandle<R>) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        load_app_prefs(app).close_behavior == CloseBehavior::Hide
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        false
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -5084,16 +5137,17 @@ pub fn run() {
             // ResizeObserver calls set_dapp_bounds from JS.
             let shell_for_resize = shell.clone();
             let window_for_close = window.clone();
-            let app_for_close = app.handle().clone();
+            let app_for_window_events = app.handle().clone();
             window.on_window_event(move |event| match event {
                 tauri::WindowEvent::Resized(size) => {
                     let scale = shell_for_resize.window().scale_factor().unwrap_or(1.0);
                     let logical = size.to_logical::<f64>(scale);
                     let _ =
                         shell_for_resize.set_size(LogicalSize::new(logical.width, logical.height));
+                    repair_active_dapp_after_shell_resize(&app_for_window_events);
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
-                    if load_app_prefs(&app_for_close).close_behavior == CloseBehavior::Hide {
+                    if should_hide_on_close(&app_for_window_events) {
                         api.prevent_close();
                         let _ = window_for_close.hide();
                     }
