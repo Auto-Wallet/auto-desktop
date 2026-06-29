@@ -31,6 +31,10 @@ export type Tab = { id: string; dapp: Dapp };
 
 const loadedDappLabels = new Set<string>();
 
+function reportDappControlError(action: string, label: string, error: unknown) {
+  console.error(`[AutoDesktop] ${action} failed for ${label}`, error);
+}
+
 // The chrome around one open dApp tab (VISION feature ③), restyled to Aurora:
 // top bar with back/reload, the URL, the active chain + account chips, content
 // below. Each tab is a persistent native `dapp-<id>` child webview (Rust-side,
@@ -91,7 +95,11 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
       setDappLoading(false);
 
       const el = contentRef.current;
-      if (el) void openDapp(label, event.payload.url, rectOf(el));
+      if (el) {
+        void openDapp(label, event.payload.url, rectOf(el)).catch((e) =>
+          reportDappControlError("open_dapp after load", label, e),
+        );
+      }
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
@@ -106,7 +114,11 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     if (!native || !dappLoading) return undefined;
     const timer = window.setTimeout(() => {
       const el = contentRef.current;
-      if (el) void openDapp(label, currentUrl, rectOf(el));
+      if (el) {
+        void openDapp(label, currentUrl, rectOf(el)).catch((e) =>
+          reportDappControlError("open_dapp fallback", label, e),
+        );
+      }
       setDappLoading(false);
     }, 20_000);
     return () => window.clearTimeout(timer);
@@ -119,9 +131,14 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     const el = contentRef.current;
     if (!el) return;
 
-    void openDapp(label, dapp.url, rectOf(el));
+    void openDapp(label, dapp.url, rectOf(el)).catch((e) =>
+      reportDappControlError("open_dapp", label, e),
+    );
 
-    const sync = () => void setDappBounds(label, rectOf(el));
+    const sync = () =>
+      void setDappBounds(label, rectOf(el)).catch((e) =>
+        reportDappControlError("set_dapp_bounds", label, e),
+      );
     const syncAfterLayoutSettles = () => {
       sync();
       requestAnimationFrame(() => {
@@ -149,7 +166,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
       unlisten?.();
       ro.disconnect();
       window.removeEventListener("resize", sync);
-      void hideDapp(label);
+      void hideDapp(label).catch((e) => reportDappControlError("hide_dapp", label, e));
     };
   }, [native, label, dapp.url]);
 

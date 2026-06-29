@@ -2105,6 +2105,9 @@ fn create_dapp_webview<R: Runtime>(
     w: f64,
     h: f64,
 ) -> Result<tauri::Webview<R>, String> {
+    println!(
+        "[AutoDesktop] create dapp webview label={label} url={url} bounds=({x:.0},{y:.0},{w:.0},{h:.0})"
+    );
     let window = app
         .get_window("main")
         .ok_or("create_dapp_webview: main window not found")?;
@@ -2153,6 +2156,9 @@ fn open_dapp<R: Runtime>(
     h: f64,
 ) -> Result<(), String> {
     validate_dapp_label(&label)?;
+    println!(
+        "[AutoDesktop] open_dapp label={label} url={url} bounds=({x:.0},{y:.0},{w:.0},{h:.0})"
+    );
     let parsed: tauri::Url = url
         .parse()
         .map_err(|e| format!("open_dapp: invalid url {url}: {e}"))?;
@@ -2166,11 +2172,8 @@ fn open_dapp<R: Runtime>(
         None => (create_dapp_webview(&app, &label, parsed, x, y, w, h)?, true),
     };
     apply_dapp_bounds(&dapp, bounds)?;
-    if newly_created {
-        dapp.hide().map_err(|e| e.to_string())?;
-    } else {
-        dapp.show().map_err(|e| e.to_string())?;
-    }
+    dapp.show().map_err(|e| e.to_string())?;
+    println!("[AutoDesktop] dapp webview ready label={label} newly_created={newly_created}");
     set_active_dapp_label(label);
     Ok(())
 }
