@@ -395,6 +395,10 @@ function Sidebar({
   const { t } = useT();
   const account = useActiveAccount();
   const theme = useEffectiveTheme();
+  function copyAccountAddress() {
+    void navigator.clipboard.writeText(account.address);
+    toast(t("common.copied"));
+  }
 
   const nav: {
     key: "wallet" | "dapps";
@@ -506,21 +510,34 @@ function Sidebar({
             <Icon name="moon" size={16} />
           </button>
         </div>
-        <button
-          className="acct-foot"
-          onClick={() => setPage("wallet")}
-          title={collapsed ? account.label : ""}
-        >
-          <Avatar address={account.address} size={30} />
-          {!collapsed && (
-            <div className="acct-foot-meta">
-              <div className="acct-foot-name">{account.label}</div>
-              <div className="acct-foot-addr">
-                {shortAddress(account.address, 6, 4)}
+        <div className="acct-foot" title={collapsed ? account.label : ""}>
+          <button
+            type="button"
+            className="acct-foot-main"
+            onClick={() => setPage("wallet")}
+          >
+            <Avatar address={account.address} size={30} />
+            {!collapsed && (
+              <div className="acct-foot-meta">
+                <div className="acct-foot-name">{account.label}</div>
+                <div className="acct-foot-addr">
+                  {shortAddress(account.address, 6, 4)}
+                </div>
               </div>
-            </div>
+            )}
+          </button>
+          {!collapsed && (
+            <button
+              type="button"
+              className="acct-foot-copy"
+              title={t("wallet.copy")}
+              aria-label={t("wallet.copy")}
+              onClick={copyAccountAddress}
+            >
+              <Icon name="copy" size={14} />
+            </button>
           )}
-        </button>
+        </div>
       </div>
     </aside>
   );

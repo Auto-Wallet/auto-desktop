@@ -2384,12 +2384,19 @@ fn sync_toast_overlay<R: Runtime>(
     let w = w.unwrap_or(1.0).max(1.0);
     let h = h.unwrap_or(1.0).max(1.0);
 
+    let window = app
+        .get_window("main")
+        .ok_or("sync_toast_overlay: main window not found")?;
     let overlay = match app.get_webview(LABEL) {
-        Some(wv) => wv,
+        Some(wv) => {
+            // Child webviews stack in creation order. A dApp opened after the
+            // toast overlay was first created can cover it, so reparent the
+            // existing overlay to the same window before showing it. This
+            // matches the menu overlay's topmost behavior.
+            wv.reparent(&window).map_err(|e| e.to_string())?;
+            wv
+        }
         None => {
-            let window = app
-                .get_window("main")
-                .ok_or("sync_toast_overlay: main window not found")?;
             let builder = WebviewBuilder::new(
                 LABEL,
                 WebviewUrl::App("index.html?view=toast-overlay".into()),

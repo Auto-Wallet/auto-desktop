@@ -280,24 +280,37 @@
 .acct-foot {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   width: 100%;
-  padding: 8px;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface);
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
 }
 .acct-foot:hover {
   border-color: var(--line-3);
+}
+.acct-foot-main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  padding: 2px;
 }
 .sidebar.collapsed .acct-foot {
   justify-content: center;
   padding: 8px 0;
   border: none;
   background: transparent;
+}
+.sidebar.collapsed .acct-foot-main {
+  justify-content: center;
 }
 .acct-foot-meta {
   flex: 1;
@@ -315,6 +328,28 @@
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-3);
+}
+.acct-foot-copy {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--ink-3);
+  cursor: pointer;
+  transition-property: transform, background-color, color;
+  transition-duration: 0.13s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.acct-foot-copy:hover {
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+.acct-foot-copy:active {
+  transform: scale(0.96);
 }
 
 /* ---- Main ---- */

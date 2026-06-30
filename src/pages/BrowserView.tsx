@@ -365,8 +365,10 @@ function AcctChip() {
                   <span className="a">{shortAddress(a.address, 8, 6)}</span>
                 </span>
                 <button
+                  type="button"
                   className="acct-copy"
                   title={t("wallet.copy")}
+                  aria-label={t("wallet.copy")}
                   onClick={(e) => {
                     e.stopPropagation();
                     copyAddress(a.address);

@@ -155,8 +155,10 @@ function AcctMenu({ menu }: { menu: Extract<MenuOverlayPayload, { kind: "account
             <span className="a">{shortAddress(a.address, 8, 6)}</span>
           </span>
           <button
+            type="button"
             className="acct-copy"
             title={menu.copyTitle}
+            aria-label={menu.copyTitle}
             onClick={(e) => {
               e.stopPropagation();
               post({ type: "copy-address", address: a.address });

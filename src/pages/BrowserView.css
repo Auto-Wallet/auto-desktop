@@ -165,20 +165,21 @@
   color: var(--brand-ink);
   flex: none;
 }
-.acct-copy {
+.acct-opt .acct-copy {
   width: 28px;
   height: 28px;
   flex: none;
   display: grid;
   place-items: center;
-  border: none;
+  border: 1px solid var(--line);
   border-radius: var(--r-md);
-  background: transparent;
+  background: var(--surface);
   color: var(--ink-3);
   cursor: pointer;
 }
-.acct-copy:hover {
-  background: var(--surface);
+.acct-opt .acct-copy:hover {
+  border-color: color-mix(in srgb, var(--brand) 28%, var(--line));
+  background: var(--brand-soft);
   color: var(--brand-ink);
 }
 
