@@ -171,6 +171,8 @@
   flex: none;
   display: grid;
   place-items: center;
+  opacity: 1;
+  margin-right: 0;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface);
