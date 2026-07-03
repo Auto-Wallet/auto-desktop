@@ -4640,8 +4640,10 @@ async fn fetch_price_oracle_entries(
         .map_err(|e| format!("reading prices: {e}"))?;
     let mut prices = HashMap::new();
     for id in ids {
-        let price = value_as_f64(data.pointer(&format!("/{id}/usd")))
-            .ok_or_else(|| format!("missing USD price for {id}"))?;
+        let Some(price) = value_as_f64(data.pointer(&format!("/{id}/usd"))) else {
+            println!("[AutoDesktop] price oracle missing USD price id={id}");
+            continue;
+        };
         let change_24h =
             value_as_f64(data.pointer(&format!("/{id}/usd_24h_change"))).unwrap_or(0.0);
         prices.insert(

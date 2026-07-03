@@ -1323,6 +1323,7 @@ function HoldingRow({
     row.state?.status === "ok" && row.price
       ? weiToUsd(row.state.wei, row.decimals, row.price.usd)
       : null;
+  const showPriceChange = !!row.price && !row.price.synthetic;
   const up = (row.price?.change24h ?? 0) >= 0;
   const sendAssetKey =
     row.kind === "native"
@@ -1356,7 +1357,7 @@ function HoldingRow({
             size={12}
           />
           {row.chainName}
-          {row.price && (
+          {showPriceChange && row.price && (
             <span className={`chg ${up ? "up" : "down"}`}>
               {fmtPct(row.price.change24h)}
             </span>

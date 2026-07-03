@@ -15,14 +15,14 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./platform";
 
-export type Price = { usd: number; change24h: number };
+export type Price = { usd: number; change24h: number; synthetic?: boolean };
 
 export type PriceState =
   | { status: "loading" }
   | { status: "ok"; prices: Record<string, Price> }
   | { status: "error"; message: string };
 
-const ZERO_PRICE: Price = { usd: 0, change24h: 0 };
+const ZERO_PRICE: Price = { usd: 0, change24h: 0, synthetic: true };
 
 export function priceForChainAsset(chainName: string, price: Price | undefined): Price | undefined {
   if (/testnet/i.test(chainName)) return ZERO_PRICE;
@@ -42,7 +42,7 @@ const SYMBOL_TO_ID: Record<string, string> = {
   BUSD: "binance-usd",
   BNB: "binancecoin",
   POL: "polygon-ecosystem-token",
-  MATIC: "matic-network",
+  MATIC: "polygon-ecosystem-token",
   AVAX: "avalanche-2",
   FTM: "fantom",
   CELO: "celo",
