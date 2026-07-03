@@ -282,7 +282,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.sendApprovalHint":
       "You'll review the network fee and confirm in a separate window.",
     "wallet.swapSoon": "Swap is coming soon — open a DEX from Explore.",
-    "wallet.bridge": "Cross-chain",
+    "wallet.bridge": "Bridge",
     "wallet.bridgeSoon": "Cross-chain bridging is coming soon.",
 
     "wallet.account": "Account",

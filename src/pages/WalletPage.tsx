@@ -13,6 +13,7 @@ import { txExplorerUrl } from "../lib/explorer";
 import { ChainIcon } from "../lib/ChainIcon";
 import { useDefiPositions, type DefiState } from "../lib/defi";
 import {
+  fmtAmount,
   fmtPct,
   fmtUsd,
   formatUnits,
@@ -962,6 +963,10 @@ function DefiPositionCard({
 }
 
 function formatDefiTokenAmount(value: string): string {
+  const n = Number.parseFloat(value);
+  // From 1M up, compact (2.5M / 8.72B) instead of overflowing the card; the
+  // exact value stays hoverable via the row's title.
+  if (Number.isFinite(n) && Math.abs(n) >= 1_000_000) return fmtAmount(value);
   return trimAmount(value, 8);
 }
 
@@ -1372,7 +1377,9 @@ function HoldingRow({
             }}
             size={12}
           />
-          {row.chainName}
+          <span className="token-chain" title={row.chainName}>
+            {row.chainName}
+          </span>
           {showPriceChange && row.price && (
             <span className={`chg ${up ? "up" : "down"}`}>
               {fmtPct(row.price.change24h)}
@@ -1406,8 +1413,11 @@ function HoldingRow({
         ) : (
           <>
             {usd != null && <div className="token-usd tnum">{fmtUsd(usd)}</div>}
-            <div className="token-amt">
-              {formatUnits(row.state.wei, row.decimals)} {row.symbol}
+            <div
+              className="token-amt"
+              title={`${formatUnits(row.state.wei, row.decimals)} ${row.symbol}`}
+            >
+              {fmtAmount(formatUnits(row.state.wei, row.decimals))} {row.symbol}
             </div>
           </>
         )}

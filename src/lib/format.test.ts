@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatUnits, isAddress } from "./format";
+import { fmtAmount, formatUnits, isAddress } from "./format";
 
 describe("isAddress (EIP-55)", () => {
   test("accepts correctly checksummed mixed-case addresses (EIP-55 spec vectors)", () => {
@@ -31,5 +31,25 @@ describe("isAddress (EIP-55)", () => {
 describe("formatUnits", () => {
   test("keeps wei-sized gas fees visible when formatting as Gwei", () => {
     expect(formatUnits("0x3", 9, 9)).toBe("0.000000003");
+  });
+});
+
+describe("fmtAmount (numbers never ellipsize)", () => {
+  test("compacts from 1M up so the value stays readable on a narrow card", () => {
+    expect(fmtAmount("8722104611.7831")).toBe("8.72B");
+    expect(fmtAmount("2500000")).toBe("2.5M");
+    expect(fmtAmount("1000000")).toBe("1M");
+  });
+
+  test("keeps the exact value below 1M, adding separators from 1,000 up", () => {
+    expect(fmtAmount("25755.2778")).toBe("25,755.2778");
+    expect(fmtAmount("999999.1234")).toBe("999,999.1234");
+    expect(fmtAmount("17.1858")).toBe("17.1858");
+    expect(fmtAmount("0.0624")).toBe("0.0624");
+  });
+
+  test("passes through non-numeric input untouched", () => {
+    expect(fmtAmount("")).toBe("");
+    expect(fmtAmount("n/a")).toBe("n/a");
   });
 });

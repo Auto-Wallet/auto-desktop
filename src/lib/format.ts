@@ -66,6 +66,29 @@ export function fmtUsd(n: number, opts: { sign?: boolean; dp?: number } = {}): s
   return pre + s;
 }
 
+/**
+ * Token amount for card display. Numbers must stay readable, never ellipsized:
+ * below 1M the full value is shown (with thousands separators from 1,000 up);
+ * from 1M the integer part alone would overflow a card, so it compacts to
+ * `2.5M` / `8.72B` style — callers put the exact value in the element's title
+ * so hover reveals it.
+ */
+export function fmtAmount(value: string): string {
+  const n = Number.parseFloat(value);
+  if (!Number.isFinite(n)) return value;
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) {
+    return n.toLocaleString("en-US", {
+      notation: "compact",
+      maximumFractionDigits: 2,
+    });
+  }
+  if (abs >= 1_000) {
+    return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  }
+  return value;
+}
+
 /** Signed percent, e.g. `+2.40%` / `−1.10%`. */
 export function fmtPct(n: number): string {
   return `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toFixed(2)}%`;
