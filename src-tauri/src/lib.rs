@@ -1315,9 +1315,14 @@ async fn request_approval<R: Runtime>(app: &AppHandle<R>, req: PendingRequest) -
 }
 
 /// Open (or focus) the dedicated approval window — a separate top-level window
-/// loading the shell UI in approval mode.
+/// loading the shell UI in approval mode. Always-on-top: a signing prompt
+/// hidden behind other windows leaves the dApp (and the user) waiting blind
+/// until the 300s timeout rejects the request.
 fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window("approval") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_always_on_top(true);
         let _ = win.set_focus();
         return Ok(());
     }
@@ -1329,6 +1334,7 @@ fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .title("Confirm request — AutoDesktop")
     .inner_size(420.0, 600.0)
     .resizable(false)
+    .always_on_top(true)
     .build()?;
     Ok(())
 }
