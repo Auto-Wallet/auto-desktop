@@ -4,17 +4,25 @@
 //! invoke round-trip — none of which the `tauri::test` MockRuntime e2e covers.
 //!
 //! Activated only when `AUTODESKTOP_SMOKE_DIR` is set (see ci.yml): a loopback
-//! HTTP server serves a minimal dApp page, `open_dapp` loads it into a real
-//! `dapp-*` child webview, the page calls `window.ethereum.request` and posts
-//! the outcome back, and the server writes `smoke-result.json` into the dir for
-//! the CI runner (scripts/smoke-ci.ts) to assert on. Setup failures panic —
-//! this path runs only in CI, where a loud crash is the correct outcome.
+//! HTTP server serves a minimal dApp page, the SHELL webview is driven to
+//! `invoke('open_dapp', …)` over its real IPC — the exact path a user click
+//! takes — which loads the page into a real `dapp-*` child webview, the page
+//! calls `window.ethereum.request` and posts the outcome back, and the server
+//! writes `smoke-result.json` into the dir for the CI runner
+//! (scripts/smoke-ci.ts) to assert on. Setup failures panic — this path runs
+//! only in CI, where a loud crash is the correct outcome.
+//!
+//! Going through the shell's IPC (instead of calling the Rust fn directly from
+//! setup, as this used to) matters on Windows: a synchronous webview-creating
+//! command executes on the main thread *inside* a WebView2 event handler,
+//! where webview creation deadlocks (tauri docs / wry#583). The direct call
+//! from setup() never enters that context and so could not catch the freeze.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 const SMOKE_PAGE: &str = r#"<!doctype html>
 <html><head><meta charset="utf-8"><title>AutoDesktop smoke dApp</title></head>
@@ -61,19 +69,35 @@ pub fn maybe_start<R: Runtime>(app: &AppHandle<R>) {
     std::thread::spawn(move || serve(listener, dir));
 
     let url = format!("http://127.0.0.1:{port}/");
-    println!("[AutoDesktop] smoke: opening dapp webview at {url}");
-    // Same entry the shell uses, so label validation, webview creation and the
-    // content_to_frame positioning are all exercised for real.
-    crate::open_dapp(
-        app.clone(),
-        "dapp-smoke-1".to_string(),
-        url,
-        16.0,
-        120.0,
-        800.0,
-        520.0,
-    )
-    .expect("smoke: open_dapp failed");
+    println!("[AutoDesktop] smoke: driving open_dapp through the shell IPC, dapp url={url}");
+    // Drive open_dapp through the shell's real `invoke` so the command runs in
+    // the same context as a user click (IPC handler), not from setup(). The
+    // `__smokeDappOpened` flag makes the polled eval fire the invoke once per
+    // document; re-invoking after a reload is harmless (open_dapp is
+    // create-or-show). If the invoke rejects, report the error to the loopback
+    // server so the CI failure names the cause instead of just timing out.
+    let script = format!(
+        r#"(() => {{
+  if (window.__smokeDappOpened || !window.__TAURI_INTERNALS__) return;
+  window.__smokeDappOpened = true;
+  window.__TAURI_INTERNALS__
+    .invoke('open_dapp', {{ label: 'dapp-smoke-1', url: '{url}', x: 16, y: 120, w: 800, h: 520 }})
+    .catch((e) => fetch('{url}result?payload=' + encodeURIComponent(JSON.stringify(
+      {{ ok: false, error: 'open_dapp invoke failed: ' + String(e) }}))));
+}})();"#
+    );
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // Poll until the shell page has booted far enough to expose
+        // __TAURI_INTERNALS__; the in-page flag keeps this idempotent.
+        for _ in 0..120 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let Some(shell) = app.get_webview("shell") else {
+                continue;
+            };
+            let _ = shell.eval(&script);
+        }
+    });
 }
 
 fn serve(listener: TcpListener, dir: PathBuf) {

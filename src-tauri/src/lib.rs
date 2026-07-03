@@ -2063,145 +2063,69 @@ fn apply_dapp_bounds<R: Runtime>(
     dapp: &tauri::Webview<R>,
     bounds: DappBounds,
 ) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        return set_dapp_window_size(dapp, bounds.w, bounds.h);
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let (fx, fy) = content_to_frame(dapp, bounds.x, bounds.y);
-        set_dapp_bounds_atomically(dapp, fx, fy, bounds.w, bounds.h)
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn set_dapp_bounds_atomically<R: Runtime>(
-    dapp: &tauri::Webview<R>,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-) -> Result<(), String> {
-    dapp.set_position(LogicalPosition::new(x, y))
+    let (fx, fy) = content_to_frame(dapp, bounds.x, bounds.y);
+    dapp.set_position(LogicalPosition::new(fx, fy))
         .map_err(|e| e.to_string())?;
-    dapp.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)))
+    dapp.set_size(LogicalSize::new(bounds.w.max(1.0), bounds.h.max(1.0)))
         .map_err(|e| e.to_string())
 }
 
-#[cfg(target_os = "windows")]
-fn set_dapp_window_size<R: Runtime>(
-    dapp: &tauri::Webview<R>,
-    w: f64,
-    h: f64,
-) -> Result<(), String> {
-    dapp.window()
-        .set_size(LogicalSize::new(w.max(800.0), h.max(600.0)))
-        .map_err(|e| e.to_string())
-}
-
-fn show_dapp_webview<R: Runtime>(dapp: &tauri::Webview<R>) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        dapp.window().show().map_err(|e| e.to_string())?;
-        dapp.show().map_err(|e| e.to_string())?;
-        dapp.window().set_focus().map_err(|e| e.to_string())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        dapp.show().map_err(|e| e.to_string())
-    }
-}
-
-fn hide_dapp_webview<R: Runtime>(dapp: &tauri::Webview<R>) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        dapp.window().hide().map_err(|e| e.to_string())?;
-        dapp.hide().map_err(|e| e.to_string())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        dapp.hide().map_err(|e| e.to_string())
-    }
-}
-
-fn close_dapp_webview<R: Runtime>(dapp: tauri::Webview<R>) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        dapp.window().close().map_err(|e| e.to_string())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        dapp.close().map_err(|e| e.to_string())
-    }
+/// Serializes webview creation across the async commands (open_dapp + the two
+/// overlays). Async commands run concurrently on the runtime's thread pool, so
+/// two rapid invokes for the same label could otherwise race get-or-create into
+/// a duplicate add_child. No await ever happens while this is held.
+fn webview_creation_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn repair_active_dapp_after_shell_resize<R: Runtime>(app: &AppHandle<R>) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = app;
+    let Some(label) = active_dapp_label().lock().unwrap().clone() else {
         return;
+    };
+    let Some(bounds) = last_dapp_bounds(&label) else {
+        return;
+    };
+    let Some(dapp) = app.get_webview(&label) else {
+        return;
+    };
+    if let Err(e) = apply_dapp_bounds(&dapp, bounds) {
+        println!("[AutoDesktop] dapp resize repair failed for {label}: {e}");
     }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let Some(label) = active_dapp_label().lock().unwrap().clone() else {
-            return;
-        };
-        let Some(bounds) = last_dapp_bounds(&label) else {
-            return;
-        };
-        let Some(dapp) = app.get_webview(&label) else {
-            return;
-        };
-        if let Err(e) = apply_dapp_bounds(&dapp, bounds) {
-            println!("[AutoDesktop] dapp resize repair failed for {label}: {e}");
-        }
-        if let Err(e) = dapp.show() {
-            println!("[AutoDesktop] dapp resize show failed for {label}: {e}");
-        }
+    if let Err(e) = dapp.show() {
+        println!("[AutoDesktop] dapp resize show failed for {label}: {e}");
     }
 }
 
 fn repair_dapp_bounds_after_devtools<R: Runtime + 'static>(app: AppHandle<R>, label: String) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = (app, label);
-        return;
-    }
+    const REPAIR_DELAYS_MS: [u64; 7] = [0, 50, 150, 300, 700, 1200, 2000];
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        const REPAIR_DELAYS_MS: [u64; 7] = [0, 50, 150, 300, 700, 1200, 2000];
-
-        tauri::async_runtime::spawn(async move {
-            for delay_ms in REPAIR_DELAYS_MS {
-                if delay_ms > 0 {
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                }
-                let Some(bounds) = last_dapp_bounds(&label) else {
-                    println!("[AutoDesktop] dapp devtools repair: no bounds for {label}");
-                    return;
-                };
-                let Some(dapp) = app.get_webview(&label) else {
-                    println!("[AutoDesktop] dapp devtools repair: webview {label:?} not found");
-                    return;
-                };
-                if let Err(e) = apply_dapp_bounds(&dapp, bounds) {
-                    println!("[AutoDesktop] dapp devtools repair failed for {label}: {e}");
-                }
+    tauri::async_runtime::spawn(async move {
+        for delay_ms in REPAIR_DELAYS_MS {
+            if delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
-        });
-    }
+            let Some(bounds) = last_dapp_bounds(&label) else {
+                println!("[AutoDesktop] dapp devtools repair: no bounds for {label}");
+                return;
+            };
+            let Some(dapp) = app.get_webview(&label) else {
+                println!("[AutoDesktop] dapp devtools repair: webview {label:?} not found");
+                return;
+            };
+            if let Err(e) = apply_dapp_bounds(&dapp, bounds) {
+                println!("[AutoDesktop] dapp devtools repair failed for {label}: {e}");
+            }
+        }
+    });
 }
 
 /// Create a tab webview (remote, untrusted) as a child of the main window, with
 /// the EIP-1193 provider injected. capabilities/dapp.json (`webviews: ["dapp-*"]`)
 /// grants it ONLY allow-wallet-request.
-#[cfg(not(target_os = "windows"))]
+///
+/// ⚠️ Must never run on the main thread inside an IPC/event handler: webview
+/// creation deadlocks there on Windows (see the async note on `open_dapp`).
 fn create_dapp_webview<R: Runtime>(
     app: &AppHandle<R>,
     label: &str,
@@ -2228,7 +2152,7 @@ fn create_dapp_webview<R: Runtime>(
                 let should_show =
                     active_dapp_label().lock().unwrap().as_deref() == Some(webview.label());
                 if should_show {
-                    let _ = show_dapp_webview(&webview);
+                    let _ = webview.show();
                 }
                 let _ = webview.app_handle().emit(
                     "dapp-load-finished",
@@ -2249,64 +2173,16 @@ fn create_dapp_webview<R: Runtime>(
         .map_err(|e| e.to_string())
 }
 
-/// Windows/WebView2 has shown unreliable child-webview z-ordering for remote
-/// dApps: a blank transparent child can sit above the shell and steal all input,
-/// including the main close button. Use a normal top-level WebviewWindow there
-/// so the wallet shell remains independently usable.
-#[cfg(target_os = "windows")]
-fn create_dapp_webview<R: Runtime>(
-    app: &AppHandle<R>,
-    label: &str,
-    url: tauri::Url,
-    _x: f64,
-    _y: f64,
-    w: f64,
-    h: f64,
-) -> Result<tauri::Webview<R>, String> {
-    println!(
-        "[AutoDesktop] create Windows dapp window label={label} url={url} size=({w:.0},{h:.0})"
-    );
-    let dapp_window = tauri::WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
-        .title("AutoDesktop dApp")
-        .inner_size(w.max(800.0), h.max(600.0))
-        .min_inner_size(640.0, 480.0)
-        .resizable(true)
-        .center()
-        .visible(false)
-        .on_page_load(|webview_window, payload| {
-            println!(
-                "[AutoDesktop] dapp page-load {:?}  url={}",
-                payload.event(),
-                payload.url()
-            );
-            if payload.event() == PageLoadEvent::Finished {
-                let webview = webview_window.as_ref();
-                let should_show =
-                    active_dapp_label().lock().unwrap().as_deref() == Some(webview.label());
-                if should_show {
-                    let _ = webview_window.show();
-                    let _ = webview_window.set_focus();
-                }
-                let _ = webview.app_handle().emit(
-                    "dapp-load-finished",
-                    DappNavigationEvent {
-                        label: webview.label().to_string(),
-                        url: payload.url().to_string(),
-                    },
-                );
-            }
-        })
-        .initialization_script(INPAGE_PROVIDER)
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    Ok(dapp_window.as_ref().clone())
-}
-
 /// Open (create-or-show) tab webview `label` over the content rect. Navigates to
 /// `url` only on first creation, so re-activating a tab preserves its page.
+///
+/// `async` is load-bearing, not cosmetic: synchronous commands execute on the
+/// main thread inside a webview event handler, where creating a webview
+/// deadlocks on Windows (tauri builder docs / wry#583) — the app froze exactly
+/// this way whenever a dApp was opened. Async commands run on the runtime's
+/// thread pool, from which creation is dispatched safely to the event loop.
 #[tauri::command]
-fn open_dapp<R: Runtime>(
+async fn open_dapp<R: Runtime>(
     app: AppHandle<R>,
     label: String,
     url: String,
@@ -2327,13 +2203,16 @@ fn open_dapp<R: Runtime>(
     }
     let bounds = DappBounds { x, y, w, h };
     remember_dapp_bounds(&label, bounds);
+    let _guard = webview_creation_lock().lock().unwrap();
     let (dapp, newly_created) = match app.get_webview(&label) {
         Some(wv) => (wv, false),
         None => (create_dapp_webview(&app, &label, parsed, x, y, w, h)?, true),
     };
+    // A resize can land while creation is in flight; apply the freshest rect.
+    let bounds = last_dapp_bounds(&label).unwrap_or(bounds);
     apply_dapp_bounds(&dapp, bounds)?;
     set_active_dapp_label(label.clone());
-    show_dapp_webview(&dapp)?;
+    dapp.show().map_err(|e| e.to_string())?;
     println!("[AutoDesktop] dapp webview ready label={label} newly_created={newly_created}");
     Ok(())
 }
@@ -2361,8 +2240,11 @@ fn set_dapp_bounds<R: Runtime>(
 /// A tiny transparent local child webview used only to draw shell toasts above a
 /// remote dApp child webview. It is positioned to the measured toast stack rect,
 /// so it does not steal clicks from the rest of the dApp page.
+///
+/// `async` for the same reason as `open_dapp`: it creates a webview, which
+/// deadlocks on Windows when done from a synchronous command.
 #[tauri::command]
-fn sync_toast_overlay<R: Runtime>(
+async fn sync_toast_overlay<R: Runtime>(
     app: AppHandle<R>,
     visible: bool,
     x: Option<f64>,
@@ -2387,6 +2269,7 @@ fn sync_toast_overlay<R: Runtime>(
     let window = app
         .get_window("main")
         .ok_or("sync_toast_overlay: main window not found")?;
+    let _guard = webview_creation_lock().lock().unwrap();
     let overlay = match app.get_webview(LABEL) {
         Some(wv) => {
             // Child webviews stack in creation order. A dApp opened after the
@@ -2425,8 +2308,11 @@ fn sync_toast_overlay<R: Runtime>(
 /// by the page. Unlike the toast overlay it spans the whole window while a menu
 /// is open: the transparent area doubles as the click-away backdrop (the overlay
 /// page posts a dismiss action back to the shell over a BroadcastChannel).
+///
+/// `async` for the same reason as `open_dapp`: it creates a webview, which
+/// deadlocks on Windows when done from a synchronous command.
 #[tauri::command]
-fn sync_menu_overlay<R: Runtime>(
+async fn sync_menu_overlay<R: Runtime>(
     app: AppHandle<R>,
     visible: bool,
     x: Option<f64>,
@@ -2451,6 +2337,7 @@ fn sync_menu_overlay<R: Runtime>(
     let window = app
         .get_window("main")
         .ok_or("sync_menu_overlay: main window not found")?;
+    let _guard = webview_creation_lock().lock().unwrap();
     let overlay = match app.get_webview(LABEL) {
         Some(wv) => {
             // Child webviews stack in creation order, so a dApp tab opened after
@@ -2498,7 +2385,7 @@ fn reload_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), Strin
 fn hide_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String> {
     validate_dapp_label(&label)?;
     if let Some(dapp) = app.get_webview(&label) {
-        hide_dapp_webview(&dapp)?;
+        dapp.hide().map_err(|e| e.to_string())?;
     }
     clear_active_dapp_label(&label);
     Ok(())
@@ -2509,7 +2396,7 @@ fn hide_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String>
 fn close_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String> {
     validate_dapp_label(&label)?;
     if let Some(dapp) = app.get_webview(&label) {
-        close_dapp_webview(dapp)?;
+        dapp.close().map_err(|e| e.to_string())?;
     }
     forget_dapp_bounds(&label);
     clear_active_dapp_label(&label);
@@ -5109,7 +4996,12 @@ fn startup_window_size<R: Runtime>(app: &tauri::App<R>) -> (LogicalSize<f64>, bo
     // Pick startup sizes by usable monitor area, keeping small screens maximized
     // and giving large displays a wider canvas without making the app feel full-screen.
     if w <= SMALL_SCREEN_W || h <= SMALL_SCREEN_H {
-        return (LogicalSize::new(w, h), true);
+        // Maximized supplies the actual startup layout; the size here only sets
+        // the RESTORE geometry. inner_size is the CLIENT area, so a full
+        // work-area value would overflow it once the OS adds the title bar and
+        // borders — on Windows an un-maximized window then hangs below the
+        // taskbar and the bottom of the sidebar is clipped.
+        return (LogicalSize::new(w * 0.94, h * 0.92), true);
     }
 
     let target = if w <= MEDIUM_SCREEN_W || h <= MEDIUM_SCREEN_H {
@@ -5127,6 +5019,55 @@ fn startup_window_size<R: Runtime>(app: &tauri::App<R>) -> (LogicalSize<f64>, bo
         ),
         false,
     )
+}
+
+/// Post-build fitting for the main window. `inner_size` sets the CLIENT area,
+/// so a window sized from the monitor work area overflows it once the OS adds
+/// decorations — on Windows the extra height ends up behind the taskbar and
+/// clips the bottom-left of the UI. Measure the real decoration overhead
+/// (outer − inner), shrink the client size until the outer frame fits the work
+/// area, and center the outer frame within it (tao's `.center()` uses the full
+/// monitor, which lets the frame dip behind the taskbar). Returns the actual
+/// client size so the shell webview can be sized to match exactly — for a
+/// maximized window that is the maximized client area, not the requested size.
+fn fit_startup_window<R: Runtime>(
+    window: &tauri::Window<R>,
+    requested: LogicalSize<f64>,
+    maximized: bool,
+) -> LogicalSize<f64> {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let actual_inner = window
+        .inner_size()
+        .map(|s| s.to_logical::<f64>(scale))
+        .unwrap_or(requested);
+    if maximized {
+        return actual_inner;
+    }
+    let (Ok(inner), Ok(outer), Ok(Some(monitor))) = (
+        window.inner_size(),
+        window.outer_size(),
+        window.current_monitor(),
+    ) else {
+        return actual_inner;
+    };
+    let mscale = monitor.scale_factor();
+    let work = monitor.work_area();
+    let work_size = work.size.to_logical::<f64>(mscale);
+    let work_pos = work.position.to_logical::<f64>(mscale);
+    let deco_w = outer.width.saturating_sub(inner.width) as f64 / scale;
+    let deco_h = outer.height.saturating_sub(inner.height) as f64 / scale;
+    let fitted = LogicalSize::new(
+        actual_inner.width.min((work_size.width - deco_w).max(1.0)),
+        actual_inner.height.min((work_size.height - deco_h).max(1.0)),
+    );
+    if fitted != actual_inner {
+        let _ = window.set_size(fitted);
+    }
+    let _ = window.set_position(LogicalPosition::new(
+        work_pos.x + ((work_size.width - (fitted.width + deco_w)) / 2.0).max(0.0),
+        work_pos.y + ((work_size.height - (fitted.height + deco_h)) / 2.0).max(0.0),
+    ));
+    fitted
 }
 
 fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
@@ -5243,7 +5184,8 @@ pub fn run() {
             }
             install_debug_menu(app)?;
             let (startup_size, should_maximize) = startup_window_size(app);
-            // Container window (no webview of its own).
+            // Container window (no webview of its own). Built hidden so the
+            // decoration-aware fitting below never flashes a wrongly-sized frame.
             let window = WindowBuilder::new(app, "main")
                 .title("AutoDesktop")
                 .inner_size(startup_size.width, startup_size.height)
@@ -5253,13 +5195,16 @@ pub fn run() {
                 )
                 .maximized(should_maximize)
                 .resizable(true)
+                .visible(false)
                 .center()
                 .build()?;
+            let shell_size = fit_startup_window(&window, startup_size, should_maximize);
 
             // Shell webview (local, trusted): our React UI, fills the whole window.
             let shell_builder = WebviewBuilder::new("shell", WebviewUrl::App("index.html".into()));
             let shell =
-                window.add_child(shell_builder, LogicalPosition::new(0.0, 0.0), startup_size)?;
+                window.add_child(shell_builder, LogicalPosition::new(0.0, 0.0), shell_size)?;
+            window.show()?;
 
             // dApp tab webviews (remote, untrusted) are created on demand, one per
             // open tab, by `open_dapp` (see create_dapp_webview). Each is labeled
@@ -5284,18 +5229,9 @@ pub fn run() {
                     repair_active_dapp_after_shell_resize(&app_for_window_events);
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
-                    #[cfg(target_os = "windows")]
-                    {
+                    if should_hide_on_close(&app_for_window_events) {
                         api.prevent_close();
-                        app_for_window_events.exit(0);
-                    }
-
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        if should_hide_on_close(&app_for_window_events) {
-                            api.prevent_close();
-                            let _ = window_for_close.hide();
-                        }
+                        let _ = window_for_close.hide();
                     }
                 }
                 _ => {}

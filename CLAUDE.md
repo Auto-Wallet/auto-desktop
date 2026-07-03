@@ -53,9 +53,10 @@ remote URL) and the trustworthy-origin derivation — without a GUI. Notes:
 `.github/workflows/ci.yml` runs on every PR/push-to-main:
 - **`test`** (windows-latest + macos-latest): `cargo test`, `tsc --noEmit` (including `src/wallet-core`), injected-bundle build.
 - **`smoke-windows`** — boots the **real app on WebView2**: `src-tauri/src/smoke.rs` (active only when
-  `AUTODESKTOP_SMOKE_DIR` is set) serves a dApp page from a loopback HTTP server, opens it via the real
-  `open_dapp` path in a `dapp-*` child webview, and the page must answer `eth_chainId` through the injected
-  provider → `wallet_request` pipeline. `scripts/smoke-ci.ts` launches the binary, asserts the result, and
+  `AUTODESKTOP_SMOKE_DIR` is set) serves a dApp page from a loopback HTTP server, drives the SHELL webview
+  to `invoke('open_dapp', …)` over its real IPC (the exact user-click path — required to catch the Windows
+  sync-command deadlock below) so the page opens in a `dapp-*` child webview, and the page must answer
+  `eth_chainId` through the injected provider → `wallet_request` pipeline. `scripts/smoke-ci.ts` launches the binary, asserts the result, and
   uploads **desktop screenshots** as the `windows-smoke` artifact — check those screenshots to see actual
   Windows rendering without a VM. Run locally: `bun run tauri build --debug --no-bundle && bun run smoke src-tauri/target/debug/auto-desktop`.
 - **`lint-assets`** — `bun run check:icons` asserts every entry in `src-tauri/icons/icon.ico` has rounded
@@ -67,6 +68,19 @@ remote URL) and the trustworthy-origin derivation — without a GUI. Notes:
   platform where the official WebDriver path works). Manual workflow_dispatch, non-blocking; see its README.
 
 Windows-specific gotchas already fixed once:
+- **Any command that creates a webview/window (or may) MUST be `async`** (`open_dapp`,
+  `sync_toast_overlay`, `sync_menu_overlay`). Synchronous commands run on the main thread inside a
+  WebView2 event handler, where webview creation **deadlocks** (tauri builder docs / wry#583): the dApp
+  never appears, the shell stops scrolling, and the close button dies — the app-wide Windows freeze of
+  v0.2.14–0.2.17. All earlier "blank child webview steals input" reports were this deadlock, misdiagnosed;
+  the v0.2.16 separate-dapp-window rewrite treated that symptom and was reverted. The smoke test drives
+  `open_dapp` through the shell's real IPC precisely so this regression stays caught (calling the Rust fn
+  from `setup()` bypassed the deadlocking context and hid it).
+- `WindowBuilder::inner_size` is the CLIENT size: sizing it from the monitor work area makes the OUTER
+  frame (client + title bar/borders) overflow below the taskbar and clip the sidebar bottom. Startup goes
+  through `fit_startup_window`, which measures outer−inner post-build, shrinks the client to fit the work
+  area, centers within the work area (not the monitor), and returns the ACTUAL client size for the shell
+  child webview (also right when the window starts maximized).
 - `content_to_frame` title-bar compensation is a macOS-only artifact — on Windows/Linux child-webview
   bounds are already client-area relative, so it must pass through.
 - `cargo test` exes on Windows die at startup with `0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND`: they carry no
