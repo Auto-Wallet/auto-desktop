@@ -2569,7 +2569,7 @@
   align-items: flex-start;
   gap: 12px;
   width: 100%;
-  min-height: 92px;
+  min-height: 116px;
   padding: 13px;
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
@@ -2632,8 +2632,15 @@
   font-size: 11px;
   font-weight: 700;
 }
-.defi-label {
+.defi-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   margin-top: 2px;
+}
+.defi-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2641,11 +2648,25 @@
   font-size: 12px;
   font-weight: 700;
 }
+.defi-group-label {
+  flex: none;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--brand-soft) 64%, var(--surface));
+  color: var(--brand-ink);
+  font-size: 10.5px;
+  font-weight: 800;
+}
 .defi-symbols {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  margin-top: 8px;
+  margin-top: 7px;
 }
 .defi-symbols span {
   padding: 2px 6px;
@@ -2656,12 +2677,85 @@
   font-size: 10.5px;
   font-weight: 700;
 }
-.defi-value {
+.defi-token-breakdown {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-1);
+}
+.defi-token-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 700;
+}
+.defi-token-left {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.defi-token-symbol {
   flex: none;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.defi-token-amount {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--ink-4);
+}
+.defi-token-usd {
+  flex: none;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.defi-value-wrap {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  flex: none;
+  max-width: 34%;
+}
+.defi-value {
   color: var(--ink);
   font-size: 17px;
   font-weight: 800;
   line-height: 1.15;
+}
+.defi-value-sub {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .defi-card {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+  .defi-value-wrap {
+    grid-column: 2;
+    justify-items: start;
+    max-width: 100%;
+  }
 }
 
 .empty {

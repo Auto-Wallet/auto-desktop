@@ -816,6 +816,9 @@ function DefiPositionCard({
     position.symbols.length > 0
       ? position.symbols
       : position.tokens.map((token) => token.symbol);
+  const detailTokens = position.tokens.filter(
+    (token) => token.balance || token.balanceUsd != null,
+  );
   const canOpen = !!position.appUrl;
   function openPositionDapp() {
     if (!position.appUrl) return;
@@ -857,7 +860,12 @@ function DefiPositionCard({
           {position.appName}
           <span className="defi-network">{position.networkName}</span>
         </div>
-        <div className="defi-label">{position.label}</div>
+        <div className="defi-label-row">
+          <span className="defi-label">{position.label}</span>
+          {position.groupLabel && (
+            <span className="defi-group-label">{position.groupLabel}</span>
+          )}
+        </div>
         {symbols.length > 0 && (
           <div className="defi-symbols">
             {symbols.slice(0, 4).map((symbol) => (
@@ -865,10 +873,39 @@ function DefiPositionCard({
             ))}
           </div>
         )}
+        {detailTokens.length > 0 && (
+          <div className="defi-token-breakdown">
+            {detailTokens.slice(0, 4).map((token, index) => (
+              <div
+                className="defi-token-row"
+                key={`${token.symbol}-${token.balance ?? index}`}
+              >
+                <span className="defi-token-left">
+                  <span className="defi-token-symbol">{token.symbol}</span>
+                  {token.balance && (
+                    <span className="defi-token-amount">
+                      {formatDefiTokenAmount(token.balance)}
+                    </span>
+                  )}
+                </span>
+                {token.balanceUsd != null && (
+                  <span className="defi-token-usd">{fmtUsd(token.balanceUsd)}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      <div className="defi-value tnum">{fmtUsd(position.balanceUsd)}</div>
+      <div className="defi-value-wrap">
+        <div className="defi-value tnum">{fmtUsd(position.balanceUsd)}</div>
+        <div className="defi-value-sub">{symbols.slice(0, 2).join(" / ")}</div>
+      </div>
     </Tag>
   );
+}
+
+function formatDefiTokenAmount(value: string): string {
+  return trimAmount(value, 8);
 }
 
 // One sendable balance (native coin or held ERC-20) for the Send picker.

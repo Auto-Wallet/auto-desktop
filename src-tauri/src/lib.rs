@@ -641,6 +641,33 @@ struct DefiPositionsResponse {
     positions: Vec<DefiPosition>,
 }
 
+#[derive(Clone, Copy)]
+struct CustomDefiProvider {
+    name: &'static str,
+    fetch: fn(String) -> CustomDefiFetch,
+}
+
+type CustomDefiFetch =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<DefiPosition>, String>> + Send>>;
+
+#[derive(Clone, Copy)]
+struct XStakeFarmingPool {
+    key: &'static str,
+    contract: &'static str,
+    staking_symbol: &'static str,
+    staking_decimals: u8,
+    staking_price_id: &'static str,
+    reward_symbol: &'static str,
+    reward_decimals: u8,
+    reward_price_id: &'static str,
+    reward_addr: &'static str,
+}
+
+struct Multicall3Call {
+    target: String,
+    call_data: String,
+}
+
 fn default_explorer_url(chain_id: &str) -> Option<String> {
     let base = match chain_id.to_lowercase().as_str() {
         "0x1" => "https://etherscan.io/tx/",
@@ -3971,6 +3998,505 @@ async fn fetch_debank_defi_positions(address: &str) -> Result<Vec<DefiPosition>,
     Ok(positions)
 }
 
+fn custom_defi_providers() -> &'static [CustomDefiProvider] {
+    &[CustomDefiProvider {
+        name: "XStake Farming",
+        fetch: |address| Box::pin(fetch_xstake_farming_positions(address)),
+    }]
+}
+
+async fn fetch_custom_defi_positions(address: &str) -> Result<Vec<DefiPosition>, String> {
+    let mut positions = Vec::new();
+    for provider in custom_defi_providers() {
+        let provider_positions = (provider.fetch)(address.to_string())
+            .await
+            .map_err(|e| format!("{}: {e}", provider.name))?;
+        positions.extend(provider_positions);
+    }
+    positions.sort_by(|a, b| {
+        b.balance_usd
+            .partial_cmp(&a.balance_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(positions)
+}
+
+fn merge_defi_positions(
+    primary_source: &str,
+    primary: Vec<DefiPosition>,
+    custom: Result<Vec<DefiPosition>, String>,
+) -> DefiPositionsResponse {
+    match custom {
+        Ok(custom_positions) if !custom_positions.is_empty() => {
+            let mut positions = primary;
+            positions.extend(custom_positions);
+            positions.sort_by(|a, b| {
+                b.balance_usd
+                    .partial_cmp(&a.balance_usd)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            DefiPositionsResponse {
+                source: format!("{primary_source} + Custom"),
+                positions,
+            }
+        }
+        Ok(_) => DefiPositionsResponse {
+            source: primary_source.to_string(),
+            positions: primary,
+        },
+        Err(err) => {
+            println!("[AutoDesktop] defi custom failed source={primary_source} error={err}");
+            DefiPositionsResponse {
+                source: primary_source.to_string(),
+                positions: primary,
+            }
+        }
+    }
+}
+
+fn custom_only_defi_response(
+    custom: Result<Vec<DefiPosition>, String>,
+) -> Result<DefiPositionsResponse, String> {
+    let positions = custom?;
+    if positions.is_empty() {
+        return Err("no custom DeFi positions detected".to_string());
+    }
+    Ok(DefiPositionsResponse {
+        source: "Custom".to_string(),
+        positions,
+    })
+}
+
+const XSTAKE_APP_URL: &str = "https://xstake.wanchain.org";
+const XSTAKE_CHAIN_ID: &str = "0x378";
+const XSTAKE_CHAIN_NAME: &str = "Wanchain";
+const WANCHAIN_MULTICALL3: &str = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const XWAN_PRICE_ID: &str = "wanchain";
+
+const XSTAKE_FARMING_POOLS: &[XStakeFarmingPool] = &[
+    XStakeFarmingPool {
+        key: "BTC",
+        contract: "0x9E2C89d3b48ecB0761764D6a17594dA74f20f3Bb",
+        staking_symbol: "xWAN",
+        staking_decimals: 18,
+        staking_price_id: XWAN_PRICE_ID,
+        reward_symbol: "wanBTC",
+        reward_decimals: 8,
+        reward_price_id: "bitcoin",
+        reward_addr: "0x50c439B6d602297252505a6799d84eA5928bCFb6",
+    },
+    XStakeFarmingPool {
+        key: "ETH",
+        contract: "0xaeC46cd03C3489EF8C2061E66D3d57FA0171387D",
+        staking_symbol: "xWAN",
+        staking_decimals: 18,
+        staking_price_id: XWAN_PRICE_ID,
+        reward_symbol: "wanETH",
+        reward_decimals: 18,
+        reward_price_id: "ethereum",
+        reward_addr: "0xE3aE74D1518A76715aB4C7BeDF1af73893cd435A",
+    },
+    XStakeFarmingPool {
+        key: "USDT",
+        contract: "0x3167219355f3532B8B37e24213118A0898AdcdFB",
+        staking_symbol: "xWAN",
+        staking_decimals: 18,
+        staking_price_id: XWAN_PRICE_ID,
+        reward_symbol: "wanUSDT",
+        reward_decimals: 6,
+        reward_price_id: "tether",
+        reward_addr: "0x11e77E27Af5539872efEd10abaA0b408cfd9fBBD",
+    },
+    XStakeFarmingPool {
+        key: "USDC",
+        contract: "0x47047A990523F08743245160BD07dEcC442efA9C",
+        staking_symbol: "xWAN",
+        staking_decimals: 18,
+        staking_price_id: XWAN_PRICE_ID,
+        reward_symbol: "wanUSDC",
+        reward_decimals: 6,
+        reward_price_id: "usd-coin",
+        reward_addr: "0x52A9CEA01c4CBDd669883e41758B8eB8e8E2B34b",
+    },
+    XStakeFarmingPool {
+        key: "wanBTC",
+        contract: "0x6bcae52a20d3E7C1a2eBFfEf11e0026501979F03",
+        staking_symbol: "wanBTC",
+        staking_decimals: 8,
+        staking_price_id: "bitcoin",
+        reward_symbol: "xWAN",
+        reward_decimals: 18,
+        reward_price_id: XWAN_PRICE_ID,
+        reward_addr: "0x2eA407Aa69be7367BF231E76B51fab9eC436766c",
+    },
+    XStakeFarmingPool {
+        key: "wanETH",
+        contract: "0x2C2dffc78340068c61A706d900578Cf6Fd3Bc07F",
+        staking_symbol: "wanETH",
+        staking_decimals: 18,
+        staking_price_id: "ethereum",
+        reward_symbol: "xWAN",
+        reward_decimals: 18,
+        reward_price_id: XWAN_PRICE_ID,
+        reward_addr: "0x2eA407Aa69be7367BF231E76B51fab9eC436766c",
+    },
+    XStakeFarmingPool {
+        key: "wanUSDT",
+        contract: "0x812C7F30a67598e32a351a64495F8426AB83Ff20",
+        staking_symbol: "wanUSDT",
+        staking_decimals: 6,
+        staking_price_id: "tether",
+        reward_symbol: "xWAN",
+        reward_decimals: 18,
+        reward_price_id: XWAN_PRICE_ID,
+        reward_addr: "0x2eA407Aa69be7367BF231E76B51fab9eC436766c",
+    },
+    XStakeFarmingPool {
+        key: "wanUSDC",
+        contract: "0x45eda9edA919c5977f0a55f2BD69494B72cc232F",
+        staking_symbol: "wanUSDC",
+        staking_decimals: 6,
+        staking_price_id: "usd-coin",
+        reward_symbol: "xWAN",
+        reward_decimals: 18,
+        reward_price_id: XWAN_PRICE_ID,
+        reward_addr: "0x2eA407Aa69be7367BF231E76B51fab9eC436766c",
+    },
+];
+
+async fn fetch_xstake_farming_positions(address: String) -> Result<Vec<DefiPosition>, String> {
+    println!("[AutoDesktop] defi custom XStake start address={address}");
+    let chain = find_chain(XSTAKE_CHAIN_ID)
+        .ok_or_else(|| "Wanchain chain config is missing".to_string())?;
+    let prices =
+        fetch_defi_usd_prices(&["wanchain", "bitcoin", "ethereum", "tether", "usd-coin"]).await?;
+    let pool_amounts = fetch_xstake_pool_amounts(&chain, &address).await?;
+    let mut positions = Vec::new();
+    for (pool, (staked_raw, reward_raw)) in XSTAKE_FARMING_POOLS.iter().zip(pool_amounts) {
+        if staked_raw == 0.0 && reward_raw == 0.0 {
+            continue;
+        }
+        positions.push(xstake_position_from_amounts(
+            pool, staked_raw, reward_raw, &prices,
+        )?);
+    }
+    println!(
+        "[AutoDesktop] defi custom XStake done address={address} positions={}",
+        positions.len()
+    );
+    Ok(positions)
+}
+
+async fn fetch_xstake_pool_amounts(
+    chain: &ChainCfg,
+    address: &str,
+) -> Result<Vec<(f64, f64)>, String> {
+    let mut calls = Vec::new();
+    for pool in XSTAKE_FARMING_POOLS {
+        calls.push(Multicall3Call {
+            target: pool.contract.to_string(),
+            call_data: call_data("userInfo(address)", &[address]),
+        });
+        calls.push(Multicall3Call {
+            target: pool.contract.to_string(),
+            call_data: call_data(
+                "pendingReward(address,address)",
+                &[address, pool.reward_addr],
+            ),
+        });
+    }
+    let return_data = eth_call_multicall3(chain, &calls).await?;
+    let mut amounts = Vec::new();
+    for (pool_index, pair) in return_data.chunks_exact(2).enumerate() {
+        let staked = match &pair[0] {
+            Some(data) => first_u256_word_as_f64(data)?,
+            None => {
+                println!(
+                    "[AutoDesktop] defi custom XStake multicall userInfo failed pool={}",
+                    XSTAKE_FARMING_POOLS[pool_index].key
+                );
+                0.0
+            }
+        };
+        let reward = match &pair[1] {
+            Some(data) => first_u256_word_as_f64(data)?,
+            None => {
+                println!(
+                    "[AutoDesktop] defi custom XStake multicall pendingReward failed pool={}",
+                    XSTAKE_FARMING_POOLS[pool_index].key
+                );
+                0.0
+            }
+        };
+        amounts.push((staked, reward));
+    }
+    Ok(amounts)
+}
+
+fn xstake_position_from_amounts(
+    pool: &XStakeFarmingPool,
+    staked_raw: f64,
+    reward_raw: f64,
+    prices: &HashMap<String, f64>,
+) -> Result<DefiPosition, String> {
+    let staked_amount = raw_token_amount(staked_raw, pool.staking_decimals);
+    let reward_amount = raw_token_amount(reward_raw, pool.reward_decimals);
+    let staking_price = defi_price(prices, pool.staking_price_id)?;
+    let reward_price = defi_price(prices, pool.reward_price_id)?;
+    let staked_usd = staked_amount * staking_price;
+    let reward_usd = reward_amount * reward_price;
+    let mut tokens = Vec::new();
+    if staked_raw > 0.0 {
+        tokens.push(DefiPositionToken {
+            symbol: pool.staking_symbol.to_string(),
+            balance: Some(format_token_amount(staked_amount)),
+            balance_usd: Some(staked_usd),
+        });
+    }
+    if reward_raw > 0.0 {
+        tokens.push(DefiPositionToken {
+            symbol: pool.reward_symbol.to_string(),
+            balance: Some(format_token_amount(reward_amount)),
+            balance_usd: Some(reward_usd),
+        });
+    }
+    let mut symbols = Vec::new();
+    for token in &tokens {
+        if !symbols.iter().any(|s| s == &token.symbol) {
+            symbols.push(token.symbol.clone());
+        }
+    }
+    Ok(DefiPosition {
+        id: format!("custom:xstake:{XSTAKE_CHAIN_ID}:{}", pool.key),
+        app_name: "XStake Farming".to_string(),
+        app_image_url: Some(xstake_logo_data_uri()),
+        app_url: Some(XSTAKE_APP_URL.to_string()),
+        network_name: XSTAKE_CHAIN_NAME.to_string(),
+        chain_id: XSTAKE_CHAIN_ID.to_string(),
+        label: format!("{} farming", pool.staking_symbol),
+        group_label: Some(format!("Earn {}", pool.reward_symbol)),
+        balance_usd: staked_usd + reward_usd,
+        symbols,
+        tokens,
+    })
+}
+
+fn call_data(signature: &str, address_args: &[&str]) -> String {
+    let mut data = evm_function_selector(signature);
+    for address in address_args {
+        data.push_str(&encode_evm_address_arg(address));
+    }
+    data
+}
+
+fn evm_function_selector(signature: &str) -> String {
+    let hash = Keccak256::digest(signature.as_bytes());
+    format!("0x{}", hex::encode(&hash[..4]))
+}
+
+fn encode_evm_address_arg(address: &str) -> String {
+    let hex = address
+        .strip_prefix("0x")
+        .or_else(|| address.strip_prefix("0X"))
+        .expect("validated EVM address must be 0x-prefixed");
+    format!("{:0>64}", hex.to_ascii_lowercase())
+}
+
+async fn eth_call_multicall3(
+    chain: &ChainCfg,
+    calls: &[Multicall3Call],
+) -> Result<Vec<Option<String>>, String> {
+    let data = encode_multicall3_aggregate3(calls)?;
+    let result = node_rpc_call(
+        chain,
+        "eth_call",
+        &[
+            json!({ "to": WANCHAIN_MULTICALL3, "data": data }),
+            json!("latest"),
+        ],
+    )
+    .await?;
+    let raw = result
+        .as_str()
+        .ok_or_else(|| "eth_call returned a non-string result".to_string())?;
+    decode_multicall3_aggregate3(raw, calls.len())
+}
+
+fn encode_multicall3_aggregate3(calls: &[Multicall3Call]) -> Result<String, String> {
+    let mut tails = String::new();
+    let mut offsets = String::new();
+    let mut tail_offset = calls.len() * 32;
+    for call in calls {
+        offsets.push_str(&encode_usize_word(tail_offset));
+        let tuple = encode_multicall3_call(call)?;
+        tail_offset += tuple.len() / 2;
+        tails.push_str(&tuple);
+    }
+    let mut data = evm_function_selector("aggregate3((address,bool,bytes)[])");
+    data.push_str(&encode_usize_word(32));
+    data.push_str(&encode_usize_word(calls.len()));
+    data.push_str(&offsets);
+    data.push_str(&tails);
+    Ok(data)
+}
+
+fn encode_multicall3_call(call: &Multicall3Call) -> Result<String, String> {
+    let bytes = hex_payload(&call.call_data)?;
+    let mut tuple = String::new();
+    tuple.push_str(&encode_evm_address_arg(&call.target));
+    tuple.push_str(&encode_bool_word(true));
+    tuple.push_str(&encode_usize_word(96));
+    tuple.push_str(&encode_usize_word(bytes.len() / 2));
+    tuple.push_str(bytes);
+    tuple.push_str(&"0".repeat(padded_hex_len(bytes.len()) - bytes.len()));
+    Ok(tuple)
+}
+
+fn decode_multicall3_aggregate3(
+    raw: &str,
+    expected_len: usize,
+) -> Result<Vec<Option<String>>, String> {
+    let bytes = hex_payload(raw)?;
+    let offset = read_word_usize(bytes, 0)?;
+    let array_start = offset * 2;
+    let len = read_word_usize(bytes, array_start)?;
+    if len != expected_len {
+        return Err(format!(
+            "multicall returned {len} results, expected {expected_len}"
+        ));
+    }
+    let head_start = array_start + 64;
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        let tuple_offset = read_word_usize(bytes, head_start + i * 64)?;
+        let tuple_start = head_start + tuple_offset * 2;
+        let success = read_word_usize(bytes, tuple_start)? == 1;
+        let return_offset = read_word_usize(bytes, tuple_start + 64)?;
+        let return_start = tuple_start + return_offset * 2;
+        let return_len = read_word_usize(bytes, return_start)?;
+        let data_start = return_start + 64;
+        let data_end = data_start + return_len * 2;
+        if data_end > bytes.len() {
+            return Err("multicall return data is truncated".to_string());
+        }
+        out.push(if success {
+            Some(format!("0x{}", &bytes[data_start..data_end]))
+        } else {
+            None
+        });
+    }
+    Ok(out)
+}
+
+fn first_u256_word_as_f64(raw: &str) -> Result<f64, String> {
+    let hex = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .ok_or_else(|| format!("invalid uint256 return: {raw}"))?;
+    if hex.len() < 64 {
+        return Err(format!("short uint256 return: {raw}"));
+    }
+    u256_hex_to_f64(&hex[..64])
+}
+
+fn u256_hex_to_f64(hex: &str) -> Result<f64, String> {
+    let mut out = 0.0;
+    for c in hex.chars() {
+        let digit = c
+            .to_digit(16)
+            .ok_or_else(|| format!("invalid hex digit in uint256: {hex}"))?;
+        out = out * 16.0 + f64::from(digit);
+    }
+    Ok(out)
+}
+
+fn read_word_usize(hex: &str, start: usize) -> Result<usize, String> {
+    let end = start + 64;
+    if end > hex.len() {
+        return Err("ABI word is truncated".to_string());
+    }
+    usize::from_str_radix(&hex[start..end], 16)
+        .map_err(|_| format!("ABI word is too large or invalid: {}", &hex[start..end]))
+}
+
+fn encode_usize_word(value: usize) -> String {
+    format!("{value:064x}")
+}
+
+fn encode_bool_word(value: bool) -> String {
+    encode_usize_word(if value { 1 } else { 0 })
+}
+
+fn hex_payload(value: &str) -> Result<&str, String> {
+    let hex = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .ok_or_else(|| format!("hex value must be 0x-prefixed: {value}"))?;
+    if hex.len() % 2 != 0 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("invalid hex payload: {value}"));
+    }
+    Ok(hex)
+}
+
+fn padded_hex_len(len: usize) -> usize {
+    ((len + 63) / 64) * 64
+}
+
+fn raw_token_amount(raw: f64, decimals: u8) -> f64 {
+    raw / 10_f64.powi(i32::from(decimals))
+}
+
+fn format_token_amount(amount: f64) -> String {
+    let mut s = format!("{amount:.8}");
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    s
+}
+
+fn defi_price(prices: &HashMap<String, f64>, id: &str) -> Result<f64, String> {
+    prices
+        .get(id)
+        .copied()
+        .ok_or_else(|| format!("missing USD price for {id}"))
+}
+
+async fn fetch_defi_usd_prices(ids: &[&str]) -> Result<HashMap<String, f64>, String> {
+    let url = format!(
+        "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd",
+        ids.join(",")
+    );
+    let data: Value = reqwest::Client::builder()
+        .timeout(DEFI_PROVIDER_TIMEOUT)
+        .build()
+        .map_err(|e| format!("building price client: {e}"))?
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("querying prices: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("querying prices: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("reading prices: {e}"))?;
+    let mut prices = HashMap::new();
+    for id in ids {
+        let price = value_as_f64(data.pointer(&format!("/{id}/usd")))
+            .ok_or_else(|| format!("missing USD price for {id}"))?;
+        prices.insert((*id).to_string(), price);
+    }
+    Ok(prices)
+}
+
+fn xstake_logo_data_uri() -> String {
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#0f68aa"/><path fill="#fff" d="M20 15h8l5 8 5-8h8L37 31l10 18h-8l-6-10-6 10h-8l10-18z"/></svg>"##;
+    format!("data:image/svg+xml;base64,{}", B64.encode(svg.as_bytes()))
+}
+
 #[tauri::command]
 async fn get_defi_positions(
     address: String,
@@ -3989,6 +4515,7 @@ async fn get_defi_positions(
     }
     let has_wallet_assets = has_wallet_assets_over_one_usd.unwrap_or(false);
     let debank_available = debank_api_key().is_some();
+    let custom = fetch_custom_defi_positions(address).await;
     let zapper = fetch_zapper_defi_positions(address).await;
     let (zapper_positions, zapper_balance_usd) = match zapper {
         Ok(result) => result,
@@ -4002,10 +4529,13 @@ async fn get_defi_positions(
                     "[AutoDesktop] defi response source=DeBank address={address} positions={}",
                     positions.len()
                 );
-                return Ok(DefiPositionsResponse {
-                    source: "DeBank".to_string(),
-                    positions,
-                });
+                return Ok(merge_defi_positions("DeBank", positions, custom));
+            }
+            if custom.as_ref().is_ok_and(|positions| !positions.is_empty()) {
+                println!(
+                    "[AutoDesktop] defi fallback source=Custom address={address} reason=zapper-error error={err}"
+                );
+                return custom_only_defi_response(custom);
             }
             println!("[AutoDesktop] defi Zapper failed address={address} error={err}");
             return Err(err);
@@ -4020,10 +4550,7 @@ async fn get_defi_positions(
             "[AutoDesktop] defi response source=Zapper address={address} positions={}",
             zapper_positions.len()
         );
-        return Ok(DefiPositionsResponse {
-            source: "Zapper".to_string(),
-            positions: zapper_positions,
-        });
+        return Ok(merge_defi_positions("Zapper", zapper_positions, custom));
     }
     println!(
         "[AutoDesktop] defi fallback source=DeBank address={address} reason=zapper-empty-wallet-assets-present"
@@ -4033,10 +4560,7 @@ async fn get_defi_positions(
         "[AutoDesktop] defi response source=DeBank address={address} positions={}",
         positions.len()
     );
-    Ok(DefiPositionsResponse {
-        source: "DeBank".to_string(),
-        positions,
-    })
+    Ok(merge_defi_positions("DeBank", positions, custom))
 }
 
 /// Normalize a chain id (accept "0x.." or decimal) to canonical lowercase 0x-hex.
@@ -5064,7 +5588,9 @@ fn fit_startup_window<R: Runtime>(
     let deco_h = outer.height.saturating_sub(inner.height) as f64 / scale;
     let fitted = LogicalSize::new(
         actual_inner.width.min((work_size.width - deco_w).max(1.0)),
-        actual_inner.height.min((work_size.height - deco_h).max(1.0)),
+        actual_inner
+            .height
+            .min((work_size.height - deco_h).max(1.0)),
     );
     if fitted != actual_inner {
         let _ = window.set_size(fitted);
@@ -5479,6 +6005,127 @@ mod tests {
     }
 
     #[test]
+    fn merges_custom_defi_with_primary_source() {
+        let primary = DefiPosition {
+            id: "zapper:aave:0".to_string(),
+            app_name: "Aave".to_string(),
+            app_image_url: None,
+            app_url: None,
+            network_name: "Ethereum".to_string(),
+            chain_id: "0x1".to_string(),
+            label: "Deposit".to_string(),
+            group_label: None,
+            balance_usd: 7.0,
+            symbols: vec!["USDC".to_string()],
+            tokens: Vec::new(),
+        };
+        let custom = DefiPosition {
+            id: "custom:xstake:wanUSDT".to_string(),
+            app_name: "XStake Farming".to_string(),
+            app_image_url: None,
+            app_url: Some(XSTAKE_APP_URL.to_string()),
+            network_name: XSTAKE_CHAIN_NAME.to_string(),
+            chain_id: XSTAKE_CHAIN_ID.to_string(),
+            label: "wanUSDT farming".to_string(),
+            group_label: Some("Earn xWAN".to_string()),
+            balance_usd: 11.0,
+            symbols: vec!["wanUSDT".to_string()],
+            tokens: Vec::new(),
+        };
+
+        let response = merge_defi_positions("Zapper", vec![primary], Ok(vec![custom]));
+
+        assert_eq!(response.source, "Zapper + Custom");
+        assert_eq!(response.positions.len(), 2);
+        assert_eq!(response.positions[0].app_name, "XStake Farming");
+        assert_eq!(response.positions[1].app_name, "Aave");
+    }
+
+    #[test]
+    fn builds_xstake_position_from_staked_and_reward_amounts() {
+        let mut prices = HashMap::new();
+        prices.insert("tether".to_string(), 1.0);
+        prices.insert(XWAN_PRICE_ID.to_string(), 0.25);
+        let pool = XStakeFarmingPool {
+            key: "wanUSDT",
+            contract: "0x812C7F30a67598e32a351a64495F8426AB83Ff20",
+            staking_symbol: "wanUSDT",
+            staking_decimals: 6,
+            staking_price_id: "tether",
+            reward_symbol: "xWAN",
+            reward_decimals: 18,
+            reward_price_id: XWAN_PRICE_ID,
+            reward_addr: "0x2eA407Aa69be7367BF231E76B51fab9eC436766c",
+        };
+
+        let position =
+            xstake_position_from_amounts(&pool, 12_500_000.0, 2_000_000_000_000_000_000.0, &prices)
+                .unwrap();
+
+        assert_eq!(position.app_name, "XStake Farming");
+        assert_eq!(position.network_name, "Wanchain");
+        assert_eq!(position.label, "wanUSDT farming");
+        assert_eq!(position.group_label, Some("Earn xWAN".to_string()));
+        assert_eq!(
+            position.symbols,
+            vec!["wanUSDT".to_string(), "xWAN".to_string()]
+        );
+        assert_eq!(position.tokens[0].balance, Some("12.5".to_string()));
+        assert_eq!(position.tokens[1].balance, Some("2".to_string()));
+        assert_eq!(position.balance_usd, 13.0);
+    }
+
+    #[test]
+    fn encodes_multicall3_aggregate3_calls() {
+        let calls = vec![Multicall3Call {
+            target: "0x812C7F30a67598e32a351a64495F8426AB83Ff20".to_string(),
+            call_data: call_data(
+                "userInfo(address)",
+                &["0x0000000000000000000000000000000000000001"],
+            ),
+        }];
+
+        let data = encode_multicall3_aggregate3(&calls).unwrap();
+
+        assert!(data.starts_with("0x82ad56cb"));
+        assert!(data.contains("000000000000000000000000812c7f30a67598e32a351a64495f8426ab83ff20"));
+        assert!(data.contains("0000000000000000000000000000000000000000000000000000000000000001"));
+        assert!(data.contains(
+            &call_data(
+                "userInfo(address)",
+                &["0x0000000000000000000000000000000000000001"]
+            )[2..]
+        ));
+    }
+
+    #[test]
+    fn decodes_multicall3_aggregate3_results() {
+        let success_data = format!("{}{}", encode_usize_word(42), encode_usize_word(99));
+        let tuple1 = encode_mock_multicall_result(true, &success_data);
+        let tuple2 = encode_mock_multicall_result(false, "");
+        let tuple1_offset = 2 * 32;
+        let tuple2_offset = tuple1_offset + tuple1.len() / 2;
+        let raw = format!(
+            "0x{}{}{}{}{}{}",
+            encode_usize_word(32),
+            encode_usize_word(2),
+            encode_usize_word(tuple1_offset),
+            encode_usize_word(tuple2_offset),
+            tuple1,
+            tuple2
+        );
+
+        let results = decode_multicall3_aggregate3(&raw, 2).unwrap();
+
+        assert_eq!(results[0], Some(format!("0x{success_data}")));
+        assert_eq!(
+            first_u256_word_as_f64(results[0].as_deref().unwrap()).unwrap(),
+            42.0
+        );
+        assert_eq!(results[1], None);
+    }
+
+    #[test]
     fn parses_erc20_transfer_activity() {
         let data = concat!(
             "0xa9059cbb",
@@ -5489,6 +6136,16 @@ mod tests {
         assert_eq!(parsed.0, "0x70997970c51812dc3a010c7d01b50e0d17dc79c8");
         assert_eq!(parsed.1, "0x12d687");
         assert!(parse_erc20_transfer("0x095ea7b3").is_none());
+    }
+
+    fn encode_mock_multicall_result(success: bool, return_data: &str) -> String {
+        let mut tuple = String::new();
+        tuple.push_str(&encode_bool_word(success));
+        tuple.push_str(&encode_usize_word(64));
+        tuple.push_str(&encode_usize_word(return_data.len() / 2));
+        tuple.push_str(return_data);
+        tuple.push_str(&"0".repeat(padded_hex_len(return_data.len()) - return_data.len()));
+        tuple
     }
 
     #[test]

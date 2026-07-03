@@ -23,7 +23,7 @@ export type DefiPosition = {
   tokens: DefiPositionToken[];
 };
 
-export type DefiSource = "Zapper" | "DeBank";
+export type DefiSource = string;
 type DefiPositionsResponse = {
   source: DefiSource;
   positions: DefiPosition[];
