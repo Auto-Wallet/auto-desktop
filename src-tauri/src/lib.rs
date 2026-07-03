@@ -4500,6 +4500,10 @@ fn format_token_amount(amount: f64) -> String {
 const PRICE_ORACLE_FILE: &str = "price-oracle.json";
 const PRICE_ORACLE_TTL_MS: u64 = 30 * 60 * 1000;
 const DIAGNOSTIC_LOG_FILE: &str = "autodesktop.log";
+const PRICE_ORACLE_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AutoDesktop/",
+    env!("CARGO_PKG_VERSION")
+);
 
 impl PriceOracleStore {
     fn from_app<R: Runtime>(app: &AppHandle<R>) -> Self {
@@ -4543,7 +4547,8 @@ impl PriceOracleStore {
         let fresh_enough = now.saturating_sub(cache.updated_at_ms) <= PRICE_ORACLE_TTL_MS;
         if fresh_enough && price_cache_has_all(&cache, ids) {
             self.log(format!(
-                "price oracle source=cache ids={} cached_count={}",
+                "version={} price oracle source=cache ids={} cached_count={}",
+                env!("CARGO_PKG_VERSION"),
                 ids.join(","),
                 cache.prices.len()
             ));
@@ -4555,7 +4560,8 @@ impl PriceOracleStore {
         }
 
         self.log(format!(
-            "price oracle fetch start ids={} cache_fresh={} cache_count={}",
+            "version={} price oracle fetch start ids={} cache_fresh={} cache_count={}",
+            env!("CARGO_PKG_VERSION"),
             ids.join(","),
             fresh_enough,
             cache.prices.len()
@@ -4572,7 +4578,8 @@ impl PriceOracleStore {
                 self.save_cache(&cache);
                 let picked = price_cache_entries(&cache, ids);
                 self.log(format!(
-                    "price oracle source=coingecko ids={} fresh_count={} returned_count={} cache_count={}",
+                    "version={} price oracle source=coingecko ids={} fresh_count={} returned_count={} cache_count={}",
+                    env!("CARGO_PKG_VERSION"),
                     ids.join(","),
                     fresh_count,
                     picked.len(),
@@ -4584,13 +4591,15 @@ impl PriceOracleStore {
                 let cached = price_cache_entries(&cache, ids);
                 if cached.is_empty() {
                     self.log(format!(
-                        "price oracle failed ids={} error={err}",
+                        "version={} price oracle failed ids={} error={err}",
+                        env!("CARGO_PKG_VERSION"),
                         ids.join(",")
                     ));
                     Err(err)
                 } else {
                     self.log(format!(
-                        "price oracle source=stale-cache ids={} returned_count={} error={err}",
+                        "version={} price oracle source=stale-cache ids={} returned_count={} error={err}",
+                        env!("CARGO_PKG_VERSION"),
                         ids.join(","),
                         cached.len()
                     ));
@@ -4726,7 +4735,12 @@ async fn fetch_price_oracle_entries(
     if let Some(path) = log_path {
         append_diagnostic_log(
             path,
-            &format!("price oracle http start ids={}", ids.join(",")),
+            &format!(
+                "version={} price oracle http start ids={} user_agent={}",
+                env!("CARGO_PKG_VERSION"),
+                ids.join(","),
+                PRICE_ORACLE_USER_AGENT
+            ),
         );
     }
     let data: Value = reqwest::Client::builder()
@@ -4735,6 +4749,9 @@ async fn fetch_price_oracle_entries(
         .map_err(|e| format!("building price client: {e}"))?
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
+        .header(reqwest::header::PRAGMA, "no-cache")
+        .header(reqwest::header::USER_AGENT, PRICE_ORACLE_USER_AGENT)
         .send()
         .await
         .map_err(|e| format!("querying prices: {e}"))?
@@ -4782,7 +4799,10 @@ fn get_diagnostic_log_path<R: Runtime>(app: AppHandle<R>) -> Result<String, Stri
 
 #[tauri::command]
 fn write_diagnostic_log<R: Runtime>(app: AppHandle<R>, message: String) -> Result<(), String> {
-    log_diagnostic(&app, message);
+    log_diagnostic(
+        &app,
+        format!("version={} {}", env!("CARGO_PKG_VERSION"), message),
+    );
     Ok(())
 }
 
@@ -6055,13 +6075,25 @@ pub fn run() {
             window.set_always_on_top(true)?;
             window.show()?;
             window.set_focus()?;
-            log_diagnostic(app.handle(), "startup main window shown always_on_top=true");
+            log_diagnostic(
+                app.handle(),
+                format!(
+                    "version={} startup main window shown always_on_top=true",
+                    env!("CARGO_PKG_VERSION")
+                ),
+            );
             let startup_window = window.clone();
             let startup_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 let _ = startup_window.set_always_on_top(false);
-                log_diagnostic(&startup_app, "startup main window always_on_top=false");
+                log_diagnostic(
+                    &startup_app,
+                    format!(
+                        "version={} startup main window always_on_top=false",
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                );
             });
 
             // dApp tab webviews (remote, untrusted) are created on demand, one per
