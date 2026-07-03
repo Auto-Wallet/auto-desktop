@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import "./WalletPage.css";
 import { chainLogo, findChain, useChains, type Chain } from "../lib/chains";
 import {
@@ -397,105 +397,108 @@ export default function WalletPage() {
           </button>
         </div>
 
-        {/* Portfolio hero */}
-        <div className="hero">
-          <div className="hero-row">
-            <div>
-              <div className="hero-label">
-                <Icon name="wallet" size={15} /> {t("wallet.total")} ·{" "}
-                {active.label}
-              </div>
-              {portfolio.loading && portfolio.total == null ? (
-                <div className="hero-skel" />
-              ) : portfolio.total != null ? (
-                <>
-                  <div className="hero-total disp tnum">
-                    <HeroAmount n={portfolio.total} />
-                    {isDefiLoading && (
-                      <span className="hero-loading" title={t("wallet.refreshingDefi")}>
-                        <Icon name="refresh" size={14} />
-                        {t("wallet.refreshingDefi")}
-                      </span>
-                    )}
-                  </div>
-                  {portfolio.total != null && (
-                    <div className="hero-change">
-                      <span className="pill">
-                        <Icon
-                          name={(trendPercent ?? 0) >= 0 ? "arrowUp" : "arrowDown"}
-                          size={13}
-                        />
-                        {trendPercent == null
-                          ? t("wallet.trendCollecting")
-                          : fmtPct(trendPercent)}
-                      </span>
-                      <span style={{ opacity: 0.9 }}>· {trend.label}</span>
+        {/* Portfolio hero + quick actions — side by side on wide windows
+            (container query on .wallet-pad), stacked otherwise. */}
+        <div className="wallet-top">
+          <div className="hero">
+            <div className="hero-row">
+              <div>
+                <div className="hero-label">
+                  <Icon name="wallet" size={15} /> {t("wallet.total")} ·{" "}
+                  {active.label}
+                </div>
+                {portfolio.loading && portfolio.total == null ? (
+                  <div className="hero-skel" />
+                ) : portfolio.total != null ? (
+                  <>
+                    <div className="hero-total disp tnum">
+                      <HeroAmount n={portfolio.total} />
+                      {isDefiLoading && (
+                        <span className="hero-loading" title={t("wallet.refreshingDefi")}>
+                          <Icon name="refresh" size={14} />
+                          {t("wallet.refreshingDefi")}
+                        </span>
+                      )}
                     </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <div className="hero-total disp tnum">$—</div>
-                  <div className="hero-note">
-                    <Icon name="info" size={13} />{" "}
-                    {t("wallet.pricesUnavailable")}
-                  </div>
-                </>
-              )}
+                    {portfolio.total != null && (
+                      <div className="hero-change">
+                        <span className="pill">
+                          <Icon
+                            name={(trendPercent ?? 0) >= 0 ? "arrowUp" : "arrowDown"}
+                            size={13}
+                          />
+                          {trendPercent == null
+                            ? t("wallet.trendCollecting")
+                            : fmtPct(trendPercent)}
+                        </span>
+                        <span style={{ opacity: 0.9 }}>· {trend.label}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="hero-total disp tnum">$—</div>
+                    <div className="hero-note">
+                      <Icon name="info" size={13} />{" "}
+                      {t("wallet.pricesUnavailable")}
+                    </div>
+                  </>
+                )}
+              </div>
+              <PortfolioSparkline trend={trend} />
+              {/* Refresh balances + prices (the eye/hide-balance toggle was dropped). */}
+              <button
+                className="hero-eye"
+                onClick={refreshAll}
+                title={t("wallet.refresh")}
+              >
+                <Icon name="refresh" size={17} />
+              </button>
             </div>
-            <PortfolioSparkline trend={trend} />
-            {/* Refresh balances + prices (the eye/hide-balance toggle was dropped). */}
-            <button
-              className="hero-eye"
-              onClick={refreshAll}
-              title={t("wallet.refresh")}
-            >
-              <Icon name="refresh" size={17} />
-            </button>
           </div>
-        </div>
 
-        {/* Quick actions */}
-        {isWatch ? (
-          <div className="quick">
-            <div className="card watch-banner">
-              <Icon name="eye" size={18} /> {t("wallet.watchOnly")}
+          {/* Quick actions */}
+          {isWatch ? (
+            <div className="quick">
+              <div className="card watch-banner">
+                <Icon name="eye" size={18} /> {t("wallet.watchOnly")}
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="quick">
-            <QuickBtn
-              icon="receive"
-              label={t("wallet.receive")}
-              onClick={() => setShowReceive(true)}
-            />
-            <QuickBtn
-              icon="send"
-              coral
-              label={t("wallet.send")}
-              onClick={() => {
-                setSendAssetKey(undefined);
-                setShowSend(true);
-              }}
-            />
-            <QuickBtn
-              icon="swap"
-              label={t("wallet.swap")}
-              onClick={() => {
-                setSwapAssetKey(undefined);
-                setShowSwap(true);
-              }}
-            />
-            <QuickBtn
-              icon="bridge"
-              label={t("wallet.bridge")}
-              onClick={() => {
-                setBridgeAssetKey(undefined);
-                setShowBridge(true);
-              }}
-            />
-          </div>
-        )}
+          ) : (
+            <div className="quick">
+              <QuickBtn
+                icon="receive"
+                label={t("wallet.receive")}
+                onClick={() => setShowReceive(true)}
+              />
+              <QuickBtn
+                icon="send"
+                coral
+                label={t("wallet.send")}
+                onClick={() => {
+                  setSendAssetKey(undefined);
+                  setShowSend(true);
+                }}
+              />
+              <QuickBtn
+                icon="swap"
+                label={t("wallet.swap")}
+                onClick={() => {
+                  setSwapAssetKey(undefined);
+                  setShowSwap(true);
+                }}
+              />
+              <QuickBtn
+                icon="bridge"
+                label={t("wallet.bridge")}
+                onClick={() => {
+                  setBridgeAssetKey(undefined);
+                  setShowBridge(true);
+                }}
+              />
+            </div>
+          )}
+        </div>
 
         {/* Tokens / Activity */}
         <div className="holdings">
@@ -777,12 +780,18 @@ function DefiSection({
       ) : defi.status === "loading" && defi.positions.length === 0 ? (
         <div className="defi-list">
           <div className="defi-card">
-            <span className="skeleton" style={{ width: 38, height: 38 }} />
-            <div className="defi-main">
-              <span className="skeleton" style={{ width: 180, height: 14 }} />
-              <span className="skeleton" style={{ width: 120, height: 12 }} />
+            <div className="defi-card-head">
+              <span
+                className="skeleton"
+                style={{ width: 38, height: 38, gridRow: "1 / -1" }}
+              />
+              <span className="skeleton" style={{ width: 140, height: 14 }} />
+              <span className="skeleton" style={{ width: 76, height: 14 }} />
+              <span
+                className="skeleton"
+                style={{ width: 100, height: 12, gridColumn: "2 / -1" }}
+              />
             </div>
-            <span className="skeleton" style={{ width: 76, height: 14 }} />
           </div>
         </div>
       ) : defi.status === "error" ? (
@@ -887,60 +896,67 @@ function DefiPositionCard({
       onClick={canOpen ? openPositionDapp : undefined}
       title={canOpen ? position.appUrl ?? undefined : undefined}
     >
-      <div className="defi-app-icon">
-        {position.appImageUrl ? (
-          <img src={position.appImageUrl} alt="" />
-        ) : (
-          position.appName.slice(0, 2).toUpperCase()
-        )}
-      </div>
-      <div className="defi-main">
-        <div className="defi-title">
-          {position.appName}
-          <span className="defi-network">{position.networkName}</span>
-        </div>
-        <div className="defi-label-row">
-          <span className="defi-label">{position.label}</span>
-          {position.groupLabel && (
-            <span className="defi-group-label">{position.groupLabel}</span>
+      {/* Head grid: icon | title + value on row 1, label row spanning the
+          full width on row 2 (so labels don't fight the value for space). */}
+      <div className="defi-card-head">
+        <div className="defi-app-icon">
+          {position.appImageUrl ? (
+            <img src={position.appImageUrl} alt="" />
+          ) : (
+            position.appName.slice(0, 2).toUpperCase()
           )}
         </div>
-        {symbols.length > 0 && (
+        <div className="defi-title">
+          <span className="defi-app-name" title={position.appName}>
+            {position.appName}
+          </span>
+          <span className="defi-network" title={position.networkName}>
+            {position.networkName}
+          </span>
+        </div>
+        <div className="defi-value tnum">{fmtUsd(position.balanceUsd)}</div>
+        <div className="defi-label-row">
+          <span className="defi-label" title={position.label}>
+            {position.label}
+          </span>
+          {position.groupLabel && (
+            <span className="defi-group-label" title={position.groupLabel}>
+              {position.groupLabel}
+            </span>
+          )}
+        </div>
+      </div>
+      {/* Body: full-width token table (aligned columns), or symbol chips when
+          there is no per-token detail. Pinned to the card bottom so rows of
+          cards keep their baselines aligned. */}
+      {detailTokens.length > 0 ? (
+        <div className="defi-token-breakdown">
+          {detailTokens.slice(0, 4).map((token, index) => (
+            <Fragment key={`${token.symbol}-${token.balance ?? index}`}>
+              <span className="defi-token-symbol" title={token.symbol}>
+                {token.symbol}
+              </span>
+              <span
+                className="defi-token-amount"
+                title={token.balance ?? undefined}
+              >
+                {token.balance ? formatDefiTokenAmount(token.balance) : ""}
+              </span>
+              <span className="defi-token-usd">
+                {token.balanceUsd != null ? fmtUsd(token.balanceUsd) : ""}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      ) : (
+        symbols.length > 0 && (
           <div className="defi-symbols">
             {symbols.slice(0, 4).map((symbol) => (
               <span key={symbol}>{symbol}</span>
             ))}
           </div>
-        )}
-        {detailTokens.length > 0 && (
-          <div className="defi-token-breakdown">
-            {detailTokens.slice(0, 4).map((token, index) => (
-              <div
-                className="defi-token-row"
-                key={`${token.symbol}-${token.balance ?? index}`}
-              >
-                <span className="defi-token-left">
-                  <span className="defi-token-symbol" title={token.symbol}>
-                    {token.symbol}
-                  </span>
-                  {token.balance && (
-                    <span className="defi-token-amount" title={token.balance}>
-                      {formatDefiTokenAmount(token.balance)}
-                    </span>
-                  )}
-                </span>
-                {token.balanceUsd != null && (
-                  <span className="defi-token-usd">{fmtUsd(token.balanceUsd)}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="defi-value-wrap">
-        <div className="defi-value tnum">{fmtUsd(position.balanceUsd)}</div>
-        <div className="defi-value-sub">{symbols.slice(0, 2).join(" / ")}</div>
-      </div>
+        )
+      )}
     </Tag>
   );
 }

@@ -1,8 +1,12 @@
 /* ===================== WALLET (Aurora) ===================== */
 .wallet-pad {
-  max-width: 760px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 22px 24px 44px;
+  padding: 22px 28px 44px;
+  /* Size container so the layout below adapts to the actual content width
+     (sidebar can collapse, so viewport media queries would be wrong). */
+  container-type: inline-size;
+  container-name: wallet;
 }
 
 /* wallet header row — account switcher + copy, aligned with the hero (#1, #2) */
@@ -1839,6 +1843,27 @@
   gap: 12px;
   margin-top: 16px;
 }
+
+/* On wide windows the hero and the quick actions sit side by side: the hero
+   stretches to match the 2×2 action grid instead of leaving a thin banner
+   floating over a wall of whitespace. */
+@container wallet (min-width: 1020px) {
+  .wallet-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 396px;
+    gap: 14px;
+    align-items: stretch;
+  }
+  .wallet-top .hero {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .wallet-top .quick {
+    grid-template-columns: repeat(2, 1fr);
+    margin-top: 0;
+  }
+}
 .quick-btn {
   display: flex;
   flex-direction: column;
@@ -2561,16 +2586,15 @@
 }
 .defi-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 10px;
 }
 .defi-card {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  flex-direction: column;
   width: 100%;
   min-height: 116px;
-  padding: 13px;
+  padding: 13px 14px;
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   background: var(--surface);
@@ -2578,6 +2602,18 @@
   color: inherit;
   font: inherit;
   text-align: left;
+}
+.defi-card-head {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) max-content;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.defi-card-head .defi-app-icon {
+  grid-row: 1 / -1;
 }
 .defi-card:hover {
   border-color: var(--line-3);
@@ -2610,10 +2646,6 @@
   outline: 1px solid var(--img-outline);
   outline-offset: -1px;
 }
-.defi-main {
-  flex: 1;
-  min-width: 0;
-}
 .defi-title {
   display: flex;
   align-items: center;
@@ -2623,7 +2655,16 @@
   font-size: 13.5px;
   font-weight: 800;
 }
+.defi-app-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .defi-network {
+  /* Shrinks (down to an ellipsis) before the app name does — the protocol
+     name is the more important of the two. */
+  flex: 0 999 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2633,11 +2674,11 @@
   font-weight: 700;
 }
 .defi-label-row {
+  grid-column: 2 / -1;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  margin-top: 2px;
 }
 .defi-label {
   min-width: 0;
@@ -2650,7 +2691,7 @@
 }
 .defi-group-label {
   flex: none;
-  max-width: 42%;
+  max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2662,11 +2703,13 @@
   font-size: 10.5px;
   font-weight: 800;
 }
+/* Fallback body when a position has no per-token detail: symbol chips,
+   pinned to the card bottom like the token table. */
 .defi-symbols {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  margin-top: 7px;
+  margin-top: auto;
 }
 .defi-symbols span {
   padding: 2px 6px;
@@ -2677,32 +2720,20 @@
   font-size: 10.5px;
   font-weight: 700;
 }
+/* Token table: one shared grid so the amount / USD columns align across all
+   rows; margin-top:auto pins it to the card bottom, so equal-height cards in
+   a grid row read as aligned instead of leaving a ragged hole in the middle. */
 .defi-token-breakdown {
   display: grid;
-  gap: 5px;
-  margin-top: 9px;
-  padding-top: 8px;
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
+  align-items: baseline;
+  column-gap: 12px;
+  row-gap: 6px;
+  margin-top: auto;
+  padding-top: 9px;
   border-top: 1px solid var(--line-1);
 }
-.defi-token-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--ink-3);
-  font-size: 11px;
-  font-weight: 700;
-}
-.defi-token-left {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  width: 100%;
-  min-width: 0;
-}
 .defi-token-symbol {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2713,17 +2744,19 @@
   font-weight: 800;
 }
 .defi-token-amount {
-  flex: none;
-  max-width: 12ch;
-  min-width: 0;
+  max-width: 16ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: right;
   font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
   color: var(--ink-4);
 }
 .defi-token-usd {
-  flex: none;
+  white-space: nowrap;
+  text-align: right;
   color: var(--ink-2);
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -2757,40 +2790,13 @@
 .defi-small-toggle:active {
   transform: scale(0.96);
 }
-.defi-value-wrap {
-  display: grid;
-  justify-items: end;
-  gap: 3px;
-  flex: none;
-  max-width: 34%;
-}
 .defi-value {
-  color: var(--ink);
-  font-size: 17px;
-  font-weight: 800;
-  line-height: 1.15;
-}
-.defi-value-sub {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  justify-self: end;
   white-space: nowrap;
-  color: var(--ink-4);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 700;
-}
-
-@media (max-width: 760px) {
-  .defi-card {
-    display: grid;
-    grid-template-columns: 38px minmax(0, 1fr);
-  }
-  .defi-value-wrap {
-    grid-column: 2;
-    justify-items: start;
-    max-width: 100%;
-  }
+  color: var(--ink);
+  font-size: 16.5px;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .empty {
