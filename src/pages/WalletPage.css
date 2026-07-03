@@ -2685,9 +2685,9 @@
   border-top: 1px solid var(--line-1);
 }
 .defi-token-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   min-width: 0;
   color: var(--ink-3);
@@ -2698,16 +2698,23 @@
   display: flex;
   align-items: baseline;
   gap: 6px;
+  width: 100%;
   min-width: 0;
 }
 .defi-token-symbol {
-  flex: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--ink-2);
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 800;
 }
 .defi-token-amount {
+  flex: none;
+  max-width: 12ch;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2721,6 +2728,34 @@
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 800;
+}
+.defi-small-toggle {
+  width: 100%;
+  min-height: 40px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  color: var(--ink-3);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    transform 0.12s ease;
+}
+.defi-small-toggle:hover {
+  border-color: var(--line-3);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.defi-small-toggle:active {
+  transform: scale(0.96);
 }
 .defi-value-wrap {
   display: grid;

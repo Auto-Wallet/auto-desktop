@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { priceForChainAsset } from "./prices";
+import { priceForChainAsset, priceIdForSymbol } from "./prices";
 
 describe("priceForChainAsset", () => {
   test("forces assets on chains whose name contains testnet to zero", () => {
@@ -16,5 +16,18 @@ describe("priceForChainAsset", () => {
   test("keeps live prices for non-testnet chains", () => {
     const price = { usd: 2200, change24h: 1.2 };
     expect(priceForChainAsset("Ethereum", price)).toBe(price);
+  });
+});
+
+describe("priceIdForSymbol", () => {
+  test("prices Wanchain wanXXX assets from the underlying token", () => {
+    expect(priceIdForSymbol("wanUSDT")).toBe("tether");
+    expect(priceIdForSymbol("wanUSDC")).toBe("usd-coin");
+    expect(priceIdForSymbol("wanETH")).toBe("ethereum");
+    expect(priceIdForSymbol("wanBTC")).toBe("bitcoin");
+  });
+
+  test("prices xWAN from WAN", () => {
+    expect(priceIdForSymbol("xWAN")).toBe("wanchain");
   });
 });

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -644,11 +644,30 @@ struct DefiPositionsResponse {
 #[derive(Clone, Copy)]
 struct CustomDefiProvider {
     name: &'static str,
-    fetch: fn(String) -> CustomDefiFetch,
+    fetch: fn(PriceOracleStore, String) -> CustomDefiFetch,
 }
 
 type CustomDefiFetch =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<DefiPosition>, String>> + Send>>;
+
+#[derive(Clone)]
+struct PriceOracleStore {
+    path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PriceOracleCache {
+    updated_at_ms: u64,
+    prices: HashMap<String, PriceOracleEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PriceOracleEntry {
+    usd: f64,
+    change_24h: f64,
+}
 
 #[derive(Clone, Copy)]
 struct XStakeFarmingPool {
@@ -4001,14 +4020,19 @@ async fn fetch_debank_defi_positions(address: &str) -> Result<Vec<DefiPosition>,
 fn custom_defi_providers() -> &'static [CustomDefiProvider] {
     &[CustomDefiProvider {
         name: "XStake Farming",
-        fetch: |address| Box::pin(fetch_xstake_farming_positions(address)),
+        fetch: |price_oracle, address| {
+            Box::pin(fetch_xstake_farming_positions(price_oracle, address))
+        },
     }]
 }
 
-async fn fetch_custom_defi_positions(address: &str) -> Result<Vec<DefiPosition>, String> {
+async fn fetch_custom_defi_positions(
+    price_oracle: PriceOracleStore,
+    address: &str,
+) -> Result<Vec<DefiPosition>, String> {
     let mut positions = Vec::new();
     for provider in custom_defi_providers() {
-        let provider_positions = (provider.fetch)(address.to_string())
+        let provider_positions = (provider.fetch)(price_oracle.clone(), address.to_string())
             .await
             .map_err(|e| format!("{}: {e}", provider.name))?;
         positions.extend(provider_positions);
@@ -4164,12 +4188,23 @@ const XSTAKE_FARMING_POOLS: &[XStakeFarmingPool] = &[
     },
 ];
 
-async fn fetch_xstake_farming_positions(address: String) -> Result<Vec<DefiPosition>, String> {
+async fn fetch_xstake_farming_positions(
+    price_oracle: PriceOracleStore,
+    address: String,
+) -> Result<Vec<DefiPosition>, String> {
     println!("[AutoDesktop] defi custom XStake start address={address}");
     let chain = find_chain(XSTAKE_CHAIN_ID)
         .ok_or_else(|| "Wanchain chain config is missing".to_string())?;
-    let prices =
-        fetch_defi_usd_prices(&["wanchain", "bitcoin", "ethereum", "tether", "usd-coin"]).await?;
+    let prices = match price_oracle
+        .prices(&["wanchain", "bitcoin", "ethereum", "tether", "usd-coin"])
+        .await
+    {
+        Ok(prices) => prices,
+        Err(err) => {
+            println!("[AutoDesktop] defi custom XStake prices unavailable error={err}");
+            HashMap::new()
+        }
+    };
     let pool_amounts = fetch_xstake_pool_amounts(&chain, &address).await?;
     let mut positions = Vec::new();
     for (pool, (staked_raw, reward_raw)) in XSTAKE_FARMING_POOLS.iter().zip(pool_amounts) {
@@ -4178,7 +4213,7 @@ async fn fetch_xstake_farming_positions(address: String) -> Result<Vec<DefiPosit
         }
         positions.push(xstake_position_from_amounts(
             pool, staked_raw, reward_raw, &prices,
-        )?);
+        ));
     }
     println!(
         "[AutoDesktop] defi custom XStake done address={address} positions={}",
@@ -4238,26 +4273,28 @@ fn xstake_position_from_amounts(
     staked_raw: f64,
     reward_raw: f64,
     prices: &HashMap<String, f64>,
-) -> Result<DefiPosition, String> {
+) -> DefiPosition {
     let staked_amount = raw_token_amount(staked_raw, pool.staking_decimals);
     let reward_amount = raw_token_amount(reward_raw, pool.reward_decimals);
-    let staking_price = defi_price(prices, pool.staking_price_id)?;
-    let reward_price = defi_price(prices, pool.reward_price_id)?;
-    let staked_usd = staked_amount * staking_price;
-    let reward_usd = reward_amount * reward_price;
+    let staked_usd = prices
+        .get(pool.staking_price_id)
+        .map(|price| staked_amount * price);
+    let reward_usd = prices
+        .get(pool.reward_price_id)
+        .map(|price| reward_amount * price);
     let mut tokens = Vec::new();
     if staked_raw > 0.0 {
         tokens.push(DefiPositionToken {
             symbol: pool.staking_symbol.to_string(),
             balance: Some(format_token_amount(staked_amount)),
-            balance_usd: Some(staked_usd),
+            balance_usd: staked_usd,
         });
     }
     if reward_raw > 0.0 {
         tokens.push(DefiPositionToken {
             symbol: pool.reward_symbol.to_string(),
             balance: Some(format_token_amount(reward_amount)),
-            balance_usd: Some(reward_usd),
+            balance_usd: reward_usd,
         });
     }
     let mut symbols = Vec::new();
@@ -4266,7 +4303,7 @@ fn xstake_position_from_amounts(
             symbols.push(token.symbol.clone());
         }
     }
-    Ok(DefiPosition {
+    DefiPosition {
         id: format!("custom:xstake:{XSTAKE_CHAIN_ID}:{}", pool.key),
         app_name: "XStake Farming".to_string(),
         app_image_url: Some(xstake_logo_data_uri()),
@@ -4275,10 +4312,10 @@ fn xstake_position_from_amounts(
         chain_id: XSTAKE_CHAIN_ID.to_string(),
         label: format!("{} farming", pool.staking_symbol),
         group_label: Some(format!("Earn {}", pool.reward_symbol)),
-        balance_usd: staked_usd + reward_usd,
+        balance_usd: staked_usd.unwrap_or(0.0) + reward_usd.unwrap_or(0.0),
         symbols,
         tokens,
-    })
+    }
 }
 
 fn call_data(signature: &str, address_args: &[&str]) -> String {
@@ -4457,16 +4494,134 @@ fn format_token_amount(amount: f64) -> String {
     s
 }
 
-fn defi_price(prices: &HashMap<String, f64>, id: &str) -> Result<f64, String> {
-    prices
-        .get(id)
-        .copied()
-        .ok_or_else(|| format!("missing USD price for {id}"))
+const PRICE_ORACLE_FILE: &str = "price-oracle.json";
+const PRICE_ORACLE_TTL_MS: u64 = 30 * 60 * 1000;
+
+impl PriceOracleStore {
+    fn from_app<R: Runtime>(app: &AppHandle<R>) -> Self {
+        Self {
+            path: app
+                .path()
+                .app_data_dir()
+                .ok()
+                .map(|base| base.join(PRICE_ORACLE_FILE)),
+        }
+    }
+
+    #[cfg(test)]
+    fn in_memory() -> Self {
+        Self { path: None }
+    }
+
+    async fn prices(&self, ids: &[&str]) -> Result<HashMap<String, f64>, String> {
+        Ok(self
+            .entries(ids)
+            .await?
+            .into_iter()
+            .map(|(id, entry)| (id, entry.usd))
+            .collect())
+    }
+
+    async fn entries(&self, ids: &[&str]) -> Result<HashMap<String, PriceOracleEntry>, String> {
+        let mut cache = self.load_cache();
+        let now = unix_time_ms();
+        let fresh_enough = now.saturating_sub(cache.updated_at_ms) <= PRICE_ORACLE_TTL_MS;
+        if fresh_enough && price_cache_has_all(&cache, ids) {
+            println!(
+                "[AutoDesktop] price oracle source=cache ids={}",
+                ids.join(",")
+            );
+            return Ok(price_cache_entries(&cache, ids));
+        }
+
+        match fetch_price_oracle_entries(ids).await {
+            Ok(fresh) => {
+                println!(
+                    "[AutoDesktop] price oracle source=coingecko ids={}",
+                    ids.join(",")
+                );
+                cache.updated_at_ms = now;
+                cache.prices.extend(fresh);
+                self.save_cache(&cache);
+                Ok(price_cache_entries(&cache, ids))
+            }
+            Err(err) => {
+                let cached = price_cache_entries(&cache, ids);
+                if cached.is_empty() {
+                    Err(err)
+                } else {
+                    println!(
+                        "[AutoDesktop] price oracle source=stale-cache ids={} error={err}",
+                        ids.join(",")
+                    );
+                    Ok(cached)
+                }
+            }
+        }
+    }
+
+    fn load_cache(&self) -> PriceOracleCache {
+        let Some(path) = &self.path else {
+            return PriceOracleCache::default();
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            return PriceOracleCache::default();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_default()
+    }
+
+    fn save_cache(&self, cache: &PriceOracleCache) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                println!("[AutoDesktop] price oracle create cache dir failed error={err}");
+                return;
+            }
+        }
+        match serde_json::to_vec_pretty(cache) {
+            Ok(json) => {
+                if let Err(err) = std::fs::write(path, json) {
+                    println!("[AutoDesktop] price oracle write cache failed error={err}");
+                }
+            }
+            Err(err) => println!("[AutoDesktop] price oracle serialize cache failed error={err}"),
+        }
+    }
 }
 
-async fn fetch_defi_usd_prices(ids: &[&str]) -> Result<HashMap<String, f64>, String> {
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn price_cache_has_all(cache: &PriceOracleCache, ids: &[&str]) -> bool {
+    ids.iter().all(|id| cache.prices.contains_key(*id))
+}
+
+fn price_cache_entries(
+    cache: &PriceOracleCache,
+    ids: &[&str],
+) -> HashMap<String, PriceOracleEntry> {
+    let mut prices = HashMap::new();
+    for id in ids {
+        if let Some(entry) = cache.prices.get(*id) {
+            prices.insert((*id).to_string(), entry.clone());
+        }
+    }
+    prices
+}
+
+async fn fetch_price_oracle_entries(
+    ids: &[&str],
+) -> Result<HashMap<String, PriceOracleEntry>, String> {
     let url = format!(
-        "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd",
+        "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd&include_24hr_change=true",
         ids.join(",")
     );
     let data: Value = reqwest::Client::builder()
@@ -4487,7 +4642,15 @@ async fn fetch_defi_usd_prices(ids: &[&str]) -> Result<HashMap<String, f64>, Str
     for id in ids {
         let price = value_as_f64(data.pointer(&format!("/{id}/usd")))
             .ok_or_else(|| format!("missing USD price for {id}"))?;
-        prices.insert((*id).to_string(), price);
+        let change_24h =
+            value_as_f64(data.pointer(&format!("/{id}/usd_24h_change"))).unwrap_or(0.0);
+        prices.insert(
+            (*id).to_string(),
+            PriceOracleEntry {
+                usd: price,
+                change_24h,
+            },
+        );
     }
     Ok(prices)
 }
@@ -4498,7 +4661,25 @@ fn xstake_logo_data_uri() -> String {
 }
 
 #[tauri::command]
-async fn get_defi_positions(
+async fn get_price_oracle_prices<R: Runtime>(
+    app: AppHandle<R>,
+    ids: Vec<String>,
+) -> Result<HashMap<String, PriceOracleEntry>, String> {
+    let ids: Vec<String> = ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    PriceOracleStore::from_app(&app).entries(&refs).await
+}
+
+#[tauri::command]
+async fn get_defi_positions<R: Runtime>(
+    app: AppHandle<R>,
     address: String,
     has_wallet_assets_over_one_usd: Option<bool>,
 ) -> Result<DefiPositionsResponse, String> {
@@ -4515,7 +4696,8 @@ async fn get_defi_positions(
     }
     let has_wallet_assets = has_wallet_assets_over_one_usd.unwrap_or(false);
     let debank_available = debank_api_key().is_some();
-    let custom = fetch_custom_defi_positions(address).await;
+    let price_oracle = PriceOracleStore::from_app(&app);
+    let custom = fetch_custom_defi_positions(price_oracle, address).await;
     let zapper = fetch_zapper_defi_positions(address).await;
     let (zapper_positions, zapper_balance_usd) = match zapper {
         Ok(result) => result,
@@ -5678,6 +5860,7 @@ pub fn run() {
             replace_activity_transaction,
             get_portfolio_history,
             record_portfolio_snapshot,
+            get_price_oracle_prices,
             get_defi_positions,
             okx_dex_supported_chains,
             okx_dex_tokens,
@@ -6059,8 +6242,7 @@ mod tests {
         };
 
         let position =
-            xstake_position_from_amounts(&pool, 12_500_000.0, 2_000_000_000_000_000_000.0, &prices)
-                .unwrap();
+            xstake_position_from_amounts(&pool, 12_500_000.0, 2_000_000_000_000_000_000.0, &prices);
 
         assert_eq!(position.app_name, "XStake Farming");
         assert_eq!(position.network_name, "Wanchain");
@@ -6073,6 +6255,81 @@ mod tests {
         assert_eq!(position.tokens[0].balance, Some("12.5".to_string()));
         assert_eq!(position.tokens[1].balance, Some("2".to_string()));
         assert_eq!(position.balance_usd, 13.0);
+    }
+
+    #[test]
+    fn builds_xstake_position_without_prices() {
+        let prices = HashMap::new();
+        let pool = XStakeFarmingPool {
+            key: "wanUSDT",
+            contract: "0x812C7F30a67598e32a351a64495F8426AB83Ff20",
+            staking_symbol: "wanUSDT",
+            staking_decimals: 6,
+            staking_price_id: "tether",
+            reward_symbol: "xWAN",
+            reward_decimals: 18,
+            reward_price_id: XWAN_PRICE_ID,
+            reward_addr: "0x2eA407Aa69be7367BF231E76B51fab9eC436766c",
+        };
+
+        let position =
+            xstake_position_from_amounts(&pool, 12_500_000.0, 2_000_000_000_000_000_000.0, &prices);
+
+        assert_eq!(position.balance_usd, 0.0);
+        assert_eq!(position.tokens[0].balance, Some("12.5".to_string()));
+        assert_eq!(position.tokens[0].balance_usd, None);
+        assert_eq!(position.tokens[1].balance, Some("2".to_string()));
+        assert_eq!(position.tokens[1].balance_usd, None);
+    }
+
+    #[test]
+    fn price_oracle_reads_cached_prices_by_id() {
+        let mut cache = PriceOracleCache {
+            updated_at_ms: unix_time_ms(),
+            prices: HashMap::new(),
+        };
+        cache.prices.insert(
+            "tether".to_string(),
+            PriceOracleEntry {
+                usd: 1.0,
+                change_24h: 0.01,
+            },
+        );
+        cache.prices.insert(
+            "ethereum".to_string(),
+            PriceOracleEntry {
+                usd: 3200.0,
+                change_24h: -0.5,
+            },
+        );
+
+        assert!(price_cache_has_all(&cache, &["tether", "ethereum"]));
+        assert!(!price_cache_has_all(&cache, &["tether", "bitcoin"]));
+        let prices = price_cache_entries(&cache, &["tether", "bitcoin"]);
+        assert_eq!(prices.len(), 1);
+        assert_eq!(prices["tether"].usd, 1.0);
+    }
+
+    #[test]
+    #[ignore = "hits Wanchain RPC and CoinGecko"]
+    fn xstake_live_fetches_known_address_positions() {
+        let positions = tauri::async_runtime::block_on(fetch_xstake_farming_positions(
+            PriceOracleStore::in_memory(),
+            "0x7521eda00e2ce05ac4a9d8353d096ccb970d5188".to_string(),
+        ))
+        .unwrap();
+
+        println!("positions={positions:#?}");
+        assert!(
+            !positions.is_empty(),
+            "expected XStake Farming positions for the known address"
+        );
+        assert!(positions.iter().all(|p| p.app_name == "XStake Farming"));
+        assert!(positions.iter().any(|p| !p.tokens.is_empty()));
+        assert!(positions.iter().flat_map(|p| &p.tokens).any(|token| token
+            .balance
+            .as_deref()
+            .is_some_and(|balance| balance != "0")));
     }
 
     #[test]

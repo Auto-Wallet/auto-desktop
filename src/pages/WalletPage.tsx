@@ -159,7 +159,7 @@ function copyAccountAddress(address: string, t: TFn) {
 }
 
 // Wallet page (VISION ①). Aurora portfolio: account/wallet switcher (create/import/
-// link + rename/delete), hero with a REAL total (native balances × live CoinGecko
+// link + rename/delete), hero with a REAL total (native balances × price-oracle
 // prices), quick actions, a per-chain native token list with USD, and an honest
 // "coming soon" for activity. No fabricated holdings — failed prices/balances
 // surface as explicit states.
@@ -706,10 +706,23 @@ function DefiSection({
   onEnabledChange: (enabled: boolean) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [showSmallPositions, setShowSmallPositions] = useState(false);
   const positions = useMemo(
     () => filterDefiPositions(defi.positions, query),
     [defi.positions, query],
   );
+  const smallPricedPositions = useMemo(
+    () => positions.filter(isSmallPricedDefiPosition),
+    [positions],
+  );
+  const visiblePositions = useMemo(
+    () =>
+      showSmallPositions
+        ? positions
+        : positions.filter((position) => !isSmallPricedDefiPosition(position)),
+    [positions, showSmallPositions],
+  );
+  const hiddenSmallPositionCount = smallPricedPositions.length;
   const isRefreshing = defi.status === "loading" && defi.positions.length > 0;
   return (
     <section className="asset-section defi-section" aria-busy={isRefreshing}>
@@ -784,11 +797,30 @@ function DefiSection({
         </div>
       ) : defi.positions.length > 0 ? (
         positions.length > 0 ? (
-          <div className="defi-list">
-            {positions.map((position) => (
-              <DefiPositionCard key={position.id} position={position} />
-            ))}
-          </div>
+          <>
+            {visiblePositions.length > 0 && (
+              <div className="defi-list">
+                {visiblePositions.map((position) => (
+                  <DefiPositionCard key={position.id} position={position} />
+                ))}
+              </div>
+            )}
+            {hiddenSmallPositionCount > 0 && (
+              <button
+                type="button"
+                className="defi-small-toggle"
+                onClick={() => setShowSmallPositions((show) => !show)}
+              >
+                {showSmallPositions
+                  ? t("wallet.hideSmallDefiPositions", {
+                      count: hiddenSmallPositionCount,
+                    })
+                  : t("wallet.showSmallDefiPositions", {
+                      count: hiddenSmallPositionCount,
+                    })}
+              </button>
+            )}
+          </>
         ) : (
           <div className="section-empty">{t("wallet.noDefiMatches")}</div>
         )
@@ -805,6 +837,13 @@ function DefiSection({
       )}
     </section>
   );
+}
+
+function isSmallPricedDefiPosition(position: DefiState["positions"][number]): boolean {
+  const hasKnownUsdValue =
+    position.balanceUsd > 0 ||
+    position.tokens.some((token) => token.balanceUsd != null);
+  return hasKnownUsdValue && position.balanceUsd < 1;
 }
 
 function DefiPositionCard({
@@ -881,9 +920,11 @@ function DefiPositionCard({
                 key={`${token.symbol}-${token.balance ?? index}`}
               >
                 <span className="defi-token-left">
-                  <span className="defi-token-symbol">{token.symbol}</span>
+                  <span className="defi-token-symbol" title={token.symbol}>
+                    {token.symbol}
+                  </span>
                   {token.balance && (
-                    <span className="defi-token-amount">
+                    <span className="defi-token-amount" title={token.balance}>
                       {formatDefiTokenAmount(token.balance)}
                     </span>
                   )}

@@ -164,6 +164,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.searchDefiPositions": "Search DeFi",
     "wallet.refreshingDefi": "Refreshing DeFi",
     "wallet.noDefiMatches": "No matching DeFi positions.",
+    "wallet.showSmallDefiPositions":
+      "{count} positions under $1 are hidden. Show them",
+    "wallet.hideSmallDefiPositions":
+      "{count} positions under $1 are shown. Hide them",
     "wallet.defiEmpty": "No DeFi positions detected",
     "wallet.defiEmptyHint":
       "Aave deposits and other supported protocol positions will appear here.",
@@ -584,6 +588,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.searchDefiPositions": "搜索 DeFi",
     "wallet.refreshingDefi": "刷新 DeFi 中",
     "wallet.noDefiMatches": "没有匹配的 DeFi 持仓。",
+    "wallet.showSmallDefiPositions":
+      "还有 {count} 个小于 $1 的仓位已默认隐藏，点击显示",
+    "wallet.hideSmallDefiPositions":
+      "正在显示 {count} 个小于 $1 的仓位，点击隐藏",
     "wallet.defiEmpty": "暂无 DeFi 持仓",
     "wallet.defiEmptyHint": "Aave 存款等受支持的协议仓位会显示在这里。",
     "wallet.defiError": "无法加载 DeFi 持仓",

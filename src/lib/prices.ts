@@ -1,17 +1,19 @@
-// USD prices for the Wallet portfolio — fetched live from the free CoinGecko API
-// (the shell is trusted local code, so it may call public services directly, like
-// rpc.ts). We price by TOKEN SYMBOL, not by per-chain contract address: the same
-// asset on different chains is the same price (USDT on Arbitrum == USDT on OP), and
-// CoinGecko's per-contract endpoint simply doesn't know most bridged contracts.
+// USD price oracle for the Wallet portfolio. Every consumer maps an asset symbol
+// to one canonical CoinGecko id, then reads through this module's persisted cache.
+// We price by TOKEN SYMBOL, not by per-chain contract address: the same asset on
+// different chains is the same price (USDT on Arbitrum == USDT on OP), and
+// Wanchain wanXXX assets price off their underlying token (wanUSDT -> USDT).
 //
 // Two resiliencies, both at the user's request:
 //   * Wanchain wrapped/staked assets price off their underlying — wanUSDT→USDT,
 //     wanETH→ETH, wanBTC→BTC, xWAN→WAN — see priceIdForSymbol().
-//   * Every successful fetch is cached to localStorage; when the network is down or
-//     CoinGecko fails we fall back to the last cached price (a stale-but-REAL value,
-//     never a fabricated zero) so the total still shows.
+//   * A successful fetch updates one global localStorage oracle cache. The cache is
+//     reused across native/token rows and across app restarts; by default it will
+//     not refresh more often than once every 30 minutes.
 
 import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "./platform";
 
 export type Price = { usd: number; change24h: number };
 
@@ -75,29 +77,42 @@ const tkPriceKey = (chainId: string, address: string) =>
   `${chainId.toLowerCase()}:${address.toLowerCase()}`;
 export { tkPriceKey };
 
-// --- localStorage price cache (stale-but-real fallback) -----------------------
-const NATIVE_CACHE_KEY = "autodesktop.priceCache.native"; // { SYMBOL: Price }
-const TOKEN_CACHE_KEY = "autodesktop.priceCache.token"; // { chainId:address: Price }
+type PriceOracleSnapshot = {
+  updatedAt: number;
+  prices: Record<string, Price>;
+};
 
-function loadCache(key: string): Record<string, Price> {
+// --- persistent global price oracle -----------------------------------------
+const PRICE_ORACLE_CACHE_KEY = "autodesktop.priceOracle.v1";
+const PRICE_ORACLE_TTL_MS = 30 * 60 * 1000;
+let oracleInFlight: Promise<PriceOracleSnapshot> | null = null;
+let oracleInFlightIds: string[] = [];
+
+function emptyOracle(): PriceOracleSnapshot {
+  return { updatedAt: 0, prices: {} };
+}
+
+function loadOracle(): PriceOracleSnapshot {
   try {
-    const raw = localStorage.getItem(key);
-    if (raw) return JSON.parse(raw) as Record<string, Price>;
+    const raw = localStorage.getItem(PRICE_ORACLE_CACHE_KEY);
+    if (!raw) return emptyOracle();
+    const parsed = JSON.parse(raw) as PriceOracleSnapshot;
+    if (!parsed || typeof parsed.updatedAt !== "number" || !parsed.prices) {
+      return emptyOracle();
+    }
+    return parsed;
   } catch {
     /* corrupt cache — ignore */
   }
-  return {};
+  return emptyOracle();
 }
-// Merge fresh prices over the existing cache, persist, and return the merged map
-// (so a symbol that failed THIS fetch still shows its last known price).
-function mergeCache(key: string, fresh: Record<string, Price>): Record<string, Price> {
-  const merged = { ...loadCache(key), ...fresh };
+
+function saveOracle(snapshot: PriceOracleSnapshot): void {
   try {
-    localStorage.setItem(key, JSON.stringify(merged));
+    localStorage.setItem(PRICE_ORACLE_CACHE_KEY, JSON.stringify(snapshot));
   } catch {
     /* storage full / unavailable — fetched prices still returned */
   }
-  return merged;
 }
 
 // One CoinGecko simple/price call for a set of coin ids → { id: Price }.
@@ -115,6 +130,79 @@ async function fetchByIds(ids: string[]): Promise<Record<string, Price>> {
   return out;
 }
 
+function hasAllIds(snapshot: PriceOracleSnapshot, ids: string[]): boolean {
+  return ids.every((id) => snapshot.prices[id]);
+}
+
+function pickIds(snapshot: PriceOracleSnapshot, ids: string[]): Record<string, Price> {
+  const out: Record<string, Price> = {};
+  for (const id of ids) {
+    if (snapshot.prices[id]) out[id] = snapshot.prices[id];
+  }
+  return out;
+}
+
+async function readPriceOracle(ids: string[]): Promise<Record<string, Price>> {
+  const uniqueIds = [...new Set(ids)].sort();
+  if (isTauri()) {
+    return invoke<Record<string, Price>>("get_price_oracle_prices", { ids: uniqueIds });
+  }
+
+  const cached = loadOracle();
+  const freshEnough = Date.now() - cached.updatedAt <= PRICE_ORACLE_TTL_MS;
+  if (freshEnough && hasAllIds(cached, uniqueIds)) return pickIds(cached, uniqueIds);
+
+  if (!oracleInFlight || !uniqueIds.every((id) => oracleInFlightIds.includes(id))) {
+    oracleInFlightIds = uniqueIds;
+    oracleInFlight = fetchByIds(uniqueIds)
+      .then((fresh) => {
+        const snapshot = {
+          updatedAt: Date.now(),
+          prices: { ...loadOracle().prices, ...fresh },
+        };
+        saveOracle(snapshot);
+        return snapshot;
+      })
+      .finally(() => {
+        oracleInFlight = null;
+        oracleInFlightIds = [];
+      });
+  }
+
+  try {
+    return pickIds(await oracleInFlight, uniqueIds);
+  } catch (e) {
+    const fallback = pickIds(loadOracle(), uniqueIds);
+    if (Object.keys(fallback).length > 0) return fallback;
+    throw e;
+  }
+}
+
+function pricesBySymbol(
+  symbols: string[],
+  oraclePrices: Record<string, Price>,
+): Record<string, Price> {
+  const out: Record<string, Price> = {};
+  for (const symbol of symbols) {
+    const id = priceIdForSymbol(symbol);
+    if (id && oraclePrices[id]) out[symbol.toUpperCase()] = oraclePrices[id];
+  }
+  return out;
+}
+
+function tokenPricesByKey(
+  entries: string[],
+  oraclePrices: Record<string, Price>,
+): Record<string, Price> {
+  const out: Record<string, Price> = {};
+  for (const entry of entries) {
+    const [tokenKey, symbol] = entry.split("@");
+    const id = priceIdForSymbol(symbol ?? "");
+    if (id && oraclePrices[id]) out[tokenKey] = oraclePrices[id];
+  }
+  return out;
+}
+
 /**
  * Live USD prices for native-token symbols. The symbol set is normalized
  * (uppercased, deduped, sorted) into a stable key, so re-renders with the same
@@ -123,18 +211,17 @@ async function fetchByIds(ids: string[]): Promise<Record<string, Price>> {
  */
 export function usePrices(symbols: string[]): { state: PriceState; refresh: () => void } {
   const key = [...new Set(symbols.map((s) => s.toUpperCase()))].sort().join(",");
-  const [state, setState] = useState<PriceState>({ status: "loading" });
+  const [state, setState] = useState<PriceState>(() => {
+    const syms = key ? key.split(",") : [];
+    const prices = pricesBySymbol(syms, loadOracle().prices);
+    return Object.keys(prices).length > 0 ? { status: "ok", prices } : { status: "loading" };
+  });
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
     const syms = key ? key.split(",") : [];
-    const idBySym: Record<string, string> = {};
-    for (const s of syms) {
-      const id = priceIdForSymbol(s);
-      if (id) idBySym[s] = id;
-    }
-    const ids = [...new Set(Object.values(idBySym))];
+    const ids = [...new Set(syms.map(priceIdForSymbol).filter((id): id is string => !!id))];
     if (ids.length === 0) {
       setState({ status: "ok", prices: {} });
       return;
@@ -142,18 +229,14 @@ export function usePrices(symbols: string[]): { state: PriceState; refresh: () =
 
     let cancelled = false;
     setState({ status: "loading" });
-    fetchByIds(ids)
+    readPriceOracle(ids)
       .then((byId) => {
         if (cancelled) return;
-        const fresh: Record<string, Price> = {};
-        for (const [sym, id] of Object.entries(idBySym)) {
-          if (byId[id]) fresh[sym] = byId[id];
-        }
-        setState({ status: "ok", prices: mergeCache(NATIVE_CACHE_KEY, fresh) });
+        setState({ status: "ok", prices: pricesBySymbol(syms, byId) });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        const cached = loadCache(NATIVE_CACHE_KEY);
+        const cached = pricesBySymbol(syms, loadOracle().prices);
         if (Object.keys(cached).length > 0) {
           setState({ status: "ok", prices: cached }); // stale-but-real fallback
         } else {
@@ -182,39 +265,38 @@ export function useTokenPrices(tokens: PricedToken[]): {
   const key = [...new Set(tokens.map((t) => `${tkPriceKey(t.chainId, t.address)}@${t.symbol}`))]
     .sort()
     .join("|");
-  const [prices, setPrices] = useState<Record<string, Price>>(() => loadCache(TOKEN_CACHE_KEY));
+  const [prices, setPrices] = useState<Record<string, Price>>(() =>
+    tokenPricesByKey(key ? key.split("|") : [], loadOracle().prices),
+  );
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
     const entries = key ? key.split("|") : [];
-    // token key -> coin id, and the set of unique ids to fetch.
-    const idByToken: Record<string, string> = {};
-    for (const e of entries) {
-      const [tkey, symbol] = e.split("@");
-      const id = priceIdForSymbol(symbol ?? "");
-      if (id) idByToken[tkey] = id;
-    }
-    const ids = [...new Set(Object.values(idByToken))];
+    const ids = [
+      ...new Set(
+        entries
+          .map((entry) => priceIdForSymbol(entry.split("@")[1] ?? ""))
+          .filter((id): id is string => !!id),
+      ),
+    ];
     if (ids.length === 0) {
-      setPrices(loadCache(TOKEN_CACHE_KEY));
+      setPrices(tokenPricesByKey(entries, loadOracle().prices));
       return;
     }
 
     let cancelled = false;
-    fetchByIds(ids)
+    readPriceOracle(ids)
       .then((byId) => {
         if (cancelled) return;
-        const fresh: Record<string, Price> = {};
-        for (const [tkey, id] of Object.entries(idByToken)) {
-          if (byId[id]) fresh[tkey] = byId[id];
-        }
-        setPrices(mergeCache(TOKEN_CACHE_KEY, fresh));
+        setPrices(tokenPricesByKey(entries, byId));
       })
       .catch(() => {
         // A pricing outage must not blank already-shown amounts — keep the cached
         // values (loaded into state on mount), never a fabricated zero.
-        if (!cancelled) setPrices((p) => ({ ...loadCache(TOKEN_CACHE_KEY), ...p }));
+        if (!cancelled) {
+          setPrices((p) => ({ ...tokenPricesByKey(entries, loadOracle().prices), ...p }));
+        }
       });
 
     return () => {
