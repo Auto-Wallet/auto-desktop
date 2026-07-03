@@ -142,10 +142,27 @@ function pickIds(snapshot: PriceOracleSnapshot, ids: string[]): Record<string, P
   return out;
 }
 
+function writePriceDiagnosticLog(message: string): void {
+  if (!isTauri()) return;
+  void invoke("write_diagnostic_log", { message: `frontend ${message}` }).catch(() => undefined);
+}
+
 async function readPriceOracle(ids: string[]): Promise<Record<string, Price>> {
   const uniqueIds = [...new Set(ids)].sort();
   if (isTauri()) {
-    return invoke<Record<string, Price>>("get_price_oracle_prices", { ids: uniqueIds });
+    writePriceDiagnosticLog(`price oracle invoke start ids=${uniqueIds.join(",")}`);
+    try {
+      const prices = await invoke<Record<string, Price>>("get_price_oracle_prices", { ids: uniqueIds });
+      writePriceDiagnosticLog(
+        `price oracle invoke ok ids=${uniqueIds.join(",")} returned=${Object.keys(prices).join(",")}`,
+      );
+      return prices;
+    } catch (e) {
+      writePriceDiagnosticLog(
+        `price oracle invoke failed ids=${uniqueIds.join(",")} error=${e instanceof Error ? e.message : String(e)}`,
+      );
+      throw e;
+    }
   }
 
   const cached = loadOracle();

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -653,6 +655,7 @@ type CustomDefiFetch =
 #[derive(Clone)]
 struct PriceOracleStore {
     path: Option<PathBuf>,
+    log_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -4496,21 +4499,33 @@ fn format_token_amount(amount: f64) -> String {
 
 const PRICE_ORACLE_FILE: &str = "price-oracle.json";
 const PRICE_ORACLE_TTL_MS: u64 = 30 * 60 * 1000;
+const DIAGNOSTIC_LOG_FILE: &str = "autodesktop.log";
 
 impl PriceOracleStore {
     fn from_app<R: Runtime>(app: &AppHandle<R>) -> Self {
+        let app_data_dir = app.path().app_data_dir().ok();
         Self {
-            path: app
-                .path()
-                .app_data_dir()
-                .ok()
+            path: app_data_dir
+                .as_ref()
                 .map(|base| base.join(PRICE_ORACLE_FILE)),
+            log_path: app_data_dir
+                .as_ref()
+                .map(|base| base.join(DIAGNOSTIC_LOG_FILE)),
         }
     }
 
     #[cfg(test)]
     fn in_memory() -> Self {
-        Self { path: None }
+        Self {
+            path: None,
+            log_path: None,
+        }
+    }
+
+    fn log(&self, message: impl AsRef<str>) {
+        if let Some(path) = &self.log_path {
+            append_diagnostic_log(path, message.as_ref());
+        }
     }
 
     async fn prices(&self, ids: &[&str]) -> Result<HashMap<String, f64>, String> {
@@ -4527,6 +4542,11 @@ impl PriceOracleStore {
         let now = unix_time_ms();
         let fresh_enough = now.saturating_sub(cache.updated_at_ms) <= PRICE_ORACLE_TTL_MS;
         if fresh_enough && price_cache_has_all(&cache, ids) {
+            self.log(format!(
+                "price oracle source=cache ids={} cached_count={}",
+                ids.join(","),
+                cache.prices.len()
+            ));
             println!(
                 "[AutoDesktop] price oracle source=cache ids={}",
                 ids.join(",")
@@ -4534,8 +4554,15 @@ impl PriceOracleStore {
             return Ok(price_cache_entries(&cache, ids));
         }
 
-        match fetch_price_oracle_entries(ids).await {
+        self.log(format!(
+            "price oracle fetch start ids={} cache_fresh={} cache_count={}",
+            ids.join(","),
+            fresh_enough,
+            cache.prices.len()
+        ));
+        match fetch_price_oracle_entries(ids, self.log_path.as_deref()).await {
             Ok(fresh) => {
+                let fresh_count = fresh.len();
                 println!(
                     "[AutoDesktop] price oracle source=coingecko ids={}",
                     ids.join(",")
@@ -4543,13 +4570,30 @@ impl PriceOracleStore {
                 cache.updated_at_ms = now;
                 cache.prices.extend(fresh);
                 self.save_cache(&cache);
-                Ok(price_cache_entries(&cache, ids))
+                let picked = price_cache_entries(&cache, ids);
+                self.log(format!(
+                    "price oracle source=coingecko ids={} fresh_count={} returned_count={} cache_count={}",
+                    ids.join(","),
+                    fresh_count,
+                    picked.len(),
+                    cache.prices.len()
+                ));
+                Ok(picked)
             }
             Err(err) => {
                 let cached = price_cache_entries(&cache, ids);
                 if cached.is_empty() {
+                    self.log(format!(
+                        "price oracle failed ids={} error={err}",
+                        ids.join(",")
+                    ));
                     Err(err)
                 } else {
+                    self.log(format!(
+                        "price oracle source=stale-cache ids={} returned_count={} error={err}",
+                        ids.join(","),
+                        cached.len()
+                    ));
                     println!(
                         "[AutoDesktop] price oracle source=stale-cache ids={} error={err}",
                         ids.join(",")
@@ -4562,20 +4606,39 @@ impl PriceOracleStore {
 
     fn load_cache(&self) -> PriceOracleCache {
         let Some(path) = &self.path else {
+            self.log("price oracle load cache skipped path=none");
             return PriceOracleCache::default();
         };
         let Ok(bytes) = std::fs::read(path) else {
+            self.log(format!(
+                "price oracle load cache miss path={}",
+                path.display()
+            ));
             return PriceOracleCache::default();
         };
-        serde_json::from_slice(&bytes).unwrap_or_default()
+        match serde_json::from_slice(&bytes) {
+            Ok(cache) => cache,
+            Err(err) => {
+                self.log(format!(
+                    "price oracle load cache parse failed path={} error={err}",
+                    path.display()
+                ));
+                PriceOracleCache::default()
+            }
+        }
     }
 
     fn save_cache(&self, cache: &PriceOracleCache) {
         let Some(path) = &self.path else {
+            self.log("price oracle save cache skipped path=none");
             return;
         };
         if let Some(parent) = path.parent() {
             if let Err(err) = std::fs::create_dir_all(parent) {
+                self.log(format!(
+                    "price oracle create cache dir failed path={} error={err}",
+                    parent.display()
+                ));
                 println!("[AutoDesktop] price oracle create cache dir failed error={err}");
                 return;
             }
@@ -4583,11 +4646,46 @@ impl PriceOracleStore {
         match serde_json::to_vec_pretty(cache) {
             Ok(json) => {
                 if let Err(err) = std::fs::write(path, json) {
+                    self.log(format!(
+                        "price oracle write cache failed path={} error={err}",
+                        path.display()
+                    ));
                     println!("[AutoDesktop] price oracle write cache failed error={err}");
+                } else {
+                    self.log(format!(
+                        "price oracle write cache ok path={} cache_count={}",
+                        path.display(),
+                        cache.prices.len()
+                    ));
                 }
             }
-            Err(err) => println!("[AutoDesktop] price oracle serialize cache failed error={err}"),
+            Err(err) => {
+                self.log(format!("price oracle serialize cache failed error={err}"));
+                println!("[AutoDesktop] price oracle serialize cache failed error={err}");
+            }
         }
+    }
+}
+
+fn diagnostic_log_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|base| base.join(DIAGNOSTIC_LOG_FILE))
+        .map_err(|e| format!("diagnostic log path: {e}"))
+}
+
+fn log_diagnostic<R: Runtime>(app: &AppHandle<R>, message: impl AsRef<str>) {
+    if let Ok(path) = diagnostic_log_path(app) {
+        append_diagnostic_log(&path, message.as_ref());
+    }
+}
+
+fn append_diagnostic_log(path: &Path, message: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "[{}] {}", unix_time_ms(), message);
     }
 }
 
@@ -4619,11 +4717,18 @@ fn price_cache_entries(
 
 async fn fetch_price_oracle_entries(
     ids: &[&str],
+    log_path: Option<&Path>,
 ) -> Result<HashMap<String, PriceOracleEntry>, String> {
     let url = format!(
         "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd&include_24hr_change=true",
         ids.join(",")
     );
+    if let Some(path) = log_path {
+        append_diagnostic_log(
+            path,
+            &format!("price oracle http start ids={}", ids.join(",")),
+        );
+    }
     let data: Value = reqwest::Client::builder()
         .timeout(DEFI_PROVIDER_TIMEOUT)
         .build()
@@ -4641,6 +4746,9 @@ async fn fetch_price_oracle_entries(
     let mut prices = HashMap::new();
     for id in ids {
         let Some(price) = value_as_f64(data.pointer(&format!("/{id}/usd"))) else {
+            if let Some(path) = log_path {
+                append_diagnostic_log(path, &format!("price oracle missing USD price id={id}"));
+            }
             println!("[AutoDesktop] price oracle missing USD price id={id}");
             continue;
         };
@@ -4654,7 +4762,28 @@ async fn fetch_price_oracle_entries(
             },
         );
     }
+    if let Some(path) = log_path {
+        append_diagnostic_log(
+            path,
+            &format!(
+                "price oracle http done ids={} returned_count={}",
+                ids.join(","),
+                prices.len()
+            ),
+        );
+    }
     Ok(prices)
+}
+
+#[tauri::command]
+fn get_diagnostic_log_path<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    diagnostic_log_path(&app).map(|path| path.display().to_string())
+}
+
+#[tauri::command]
+fn write_diagnostic_log<R: Runtime>(app: AppHandle<R>, message: String) -> Result<(), String> {
+    log_diagnostic(&app, message);
+    Ok(())
 }
 
 fn xstake_logo_data_uri() -> String {
@@ -5862,6 +5991,8 @@ pub fn run() {
             replace_activity_transaction,
             get_portfolio_history,
             record_portfolio_snapshot,
+            get_diagnostic_log_path,
+            write_diagnostic_log,
             get_price_oracle_prices,
             get_defi_positions,
             okx_dex_supported_chains,
@@ -5921,7 +6052,17 @@ pub fn run() {
             let shell_builder = WebviewBuilder::new("shell", WebviewUrl::App("index.html".into()));
             let shell =
                 window.add_child(shell_builder, LogicalPosition::new(0.0, 0.0), shell_size)?;
+            window.set_always_on_top(true)?;
             window.show()?;
+            window.set_focus()?;
+            log_diagnostic(app.handle(), "startup main window shown always_on_top=true");
+            let startup_window = window.clone();
+            let startup_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                let _ = startup_window.set_always_on_top(false);
+                log_diagnostic(&startup_app, "startup main window always_on_top=false");
+            });
 
             // dApp tab webviews (remote, untrusted) are created on demand, one per
             // open tab, by `open_dapp` (see create_dapp_webview). Each is labeled
