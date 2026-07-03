@@ -859,6 +859,42 @@ fn builtin_chains() -> Vec<ChainCfg> {
     ]
 }
 
+/// Overlay a persisted chains.json snapshot onto the CURRENT built-in set.
+///
+/// The file is a full snapshot from whatever app version wrote it, so built-ins
+/// added in a later release are missing from it; adopting it verbatim would
+/// freeze the registry at that old version forever (networks "lost" after
+/// upgrading). Persisted entries win for ids they contain — user RPC/name edits
+/// survive — and a persisted entry whose id has since become a built-in is
+/// promoted (non-removable, sorted with the built-ins). Built-ins the file
+/// doesn't know about are backfilled with current defaults, in built-in order;
+/// custom chains keep their relative order at the end.
+fn merge_persisted_chains(mut persisted: Vec<ChainCfg>) -> Vec<ChainCfg> {
+    for chain in &mut persisted {
+        hydrate_chain_defaults(chain);
+    }
+    let mut merged: Vec<ChainCfg> = Vec::new();
+    for builtin in builtin_chains() {
+        match persisted
+            .iter()
+            .find(|c| c.id.eq_ignore_ascii_case(&builtin.id))
+        {
+            Some(saved) => {
+                let mut saved = saved.clone();
+                saved.builtin = true;
+                merged.push(saved);
+            }
+            None => merged.push(builtin),
+        }
+    }
+    for chain in persisted {
+        if !merged.iter().any(|c| c.id.eq_ignore_ascii_case(&chain.id)) {
+            merged.push(chain);
+        }
+    }
+    merged
+}
+
 /// The effective chain registry (built-ins + user edits/additions). Initialized to
 /// the built-ins; `load_chains` merges the persisted user file at startup.
 fn chains_state() -> &'static Mutex<Vec<ChainCfg>> {
@@ -2597,12 +2633,11 @@ fn chains_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 fn load_chains<R: Runtime>(app: &AppHandle<R>) {
     let Ok(path) = chains_path(app) else { return };
     if let Ok(bytes) = std::fs::read(&path) {
-        if let Ok(mut list) = serde_json::from_slice::<Vec<ChainCfg>>(&bytes) {
+        if let Ok(list) = serde_json::from_slice::<Vec<ChainCfg>>(&bytes) {
             if !list.is_empty() {
-                for chain in &mut list {
-                    hydrate_chain_defaults(chain);
-                }
-                *chains_state().lock().unwrap() = list;
+                // Merge (not replace): a snapshot from an older version is missing
+                // built-ins added since, and must not freeze the registry.
+                *chains_state().lock().unwrap() = merge_persisted_chains(list);
             }
         }
     }
@@ -6202,6 +6237,73 @@ mod tests {
             assert_eq!(chains.iter().filter(|x| x.id == c.id).count(), 1);
             assert!(c.builtin);
         }
+    }
+
+    /// A chains.json written by an old app version (fewer built-ins) must not
+    /// freeze the registry: built-ins added in later releases have to appear
+    /// after the merge, while user RPC edits and custom chains survive.
+    #[test]
+    fn merge_persisted_chains_backfills_new_builtins() {
+        // Simulate an old snapshot: only Ethereum (with a user-edited RPC) and
+        // one custom chain — none of the extended default set.
+        let mut old_eth = builtin_chains()[0].clone();
+        assert_eq!(old_eth.id, "0x1");
+        old_eth.rpc = "https://my-private-eth-node.example".to_string();
+        let custom = ChainCfg {
+            id: "0x40d9".to_string(),
+            name: "0G Mainnet".to_string(),
+            symbol: "0G".to_string(),
+            rpc: "https://evmrpc.0g.ai".to_string(),
+            decimals: 18,
+            color: "#888888".to_string(),
+            explorer_url: None,
+            builtin: false,
+        };
+        let merged = merge_persisted_chains(vec![old_eth, custom]);
+
+        // Every current built-in is present, in built-in order.
+        let builtins = builtin_chains();
+        assert!(merged.len() == builtins.len() + 1);
+        for (i, b) in builtins.iter().enumerate() {
+            assert_eq!(merged[i].id, b.id, "missing/misplaced built-in {}", b.name);
+            assert!(merged[i].builtin);
+        }
+        // The user's RPC edit on Ethereum survives the merge.
+        assert_eq!(merged[0].rpc, "https://my-private-eth-node.example");
+        // Backfilled built-ins carry current defaults (e.g. BNB Chain).
+        let bnb = merged.iter().find(|c| c.id == "0x38").unwrap();
+        assert_eq!(bnb.name, "BNB Chain");
+        // The custom chain stays, after the built-ins.
+        assert_eq!(merged.last().unwrap().id, "0x40d9");
+        assert!(!merged.last().unwrap().builtin);
+    }
+
+    /// A chain the user added manually before it became a built-in is promoted:
+    /// it keeps the user's settings but becomes non-removable and sorts with the
+    /// built-ins; missing explorer URLs are hydrated.
+    #[test]
+    fn merge_persisted_chains_promotes_formerly_custom_builtin() {
+        let persisted = vec![ChainCfg {
+            id: "0x38".to_string(), // BNB Chain, added by hand pre-0.2.x
+            name: "BSC".to_string(),
+            symbol: "BNB".to_string(),
+            rpc: "https://bsc-dataseed.bnbchain.org".to_string(),
+            decimals: 18,
+            color: "#F3BA2F".to_string(),
+            explorer_url: None,
+            builtin: false,
+        }];
+        let merged = merge_persisted_chains(persisted);
+        let bnb = merged.iter().find(|c| c.id == "0x38").unwrap();
+        assert!(bnb.builtin, "matching built-in id must be promoted");
+        assert_eq!(bnb.name, "BSC", "user's edits win over the built-in defaults");
+        assert_eq!(bnb.rpc, "https://bsc-dataseed.bnbchain.org");
+        assert_eq!(
+            bnb.explorer_url.as_deref(),
+            Some("https://bscscan.com/tx/"),
+            "missing explorer url is hydrated"
+        );
+        assert_eq!(merged.len(), builtin_chains().len());
     }
 
     #[test]
