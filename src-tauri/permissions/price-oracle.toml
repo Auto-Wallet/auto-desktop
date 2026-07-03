@@ -1,0 +1,6 @@
+# Permission for the app-wide USD price oracle. Granted only to the trusted
+# shell webview; remote dApps must not be able to spend the app's price budget.
+[[permission]]
+identifier = "allow-get-price-oracle-prices"
+description = "Allow the shell to read cached/fetched USD prices from the backend price oracle."
+commands.allow = ["get_price_oracle_prices"]

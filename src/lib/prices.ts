@@ -77,7 +77,7 @@ const tkPriceKey = (chainId: string, address: string) =>
   `${chainId.toLowerCase()}:${address.toLowerCase()}`;
 export { tkPriceKey };
 
-type PriceOracleSnapshot = {
+export type PriceOracleSnapshot = {
   updatedAt: number;
   prices: Record<string, Price>;
 };
@@ -113,6 +113,21 @@ function saveOracle(snapshot: PriceOracleSnapshot): void {
   } catch {
     /* storage full / unavailable — fetched prices still returned */
   }
+}
+
+export function mergeOracleSnapshot(
+  snapshot: PriceOracleSnapshot,
+  fresh: Record<string, Price>,
+  updatedAt: number,
+): PriceOracleSnapshot {
+  return {
+    updatedAt,
+    prices: { ...snapshot.prices, ...fresh },
+  };
+}
+
+function saveFreshOraclePrices(fresh: Record<string, Price>): void {
+  saveOracle(mergeOracleSnapshot(loadOracle(), fresh, Date.now()));
 }
 
 // One CoinGecko simple/price call for a set of coin ids → { id: Price }.
@@ -156,6 +171,7 @@ async function readPriceOracle(ids: string[]): Promise<Record<string, Price>> {
       writePriceDiagnosticLog(
         `price oracle invoke ok ids=${uniqueIds.join(",")} returned=${Object.keys(prices).join(",")}`,
       );
+      saveFreshOraclePrices(prices);
       return prices;
     } catch (e) {
       writePriceDiagnosticLog(
@@ -173,10 +189,7 @@ async function readPriceOracle(ids: string[]): Promise<Record<string, Price>> {
     oracleInFlightIds = uniqueIds;
     oracleInFlight = fetchByIds(uniqueIds)
       .then((fresh) => {
-        const snapshot = {
-          updatedAt: Date.now(),
-          prices: { ...loadOracle().prices, ...fresh },
-        };
+        const snapshot = mergeOracleSnapshot(loadOracle(), fresh, Date.now());
         saveOracle(snapshot);
         return snapshot;
       })

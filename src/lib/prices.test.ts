@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { priceForChainAsset, priceIdForSymbol } from "./prices";
+import { mergeOracleSnapshot, priceForChainAsset, priceIdForSymbol } from "./prices";
 
 describe("priceForChainAsset", () => {
   test("forces assets on chains whose name contains testnet to synthetic zero", () => {
@@ -36,5 +36,33 @@ describe("priceIdForSymbol", () => {
 
   test("prices xWAN from WAN", () => {
     expect(priceIdForSymbol("xWAN")).toBe("wanchain");
+  });
+});
+
+describe("mergeOracleSnapshot", () => {
+  test("keeps cached prices and lets fresh backend prices update the shared oracle", () => {
+    const next = mergeOracleSnapshot(
+      {
+        updatedAt: 100,
+        prices: {
+          ethereum: { usd: 2000, change24h: 1 },
+          tether: { usd: 1, change24h: 0.1 },
+        },
+      },
+      {
+        ethereum: { usd: 2250, change24h: 2 },
+        wanchain: { usd: 0.26, change24h: -1 },
+      },
+      200,
+    );
+
+    expect(next).toEqual({
+      updatedAt: 200,
+      prices: {
+        ethereum: { usd: 2250, change24h: 2 },
+        tether: { usd: 1, change24h: 0.1 },
+        wanchain: { usd: 0.26, change24h: -1 },
+      },
+    });
   });
 });

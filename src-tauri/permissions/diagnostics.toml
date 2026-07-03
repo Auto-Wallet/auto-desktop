@@ -1,0 +1,11 @@
+# Permissions for local diagnostic helpers. Granted only to the trusted shell
+# webview so remote dApps cannot write arbitrary app diagnostics.
+[[permission]]
+identifier = "allow-get-diagnostic-log-path"
+description = "Allow the shell to show the local diagnostic log file path."
+commands.allow = ["get_diagnostic_log_path"]
+
+[[permission]]
+identifier = "allow-write-diagnostic-log"
+description = "Allow the shell to append frontend diagnostics to the local log file."
+commands.allow = ["write_diagnostic_log"]
