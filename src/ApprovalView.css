@@ -63,10 +63,10 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 18px 20px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 /* Don't let tall content (a tx with fee editor) shrink the cards — the body
    scrolls instead of clipping/overlapping them. */
@@ -74,76 +74,77 @@
   flex: 0 0 auto;
 }
 
-.apv-kind {
+/* Dense identity strip: small action icon + decoded title, with origin /
+   network / method demoted to corner tags. */
+.apv-top {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 2px 2px 0;
 }
-.apv-kind .kic {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
+.apv-top-ic {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  flex: none;
   display: grid;
   place-items: center;
   background: var(--brand-soft);
   color: var(--brand-ink);
 }
-.apv-kind .kic.coral {
+.apv-top-ic.coral {
   background: var(--coral-soft);
   color: var(--coral-2);
 }
-.apv-kind h2 {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--ink);
-  margin: 6px 0 0;
-}
-.apv-kind .sub {
-  font-size: 12.5px;
-  color: var(--ink-3);
-}
-
-.apv-origin {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 13px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-}
-.apv-origin .of {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  background: var(--surface-3);
-  color: var(--ink-2);
-}
-.apv-origin .od {
+.apv-top-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
-.apv-origin .oh {
-  font-size: 13.5px;
+.apv-top-main h2 {
+  font-family: var(--font-display);
+  font-size: 16.5px;
   font-weight: 700;
   color: var(--ink);
+  margin: 0;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.apv-origin .os {
-  font-size: 11.5px;
-  color: var(--ink-3);
-  font-family: var(--font-mono);
+.apv-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.apv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.apv-chip.strong {
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+.apv-chip.mono {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+.apv-chip.dim {
+  color: var(--ink-3);
 }
 
 .apv-msg {
@@ -167,10 +168,23 @@
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
-  padding: 11px 13px;
+  padding: 9px 12px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 7px;
+}
+/* single-line variant for the empty ("no changes") result */
+.apv-sim.slim {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+}
+.apv-sim.slim .apv-sim-note {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .apv-sim-head {
   display: flex;
@@ -230,27 +244,48 @@
   color: var(--ink-3);
 }
 
-/* tx view tabs: Basics / JSON / HEX */
-.apv-tabs {
+/* Secondary facts row: gas/nonce/data tags left, Basics/JSON/HEX switch right. */
+.apv-meta {
   display: flex;
-  gap: 4px;
-  padding: 4px;
-  background: var(--surface-3);
-  border-radius: var(--r-md);
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 2px;
 }
-.apv-tab {
+.apv-tag {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--ink-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.apv-tag.mono {
+  font-family: var(--font-mono);
+}
+.apv-meta-spacer {
   flex: 1;
-  padding: 7px 10px;
+}
+.apv-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-3);
+  border-radius: var(--r-pill);
+}
+.apv-seg-btn {
   border: none;
   background: transparent;
-  border-radius: var(--r-sm, 8px);
+  border-radius: var(--r-pill);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 10.5px;
   font-weight: 700;
   color: var(--ink-3);
+  padding: 3px 9px;
   cursor: pointer;
 }
-.apv-tab.on {
+.apv-seg-btn.on {
   background: var(--surface);
   color: var(--ink);
   box-shadow: var(--sh-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
@@ -270,8 +305,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 13px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--line);
+}
+.apv-tx .apv-row:last-child {
+  border-bottom: none;
 }
 .apv-row-l {
   font-size: 12.5px;
@@ -293,12 +331,20 @@
   font-weight: 500;
 }
 .apv-approve-editor {
-  padding: 12px 13px 13px;
+  padding: 10px 12px 11px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  border-bottom: 1px solid var(--line);
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
   background: color-mix(in srgb, var(--surface) 74%, var(--brand) 6%);
+}
+.apv-approve-editor .apv-row {
+  padding: 6px 0;
+}
+.apv-approve-field .input {
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 .apv-approve-head {
   display: flex;
@@ -361,11 +407,59 @@
   font-size: 11.5px;
   font-weight: 700;
 }
-.apv-fee {
-  padding: 12px 13px 13px;
+/* Network fee: one collapsed line, editors expand below it. */
+.apv-feebox {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.apv-fee-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+}
+.apv-fee-label {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  flex: none;
+}
+.apv-fee-sum {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apv-fee-toggle {
+  flex: none;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--brand);
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.apv-fee-toggle:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.apv-fee {
+  padding: 0 12px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 .apv-fee-input {
   display: flex;
@@ -396,11 +490,12 @@
   padding: 0 2px;
 }
 
+/* One-line signer strip: avatar + label + address (+Ledger badge). */
 .apv-signer {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 13px;
+  gap: 8px;
+  padding: 5px 12px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -409,12 +504,18 @@
   font-size: 11px;
   color: var(--ink-3);
   font-weight: 600;
+  flex: none;
 }
 .apv-signer .sn {
-  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
   font-weight: 700;
   color: var(--ink);
   font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .apv-warn {

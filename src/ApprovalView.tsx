@@ -180,6 +180,7 @@ function ApprovalView() {
     setApprovalAmount("");
     if (!current?.tx || !approvalDetails) return;
 
+    const chainName = current.tx.chain_name;
     void loadApprovalTokenInfo(current.tx.chain_id, approvalDetails.tokenAddress, current.tx.from)
       .then((info) => {
         if (cancelled) return;
@@ -188,12 +189,20 @@ function ApprovalView() {
       })
       .catch((e) => {
         if (!cancelled) {
-          setApprovalError(errText(e) || "Unable to load token balance.");
+          setApprovalError(
+            isTokenEmptyResult(e)
+              ? t("approval.tokenNotOnChain", { chain: chainName })
+              : errText(e) || t("approval.approveTokenLoadFailed"),
+          );
         }
       });
     return () => {
       cancelled = true;
     };
+    // `t` is deliberately NOT a dep: useT returns a fresh closure every render
+    // while this view re-renders on a 500ms poll — depending on it would cancel
+    // and restart the token fetch forever (observed as a stuck "Loading token…").
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approvalDetails, current?.id, current?.tx?.chain_id, current?.tx?.from]);
 
   const decide = useCallback(
@@ -280,6 +289,13 @@ function ApprovalView() {
 
   const meta = kindMeta(current.method, t);
   const isLedger = signer?.kind === "ledger";
+  // Title says what the tx actually DOES when the calldata is decoded; the raw
+  // method name is demoted to a corner tag.
+  const title = approvalDetails
+    ? `${t("approval.approveTitle")}${approvalInfo ? ` · ${approvalInfo.symbol}` : ""}`
+    : transferDetails
+      ? t("approval.transferTitle")
+      : meta.title;
 
   return (
     <div className="approval">
@@ -291,71 +307,72 @@ function ApprovalView() {
       </header>
 
       <div className="approval-body scroll">
-        <div className="apv-kind">
-          <span className={`kic${meta.coral ? " coral" : ""}`}>
-            <Icon name={meta.icon} size={24} />
+        {/* Dense identity strip: action + origin/network/method as corner tags. */}
+        <div className="apv-top">
+          <span className={`apv-top-ic${meta.coral ? " coral" : ""}`}>
+            <Icon name={meta.icon} size={18} />
           </span>
-          <h2>{meta.title}</h2>
-          <div className="sub mono">{current.method}</div>
-        </div>
-
-        <div className="apv-origin">
-          <span className="of">
-            <Icon name="globe" size={16} />
-          </span>
-          <div className="od">
-            <div className="oh">{hostOf(current.origin)}</div>
-            <div className="os">{current.origin}</div>
+          <div className="apv-top-main">
+            <h2>{title}</h2>
+            <div className="apv-chips">
+              <span className="apv-chip strong" title={current.origin}>
+                <Icon name="globe" size={11} /> {hostOf(current.origin)}
+              </span>
+              {current.tx && <span className="apv-chip">{current.tx.chain_name}</span>}
+              <span className="apv-chip mono dim">{current.method}</span>
+            </div>
           </div>
         </div>
 
         {current.tx ? (
           <>
-            <div className="apv-tabs">
-              {(["basic", "json", "hex"] as const).map((v) => (
-                <button
-                  key={v}
-                  className={`apv-tab${txView === v ? " on" : ""}`}
-                  onClick={() => setTxView(v)}
-                >
-                  {v === "basic" ? t("approval.tabBasic") : v === "json" ? "JSON" : "HEX"}
-                </button>
-              ))}
-            </div>
             {txView === "basic" ? (
               <>
+                {approvalDetails ? (
+                  <ApproveEditor
+                    details={approvalDetails}
+                    info={approvalInfo}
+                    amount={approvalAmount}
+                    onAmount={(v) => {
+                      setApprovalAmount(v);
+                      setApprovalError("");
+                    }}
+                    error={approvalError}
+                    t={t}
+                  />
+                ) : transferDetails ? (
+                  <TransferSection tx={current.tx} details={transferDetails} t={t} />
+                ) : (
+                  <PlainTxCard tx={current.tx} t={t} />
+                )}
                 <SimPreview sim={sim} pending={simPending} t={t} />
-                <TxDetails
-                tx={current.tx}
-                transferDetails={transferDetails}
-                approvalDetails={approvalDetails}
-                approvalInfo={approvalInfo}
-                approvalAmount={approvalAmount}
-                onApprovalAmount={(v) => {
-                  setApprovalAmount(v);
-                  setApprovalError("");
-                }}
-                approvalError={approvalError}
-                maxFeeGwei={maxFeeGwei}
-                onMaxFee={(v) => {
-                  setMaxFeeGwei(v);
-                  setFeeError(false);
-                }}
-                feeError={feeError}
-                maxPrioGwei={maxPrioGwei}
-                onMaxPrio={(v) => {
-                  setMaxPrioGwei(v);
-                  setPrioError(false);
-                }}
-                prioError={prioError}
-                t={t}
+                <FeeSection
+                  tx={current.tx}
+                  maxFeeGwei={maxFeeGwei}
+                  onMaxFee={(v) => {
+                    setMaxFeeGwei(v);
+                    setFeeError(false);
+                  }}
+                  feeError={feeError}
+                  maxPrioGwei={maxPrioGwei}
+                  onMaxPrio={(v) => {
+                    setMaxPrioGwei(v);
+                    setPrioError(false);
+                  }}
+                  prioError={prioError}
+                  t={t}
                 />
               </>
-            ) : txView === "json" ? (
-              <pre className="apv-msg">{txAsJson(current.tx)}</pre>
             ) : (
-              <pre className="apv-msg">{current.tx.data && current.tx.data !== "0x" ? current.tx.data : "0x"}</pre>
+              <pre className="apv-msg">
+                {txView === "json"
+                  ? txAsJson(current.tx)
+                  : current.tx.data && current.tx.data !== "0x"
+                    ? current.tx.data
+                    : "0x"}
+              </pre>
             )}
+            <MetaRow tx={current.tx} view={txView} onView={setTxView} t={t} />
           </>
         ) : current.typed_data ? (
           <TypedDataDetails data={current.typed_data} t={t} />
@@ -370,11 +387,9 @@ function ApprovalView() {
 
         {signer?.address && (
           <div className="apv-signer">
-            <Avatar address={signer.address} size={28} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="sl">{t("approval.signingWith")}</div>
-              <div className="sn">{shortAddress(signer.address, 8, 6)}</div>
-            </div>
+            <Avatar address={signer.address} size={20} />
+            <span className="sl">{t("approval.signingWith")}</span>
+            <span className="sn">{shortAddress(signer.address, 8, 6)}</span>
             {isLedger && (
               <span className="badge ledger">
                 <Icon name="ledger" size={11} /> Ledger
@@ -411,8 +426,194 @@ function ApprovalView() {
   );
 }
 
+// The undecoded-transaction primary card: recipient (or contract) + amount. The
+// network lives in the header chips; gas/nonce/data live in the meta tag row.
+function PlainTxCard({ tx, t }: { tx: TxDisplay; t: TFn }) {
+  const hasData = !!tx.data && tx.data !== "0x" && tx.data.length > 2;
+  return (
+    <div className="apv-tx">
+      <Row
+        label={hasData ? t("approval.interactWith") : t("approval.to")}
+        mono
+        value={tx.to ? shortAddress(tx.to, 10, 8) : t("approval.newContract")}
+      />
+      <Row label={t("approval.amount")} value={`${formatUnits(tx.value, 18)} ${tx.symbol}`} />
+    </div>
+  );
+}
+
+// The editable ERC-20 approve card — the single thing the user is deciding on,
+// so it renders first and standalone.
+function ApproveEditor({
+  details,
+  info,
+  amount,
+  onAmount,
+  error,
+  t,
+}: {
+  details: ApprovalDetails;
+  info: ApprovalTokenInfo | null;
+  amount: string;
+  onAmount: (v: string) => void;
+  error: string;
+  t: TFn;
+}) {
+  return (
+    <div className="apv-approve-editor">
+      <div className="apv-approve-head">
+        <span>{t("approval.approveTitle")}</span>
+        <span className="apv-approve-pill">{t("approval.editable")}</span>
+      </div>
+      <Row
+        label={t("approval.token")}
+        value={info?.symbol ?? shortAddress(details.tokenAddress, 10, 8)}
+        mono={!info}
+      />
+      <Row label={t("approval.spender")} value={shortAddress(details.spender, 10, 8)} mono />
+      {error && !info ? (
+        // Metadata never loaded: an editable amount is impossible, so show the
+        // explanation instead of a dead disabled input.
+        <div className="apv-approve-error">{error}</div>
+      ) : (
+        <div className="apv-approve-field">
+          <label className="field-label">{t("approval.approveAmount")}</label>
+          <input
+            className={`input mono${error ? " err" : ""}`}
+            value={amount}
+            inputMode="decimal"
+            placeholder={info ? `${t("approval.amount")} (${info.symbol})` : t("approval.approveTokenLoading")}
+            disabled={!info}
+            onChange={(e) => onAmount(e.target.value)}
+          />
+          <div className="apv-approve-meta">
+            <span>
+              {t("approval.balance")}:{" "}
+              {info ? `${info.balance} ${info.symbol}` : t("approval.approveTokenLoading")}
+            </span>
+            {info && (
+              <button type="button" onClick={() => onAmount(info.balance)}>
+                {t("approval.useBalance")}
+              </button>
+            )}
+          </div>
+          {error && <div className="apv-approve-error">{error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Secondary facts as corner tags + the Basics/JSON/HEX switch, one thin row.
+function MetaRow({
+  tx,
+  view,
+  onView,
+  t,
+}: {
+  tx: TxDisplay;
+  view: "basic" | "json" | "hex";
+  onView: (v: "basic" | "json" | "hex") => void;
+  t: TFn;
+}) {
+  const hasData = !!tx.data && tx.data !== "0x" && tx.data.length > 2;
+  const dataBytes = hasData ? tx.data.replace(/^0x/, "").length / 2 : 0;
+  return (
+    <div className="apv-meta">
+      <span className="apv-tag mono">Gas {toBigintSafe(tx.gas)}</span>
+      <span className="apv-tag mono">Nonce {toBigintSafe(tx.nonce)}</span>
+      {hasData && <span className="apv-tag mono">{t("approval.dataBytes", { n: dataBytes })}</span>}
+      <span className="apv-meta-spacer" />
+      <div className="apv-seg">
+        {(["basic", "json", "hex"] as const).map((v) => (
+          <button
+            key={v}
+            className={`apv-seg-btn${view === v ? " on" : ""}`}
+            onClick={() => onView(v)}
+          >
+            {v === "basic" ? t("approval.tabBasic") : v === "json" ? "JSON" : "HEX"}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Network fee, collapsed to one line ("up to X ETH · Y Gwei") with the two
+// EIP-1559 editors behind an Edit toggle. A parse error force-opens the editors
+// so the flagged field is visible.
+function FeeSection({
+  tx,
+  maxFeeGwei,
+  onMaxFee,
+  feeError,
+  maxPrioGwei,
+  onMaxPrio,
+  prioError,
+  t,
+}: {
+  tx: TxDisplay;
+  maxFeeGwei: string;
+  onMaxFee: (v: string) => void;
+  feeError: boolean;
+  maxPrioGwei: string;
+  onMaxPrio: (v: string) => void;
+  prioError: boolean;
+  t: TFn;
+}) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (feeError || prioError) setOpen(true);
+  }, [feeError, prioError]);
+
+  // Worst-case fee from the (possibly edited) max fee; falls back to the
+  // prepared tx values while the edited text isn't parseable.
+  let feeSummary = "";
+  try {
+    const gas = BigInt(tx.gas || "0x0");
+    const maxFeeWei = parseUnits(maxFeeGwei, 9);
+    const amount = formatUnits(toHexQuantity(gas * maxFeeWei), 18, 8);
+    // Dust totals (cheap L2s) round to "0" — the Gwei figure alone says more.
+    feeSummary = amount === "0" ? "" : t("approval.feeUpTo", { amount, symbol: tx.symbol });
+  } catch {
+    feeSummary = "";
+  }
+
+  return (
+    <div className="apv-feebox">
+      <div className="apv-fee-row">
+        <span className="apv-fee-label">{t("approval.feeLabel")}</span>
+        <span className="apv-fee-sum mono">
+          {feeSummary ? `${feeSummary} · ` : ""}{maxFeeGwei || "—"} Gwei
+        </span>
+        <button type="button" className="apv-fee-toggle" onClick={() => setOpen((o) => !o)}>
+          {open ? t("approval.feeDone") : t("approval.feeEdit")}
+        </button>
+      </div>
+      {open && (
+        <>
+          <FeeInput label={t("approval.maxPriority")} value={maxPrioGwei} onChange={onMaxPrio} err={prioError} hint={t("approval.maxPriorityHint")} />
+          <FeeInput label={t("approval.maxFee")} value={maxFeeGwei} onChange={onMaxFee} err={feeError} hint={t("approval.maxFeeHint")} />
+        </>
+      )}
+    </div>
+  );
+}
+
 // Pre-sign balance-change preview from the simulation API.
 function SimPreview({ sim, pending, t }: { sim: SimulationPreview | null; pending: boolean; t: TFn }) {
+  // The empty result ("no changes") carries one bit of information — collapse
+  // it to a single line instead of a full card.
+  if (!pending && sim && sim.status === "success" && sim.changes.length === 0) {
+    return (
+      <div className="apv-sim slim">
+        <div className="apv-sim-head">
+          <Icon name="activity" size={14} /> {t("approval.simTitle")}
+        </div>
+        <span className="apv-sim-note">{t("approval.simNoChange")}</span>
+      </div>
+    );
+  }
   return (
     <div className="apv-sim">
       <div className="apv-sim-head">
@@ -471,102 +672,6 @@ function toBigintSafe(hex: string): string {
   } catch {
     return hex;
   }
-}
-
-// Transaction details for an eth_sendTransaction approval, with an editable max fee.
-function TxDetails({
-  tx,
-  transferDetails,
-  approvalDetails,
-  approvalInfo,
-  approvalAmount,
-  onApprovalAmount,
-  approvalError,
-  maxFeeGwei,
-  onMaxFee,
-  feeError,
-  maxPrioGwei,
-  onMaxPrio,
-  prioError,
-  t,
-}: {
-  tx: TxDisplay;
-  transferDetails: TransferDetails | null;
-  approvalDetails: ApprovalDetails | null;
-  approvalInfo: ApprovalTokenInfo | null;
-  approvalAmount: string;
-  onApprovalAmount: (v: string) => void;
-  approvalError: string;
-  maxFeeGwei: string;
-  onMaxFee: (v: string) => void;
-  feeError: boolean;
-  maxPrioGwei: string;
-  onMaxPrio: (v: string) => void;
-  prioError: boolean;
-  t: TFn;
-}) {
-  const hasData = !!tx.data && tx.data !== "0x" && tx.data.length > 2;
-  const dataBytes = hasData ? tx.data.replace(/^0x/, "").length / 2 : 0;
-  return (
-    <div className="apv-tx">
-      <Row label={t("approval.network")} value={tx.chain_name} />
-      <Row
-        label={t("approval.to")}
-        mono
-        value={tx.to ? shortAddress(tx.to, 10, 8) : t("approval.newContract")}
-      />
-      <Row label={t("approval.amount")} value={`${formatUnits(tx.value, 18)} ${tx.symbol}`} />
-      <Row label={t("approval.gasLimit")} value={toBigintSafe(tx.gas)} mono />
-      <Row label={t("approval.nonce")} value={toBigintSafe(tx.nonce)} mono />
-      {hasData && <Row label={t("approval.data")} value={t("approval.dataBytes", { n: dataBytes })} />}
-      {transferDetails && <TransferSection tx={tx} details={transferDetails} t={t} />}
-      {approvalDetails && (
-        <div className="apv-approve-editor">
-          <div className="apv-approve-head">
-            <span>{t("approval.approveTitle")}</span>
-            <span className="apv-approve-pill">{t("approval.editable")}</span>
-          </div>
-          <Row
-            label={t("approval.token")}
-            value={approvalInfo?.symbol ?? shortAddress(approvalDetails.tokenAddress, 10, 8)}
-            mono={!approvalInfo}
-          />
-          <Row
-            label={t("approval.spender")}
-            value={shortAddress(approvalDetails.spender, 10, 8)}
-            mono
-          />
-          <div className="apv-approve-field">
-            <label className="field-label">{t("approval.approveAmount")}</label>
-            <input
-              className={`input mono${approvalError ? " err" : ""}`}
-              value={approvalAmount}
-              inputMode="decimal"
-              placeholder={approvalInfo ? `${t("approval.amount")} (${approvalInfo.symbol})` : t("approval.approveTokenLoading")}
-              disabled={!approvalInfo}
-              onChange={(e) => onApprovalAmount(e.target.value)}
-            />
-            <div className="apv-approve-meta">
-              <span>
-                {t("approval.balance")}:{" "}
-                {approvalInfo
-                  ? `${approvalInfo.balance} ${approvalInfo.symbol}`
-                  : t("approval.approveTokenLoading")}
-              </span>
-              {approvalInfo && (
-                <button type="button" onClick={() => onApprovalAmount(approvalInfo.balance)}>
-                  {t("approval.useBalance")}
-                </button>
-              )}
-            </div>
-            {approvalError && <div className="apv-approve-error">{approvalError}</div>}
-          </div>
-        </div>
-      )}
-      <FeeInput label={t("approval.maxPriority")} value={maxPrioGwei} onChange={onMaxPrio} err={prioError} hint={t("approval.maxPriorityHint")} />
-      <FeeInput label={t("approval.maxFee")} value={maxFeeGwei} onChange={onMaxFee} err={feeError} hint={t("approval.maxFeeHint")} />
-    </div>
-  );
 }
 
 // One editable EIP-1559 fee field (in Gwei).
@@ -794,6 +899,22 @@ function TransferSection({
   );
 }
 
+/// Sentinel for an `eth_call` that returned no data (`0x`): the address has no
+/// contract code on the queried chain — in practice, the wallet is on a
+/// different network than the dApp expects. Mapped to a human explanation at
+/// the display site (a raw BigInt SyntaxError here confused users).
+const TOKEN_EMPTY_RESULT = "token-call-returned-empty";
+
+function isTokenEmptyResult(e: unknown): boolean {
+  return e instanceof Error && e.message === TOKEN_EMPTY_RESULT;
+}
+
+function readHexWord(raw: string): bigint {
+  const hex = (raw ?? "").trim();
+  if (hex === "" || hex === "0x") throw new Error(TOKEN_EMPTY_RESULT);
+  return BigInt(hex);
+}
+
 async function loadApprovalTokenInfo(
   chainId: string,
   tokenAddress: string,
@@ -811,7 +932,7 @@ async function loadApprovalTokenInfo(
     symbol,
     decimals,
     balanceRaw,
-    balance: formatTokenAmountForInput(BigInt(balanceRaw), decimals),
+    balance: formatTokenAmountForInput(readHexWord(balanceRaw), decimals),
   };
 }
 
@@ -835,7 +956,7 @@ async function readErc20Decimals(chainId: string, tokenAddress: string): Promise
     { to: tokenAddress, data: "0x313ce567" },
     "latest",
   ]);
-  const value = Number(BigInt(raw));
+  const value = Number(readHexWord(raw));
   if (!Number.isFinite(value) || value < 0 || value > 255) {
     throw new Error(`unexpected ERC-20 decimals() result: ${raw}`);
   }

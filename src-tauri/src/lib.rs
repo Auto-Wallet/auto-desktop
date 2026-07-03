@@ -1332,7 +1332,7 @@ fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         WebviewUrl::App("index.html?view=approval".into()),
     )
     .title("Confirm request — AutoDesktop")
-    .inner_size(420.0, 600.0)
+    .inner_size(420.0, 640.0)
     .resizable(false)
     .always_on_top(true)
     .build()?;

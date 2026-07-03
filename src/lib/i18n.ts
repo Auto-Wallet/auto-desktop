@@ -421,6 +421,13 @@ const DICT: Record<Lang, Record<string, string>> = {
     "approval.decoded": "Decoded",
     "approval.tokenMetaFailed":
       "Token metadata unavailable — amount shown in raw units.",
+    "approval.tokenNotOnChain":
+      "No token contract at this address on {chain}. The dApp probably expects a different network — this transaction is very likely wrong.",
+    "approval.feeLabel": "Network fee",
+    "approval.feeUpTo": "up to {amount} {symbol}",
+    "approval.feeEdit": "Edit",
+    "approval.feeDone": "Done",
+    "approval.interactWith": "Interact with",
   },
   zh: {
     "nav.wallet": "钱包",
@@ -795,7 +802,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "approval.maxFeeHint": "每单位 Gas 愿付的上限（含基础费）。",
     "approval.maxPriority": "优先费（小费）",
     "approval.maxPriorityHint": "给验证者的小费，调高可更快确认。",
-    "approval.tabBasic": "基础信息",
+    "approval.tabBasic": "基础",
     "approval.simTitle": "预计余额变化",
     "approval.simulating": "模拟中…",
     "approval.simRevert": "交易将会回滚（revert）",
@@ -822,6 +829,13 @@ const DICT: Record<Lang, Record<string, string>> = {
     "approval.transferOwner": "转出账户",
     "approval.decoded": "已解码",
     "approval.tokenMetaFailed": "无法读取代币信息——金额以最小单位显示。",
+    "approval.tokenNotOnChain":
+      "在 {chain} 上该地址没有代币合约——dApp 期望的网络可能与当前网络不一致，这笔交易大概率是错的。",
+    "approval.feeLabel": "网络费",
+    "approval.feeUpTo": "最高 {amount} {symbol}",
+    "approval.feeEdit": "编辑",
+    "approval.feeDone": "完成",
+    "approval.interactWith": "交互合约",
   },
 };
 
