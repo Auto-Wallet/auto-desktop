@@ -493,16 +493,8 @@ export default function WalletPage() {
                 }}
               />
               <QuickBtn
-                icon="swap"
-                label={t("wallet.swap")}
-                onClick={() => {
-                  setSwapAssetKey(undefined);
-                  setShowSwap(true);
-                }}
-              />
-              <QuickBtn
                 icon="bridge"
-                label={t("wallet.bridge")}
+                label={t("wallet.swap")}
                 onClick={() => {
                   setBridgeAssetKey(undefined);
                   setShowBridge(true);
@@ -586,8 +578,8 @@ export default function WalletPage() {
                           setShowSend(true);
                         }}
                         onSwap={(assetKey) => {
-                          setSwapAssetKey(assetKey);
-                          setShowSwap(true);
+                          setBridgeAssetKey(assetKey);
+                          setShowBridge(true);
                         }}
                       />
                     ))}
