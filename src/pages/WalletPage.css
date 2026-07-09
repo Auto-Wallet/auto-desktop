@@ -1924,6 +1924,16 @@
   gap: 14px;
   margin-bottom: 12px;
 }
+.holdings-search {
+  margin-left: auto;
+  display: flex;
+  justify-content: flex-end;
+  flex: 1;
+  min-width: 0;
+}
+.holdings-search .section-search {
+  width: min(300px, 100%);
+}
 .chain-filter {
   display: flex;
   gap: 7px;
@@ -1958,6 +1968,15 @@
   background: var(--ink);
   color: var(--bg);
   border-color: var(--ink);
+}
+/* Search hit: the pill is spotlighted in place (never filtered out). */
+.cf-pill.hl {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+  color: var(--ink);
+}
+.cf-pill.on.hl {
+  color: var(--bg);
 }
 
 .asset-section {

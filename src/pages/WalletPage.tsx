@@ -312,6 +312,17 @@ export default function WalletPage() {
     () => filterTokenRows(rows, tokenSearch),
     [rows, tokenSearch],
   );
+  // Chains matching the search are HIGHLIGHTED in the network filter (never
+  // filtered out — the pills stay in place so the layout doesn't jump).
+  const highlightedChainIds = useMemo(() => {
+    const q = normalizedSearch(tokenSearch);
+    if (!q) return new Set<string>();
+    return new Set(
+      chains
+        .filter((c) => includesQuery(q, [c.name, c.symbol]))
+        .map((c) => c.id),
+    );
+  }, [chains, tokenSearch]);
   const hiddenZeroTokenCount = useMemo(
     () => searchedRows.filter(isZeroBalanceRow).length,
     [searchedRows],
@@ -518,6 +529,15 @@ export default function WalletPage() {
                 {t("wallet.activity")}
               </button>
             </div>
+            {tab === "tokens" && (
+              <div className="holdings-search">
+                <SectionSearch
+                  value={tokenSearch}
+                  onChange={setTokenSearch}
+                  placeholder={t("wallet.searchTokenHoldings")}
+                />
+              </div>
+            )}
           </div>
 
           {tab === "tokens" ? (
@@ -532,7 +552,9 @@ export default function WalletPage() {
                 {chains.map((c) => (
                   <button
                     key={c.id}
-                    className={`cf-pill${filter === c.id ? " on" : ""}`}
+                    className={`cf-pill${filter === c.id ? " on" : ""}${
+                      highlightedChainIds.has(c.id) ? " hl" : ""
+                    }`}
                     onClick={() => setFilter(c.id)}
                   >
                     <ChainIcon chain={c} size={12} />
@@ -549,13 +571,6 @@ export default function WalletPage() {
                     <div className="asset-section-sub">
                       {t("wallet.tokenHoldingsHint")}
                     </div>
-                  </div>
-                  <div className="asset-section-tools">
-                    <SectionSearch
-                      value={tokenSearch}
-                      onChange={setTokenSearch}
-                      placeholder={t("wallet.searchTokenHoldings")}
-                    />
                   </div>
                 </div>
                 {visibleRows.length > 0 ? (
