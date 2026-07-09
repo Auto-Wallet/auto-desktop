@@ -7,6 +7,7 @@
 // an <iframe>.
 
 import { invoke } from "@tauri-apps/api/core";
+import { createSerialQueue } from "./serialQueue";
 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -35,15 +36,26 @@ export function setDappBounds(label: string, rect: Rect): Promise<void> {
   return invoke("set_dapp_bounds", { label, ...rect });
 }
 
+// The overlay sync commands are async on the Rust side, so concurrent invokes
+// can complete out of order — a slow `show` finishing after a fast `hide`
+// leaves the transparent overlay stuck on top of the whole window, eating all
+// input. One serial queue per overlay keeps state requests in issue order.
+const toastOverlayQueue = createSerialQueue();
+const menuOverlayQueue = createSerialQueue();
+
 /** Show or hide the native toast overlay that sits above dApp child webviews. */
 export function syncToastOverlay(rect: Rect | null): Promise<void> {
-  return invoke("sync_toast_overlay", rect ? { visible: true, ...rect } : { visible: false });
+  return toastOverlayQueue(() =>
+    invoke("sync_toast_overlay", rect ? { visible: true, ...rect } : { visible: false }),
+  );
 }
 
 /** Show or hide the native dropdown-menu overlay (full-window, above dApp
  *  child webviews — see lib/menuOverlay.ts). */
 export function syncMenuOverlay(rect: Rect | null): Promise<void> {
-  return invoke("sync_menu_overlay", rect ? { visible: true, ...rect } : { visible: false });
+  return menuOverlayQueue(() =>
+    invoke("sync_menu_overlay", rect ? { visible: true, ...rect } : { visible: false }),
+  );
 }
 
 export function resolveDappDialog(

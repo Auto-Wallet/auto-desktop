@@ -75,9 +75,16 @@ export function useMenuOverlay(
   // re-render that rebuilds an identical payload object doesn't tear the
   // overlay down and flash it back up.
   const json = payload ? JSON.stringify(payload) : null;
+  const open = json !== null;
 
+  // Visibility + action channel — keyed on `open` ONLY. A payload CONTENT
+  // change while the menu is open (e.g. selecting a chain flips activeChainId
+  // in the same tick that closes the menu) must NOT tear the overlay down and
+  // re-show it: the async hide/show invokes could complete out of order and
+  // strand the transparent full-window overlay on top of the app, eating every
+  // click (the "switch network freezes the wallet" bug).
   useEffect(() => {
-    if (!isTauri() || !json) return;
+    if (!isTauri() || !open) return;
 
     const channel = new BroadcastChannel(MENU_OVERLAY_CHANNEL);
     channel.onmessage = (event) => {
@@ -85,16 +92,9 @@ export function useMenuOverlay(
       if (action) actionRef.current(action);
     };
 
-    localStorage.setItem(MENU_OVERLAY_KEY, json);
-    const post = () => channel.postMessage({ state: JSON.parse(json) });
-    void syncMenuOverlay({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight })
-      .then(() => {
-        post();
-        // The overlay webview is created lazily on first open and may still be
-        // booting when the first message fires; localStorage + this retry cover it.
-        window.setTimeout(post, 80);
-      })
-      .catch(() => undefined);
+    void syncMenuOverlay({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }).catch(
+      () => undefined,
+    );
 
     // The overlay rect would go stale on resize — just dismiss, like blur.
     const dismiss = () => actionRef.current({ type: "dismiss" });
@@ -108,6 +108,25 @@ export function useMenuOverlay(
       channel.close();
       localStorage.removeItem(MENU_OVERLAY_KEY);
       void syncMenuOverlay(null).catch(() => undefined);
+    };
+  }, [open]);
+
+  // Menu content — posted to the overlay over the channel whenever it changes;
+  // no native show/hide involved.
+  useEffect(() => {
+    if (!isTauri() || !json) return;
+
+    const channel = new BroadcastChannel(MENU_OVERLAY_CHANNEL);
+    localStorage.setItem(MENU_OVERLAY_KEY, json);
+    const post = () => channel.postMessage({ state: JSON.parse(json) });
+    post();
+    // The overlay webview is created lazily on first open and may still be
+    // booting when the first message fires; localStorage + this retry cover it.
+    const retry = window.setTimeout(post, 80);
+
+    return () => {
+      window.clearTimeout(retry);
+      channel.close();
     };
   }, [json]);
 }
