@@ -30,8 +30,17 @@ export interface QuoteParams {
   slippage: number;          // 0.01 = 1%
 }
 
+export type NeutralFeeKind =
+  | 'network'
+  | 'bridge'
+  | 'protocol'
+  | 'provider'
+  | 'dex'
+  | 'relay'
+  | 'app';
+
 export interface NeutralFee {
-  label: string;             // "Network fee", "Bridge fee", "App fee", …
+  kind: NeutralFeeKind;
   amount: string;            // human-readable
   symbol: string;
 }

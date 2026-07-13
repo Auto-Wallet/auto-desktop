@@ -286,7 +286,7 @@ function toNeutralQuote(q: RelayQuoteResponse, params: QuoteParams): NeutralQuot
   const gas = q.fees?.gas;
   if (gas?.currency?.symbol && gas?.amount) {
     fees.push({
-      label: 'Network fee',
+      kind: 'network',
       amount: gas.amountFormatted || formatRaw(gas.amount, gas.currency.decimals),
       symbol: gas.currency.symbol,
     });
@@ -294,7 +294,7 @@ function toNeutralQuote(q: RelayQuoteResponse, params: QuoteParams): NeutralQuot
   const relayer = q.fees?.relayer;
   if (relayer?.currency?.symbol && relayer?.amount) {
     fees.push({
-      label: 'Relay fee',
+      kind: 'relay',
       amount: relayer.amountFormatted || formatRaw(relayer.amount, relayer.currency.decimals),
       symbol: relayer.currency.symbol,
     });
@@ -302,7 +302,7 @@ function toNeutralQuote(q: RelayQuoteResponse, params: QuoteParams): NeutralQuot
   const appFee = q.fees?.app;
   if (appFee?.currency?.symbol && appFee?.amount && BigInt(appFee.amount) > 0n) {
     fees.push({
-      label: 'App fee',
+      kind: 'app',
       amount: appFee.amountFormatted || formatRaw(appFee.amount, appFee.currency.decimals),
       symbol: appFee.currency.symbol,
     });

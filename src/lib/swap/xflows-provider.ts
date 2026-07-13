@@ -150,7 +150,7 @@ export function toNeutralQuote(q: XfQuote, params: QuoteParams): NeutralQuote {
   for (const f of q.nativeFees ?? []) {
     if (f.nativeFeeAmount && f.nativeFeeSymbol) {
       fees.push({
-        label: 'Network fee',
+        kind: 'network',
         amount: formatRaw(f.nativeFeeAmount, f.nativeFeeDecimals ?? 18),
         symbol: f.nativeFeeSymbol,
       });
@@ -159,7 +159,7 @@ export function toNeutralQuote(q: XfQuote, params: QuoteParams): NeutralQuote {
   for (const f of q.tokenFees ?? []) {
     if (f.tokenFeeAmount && f.tokenFeeSymbol) {
       fees.push({
-        label: 'Bridge fee',
+        kind: 'bridge',
         amount: formatRaw(f.tokenFeeAmount, f.tokenFeeDecimals ?? 18),
         symbol: f.tokenFeeSymbol,
       });
@@ -184,19 +184,19 @@ export function toNeutralQuote(q: XfQuote, params: QuoteParams): NeutralQuote {
       const nativeDecimals = native?.decimals ?? 18;
       const gasWei = gasFees?.gas?.totalWeiAmount;
       if (gasWei && BigInt(gasWei) > 0n && nativeSymbol) {
-        fees.push({ label: 'Network fee', amount: formatRaw(gasWei, nativeDecimals), symbol: nativeSymbol });
+        fees.push({ kind: 'network', amount: formatRaw(gasWei, nativeDecimals), symbol: nativeSymbol });
       }
       const protocolWei = gasFees?.protocol?.fixedWeiAmount;
       if (protocolWei && BigInt(protocolWei) > 0n && nativeSymbol) {
-        fees.push({ label: 'Protocol fee', amount: formatRaw(protocolWei, nativeDecimals), symbol: nativeSymbol });
+        fees.push({ kind: 'protocol', amount: formatRaw(protocolWei, nativeDecimals), symbol: nativeSymbol });
       }
       const providerWei = gasFees?.provider?.fixedWeiAmount;
       if (providerWei && BigInt(providerWei) > 0n && nativeSymbol) {
-        fees.push({ label: 'Provider fee', amount: formatRaw(providerWei, nativeDecimals), symbol: nativeSymbol });
+        fees.push({ kind: 'provider', amount: formatRaw(providerWei, nativeDecimals), symbol: nativeSymbol });
       }
       const pct = dexExtra.fees?.percentFees;
       if (pct?.token?.symbol && typeof pct.percent === 'number' && pct.percent > 0) {
-        fees.push({ label: 'DEX fee', amount: `${(pct.percent * 100).toFixed(2)}%`, symbol: pct.token.symbol });
+        fees.push({ kind: 'dex', amount: `${(pct.percent * 100).toFixed(2)}%`, symbol: pct.token.symbol });
       }
     }
     const mins = dexExtra.estimate?.durationInMinutes;

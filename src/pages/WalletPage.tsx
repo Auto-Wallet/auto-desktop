@@ -91,6 +91,7 @@ import { Avatar } from "../lib/ui";
 import { QrCode } from "../lib/qr";
 import { toast } from "../lib/toast";
 import { rpc } from "../lib/rpc";
+import { SwapFeeBreakdown } from "./SwapFeeBreakdown";
 
 const PINNED_ACCOUNT_STORAGE_KEY = "autodesktop:pinned-wallet-addresses";
 const DEFI_ENABLED_ACCOUNT_STORAGE_KEY = "autodesktop:defi-enabled-wallet-addresses";
@@ -3874,6 +3875,7 @@ function CrossChainModal({
                 <b>{selectedQuote.priceImpact.toFixed(2)}%</b>
               </div>
             )}
+            {selectedQuote && <SwapFeeBreakdown fees={selectedQuote.fees} t={t} />}
           </div>
 
           {stage.kind === "submitted" && (

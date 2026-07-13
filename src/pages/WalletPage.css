@@ -1330,6 +1330,20 @@
   font-weight: 850;
   text-align: right;
 }
+.swap-fee-breakdown {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.swap-fee-heading {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 850;
+}
+.swap-fee-unavailable {
+  font-style: italic;
+}
 .swap-slippage {
   display: flex;
   gap: 6px;
