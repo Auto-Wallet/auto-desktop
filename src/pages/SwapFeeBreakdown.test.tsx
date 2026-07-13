@@ -7,6 +7,7 @@ const labels: Record<string, string> = {
   "wallet.feeDetails": "Fee details",
   "wallet.feeUnavailable": "Not reported by provider",
   "wallet.feeNetwork": "Network fee",
+  "wallet.feeMessage": "Cross-chain message fee",
   "wallet.feeBridge": "Bridge fee",
   "wallet.feeProtocol": "Protocol fee",
   "wallet.feeProvider": "Provider fee",

@@ -19,13 +19,13 @@ import {
   syncToastOverlay,
 } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
-import { useActiveAccount, useActiveAccountSync } from "./lib/accounts";
+import { useActiveAccountSync } from "./lib/accounts";
 import { findChain, loadChains } from "./lib/chains";
 import { useT } from "./lib/i18n";
 import { Icon } from "./lib/icons";
 import { setThemePref, useEffectiveTheme } from "./lib/theme";
 import { shortAddress } from "./lib/format";
-import { Avatar, ToastHost } from "./lib/ui";
+import { ToastHost } from "./lib/ui";
 import { toast, useToasts } from "./lib/toast";
 import {
   loadActivity,
@@ -35,6 +35,7 @@ import {
 } from "./lib/activity";
 import { txExplorerUrl } from "./lib/explorer";
 import { useMenuOverlay, type MenuOverlayPayload } from "./lib/menuOverlay";
+import { SidebarFooter } from "./SidebarFooter";
 
 type Page = "wallet" | "dapps" | "browser" | "settings";
 type Tab = { id: string; dapp: Dapp };
@@ -393,12 +394,7 @@ function Sidebar({
   onCloseTab: (id: string) => void;
 }) {
   const { t } = useT();
-  const account = useActiveAccount();
   const theme = useEffectiveTheme();
-  function copyAccountAddress() {
-    void navigator.clipboard.writeText(account.address);
-    toast(t("common.copied"));
-  }
 
   const nav: {
     key: "wallet" | "dapps";
@@ -493,49 +489,11 @@ function Sidebar({
         {!collapsed && <span className="nav-label">{t("nav.settings")}</span>}
       </button>
 
-      <div className="side-foot">
-        <div className="theme-seg">
-          <button
-            className={theme === "light" ? "on" : ""}
-            title="Light"
-            onClick={() => setThemePref("light")}
-          >
-            <Icon name="sun" size={16} />
-          </button>
-          <button
-            className={theme === "dark" ? "on" : ""}
-            title="Dark"
-            onClick={() => setThemePref("dark")}
-          >
-            <Icon name="moon" size={16} />
-          </button>
-        </div>
-        <div className="acct-foot" title={collapsed ? account.label : ""}>
-          <button
-            type="button"
-            className="acct-foot-main"
-            onClick={() => setPage("wallet")}
-          >
-            <Avatar address={account.address} size={30} />
-            {!collapsed && (
-              <div className="acct-foot-meta">
-                <div className="acct-foot-name">{account.label}</div>
-              </div>
-            )}
-          </button>
-          {!collapsed && (
-            <button
-              type="button"
-              className="acct-foot-copy"
-              title={t("wallet.copy")}
-              aria-label={t("wallet.copy")}
-              onClick={copyAccountAddress}
-            >
-              <Icon name="copy" size={14} />
-            </button>
-          )}
-        </div>
-      </div>
+      <SidebarFooter
+        collapsed={collapsed}
+        theme={theme}
+        onThemeChange={setThemePref}
+      />
     </aside>
   );
 }

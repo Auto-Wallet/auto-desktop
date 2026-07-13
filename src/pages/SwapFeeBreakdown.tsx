@@ -3,6 +3,7 @@ import type { NeutralFee, NeutralFeeKind } from "../lib/swap";
 
 const FEE_LABEL_KEYS: Record<NeutralFeeKind, string> = {
   network: "wallet.feeNetwork",
+  message: "wallet.feeMessage",
   bridge: "wallet.feeBridge",
   protocol: "wallet.feeProtocol",
   provider: "wallet.feeProvider",

@@ -147,10 +147,17 @@ export function isXFlowsTerminalError(message: string): boolean {
 export function toNeutralQuote(q: XfQuote, params: QuoteParams): NeutralQuote {
   const toDecimals = params.toToken.decimals;
   const fees: NeutralFee[] = [];
+  const dexExtra = (q.extraData as { dex?: RubicDexExtra } | undefined)?.dex;
+  const messageFeeAmount = dexExtra?.params?.messageFee;
+  let messageFeeClassified = false;
   for (const f of q.nativeFees ?? []) {
     if (f.nativeFeeAmount && f.nativeFeeSymbol) {
+      const isMessageFee = !messageFeeClassified
+        && messageFeeAmount != null
+        && f.nativeFeeAmount === messageFeeAmount;
+      if (isMessageFee) messageFeeClassified = true;
       fees.push({
-        kind: 'network',
+        kind: isMessageFee ? 'message' : 'network',
         amount: formatRaw(f.nativeFeeAmount, f.nativeFeeDecimals ?? 18),
         symbol: f.nativeFeeSymbol,
       });
@@ -175,7 +182,6 @@ export function toNeutralQuote(q: XfQuote, params: QuoteParams): NeutralQuote {
   let estimatedTimeSeconds: number | undefined;
   let amountOutUsd: number | undefined;
   let extraCostUsd: number | undefined;
-  const dexExtra = (q.extraData as { dex?: RubicDexExtra } | undefined)?.dex;
   if (dexExtra) {
     if (fees.length === 0) {
       const gasFees = dexExtra.fees?.gasTokenFees;
@@ -252,6 +258,9 @@ export function toNeutralQuote(q: XfQuote, params: QuoteParams): NeutralQuote {
 // fee + duration fields; everything else is left as `unknown` to keep the
 // type narrow while tolerating fields we don't surface.
 interface RubicDexExtra {
+  params?: {
+    messageFee?: string;
+  };
   estimate?: {
     durationInMinutes?: number;
     destinationUsdAmount?: number;

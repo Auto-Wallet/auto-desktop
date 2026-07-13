@@ -32,6 +32,7 @@ export interface QuoteParams {
 
 export type NeutralFeeKind =
   | 'network'
+  | 'message'
   | 'bridge'
   | 'protocol'
   | 'provider'
