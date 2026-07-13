@@ -520,9 +520,6 @@ function Sidebar({
             {!collapsed && (
               <div className="acct-foot-meta">
                 <div className="acct-foot-name">{account.label}</div>
-                <div className="acct-foot-addr">
-                  {shortAddress(account.address, 6, 4)}
-                </div>
               </div>
             )}
           </button>

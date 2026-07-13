@@ -324,11 +324,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.acct-foot-addr {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--ink-3);
-}
 .acct-foot-copy {
   width: 28px;
   height: 28px;
