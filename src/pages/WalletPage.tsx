@@ -92,6 +92,17 @@ import { QrCode } from "../lib/qr";
 import { toast } from "../lib/toast";
 import { rpc } from "../lib/rpc";
 import { SwapFeeBreakdown } from "./SwapFeeBreakdown";
+import { SafeQueue } from "../SafeQueue";
+import {
+  addSafeAccount,
+  defaultSafeServiceUrl,
+  inspectSafe,
+  removeSafeAccount,
+  renameSafeAccount,
+  useSafes,
+  type ImportedSafe,
+  type SafeInfo,
+} from "../lib/safes";
 
 const PINNED_ACCOUNT_STORAGE_KEY = "autodesktop:pinned-wallet-addresses";
 const DEFI_ENABLED_ACCOUNT_STORAGE_KEY = "autodesktop:defi-enabled-wallet-addresses";
@@ -205,7 +216,8 @@ export default function WalletPage() {
     loadDefiEnabledAccounts,
   );
 
-  const isWatch = !active.signer;
+  const isWatch = active.kind === "watch";
+  const isSafe = active.kind === "safe";
   const activeAddressKey = active.address.toLowerCase();
   const defiEnabled = defiEnabledAddresses.includes(activeAddressKey);
   const accountActivity = useMemo(
@@ -460,6 +472,17 @@ export default function WalletPage() {
                 <Icon name="eye" size={18} /> {t("wallet.watchOnly")}
               </div>
             </div>
+          ) : isSafe ? (
+            <div className="quick">
+              <QuickBtn
+                icon="receive"
+                label={t("wallet.receive")}
+                onClick={() => setShowReceive(true)}
+              />
+              <div className="card watch-banner safe-banner">
+                <Icon name="shield" size={18} /> {t("safe.manualSigning")}
+              </div>
+            </div>
           ) : (
             <div className="quick">
               <QuickBtn
@@ -487,6 +510,8 @@ export default function WalletPage() {
             </div>
           )}
         </div>
+
+        {isSafe && <SafeQueue address={active.address} />}
 
         {/* Tokens / Activity */}
         <div className="holdings">
@@ -1700,7 +1725,7 @@ function KindBadge({
   kind,
   t,
 }: {
-  kind: WalletInfo["kind"] | "watch";
+  kind: WalletInfo["kind"] | "watch" | "safe";
   t: TFn;
 }) {
   if (kind === "ledger")
@@ -1721,22 +1746,30 @@ function KindBadge({
         <Icon name="eye" size={11} /> {t("wallet.watch")}
       </span>
     );
+  if (kind === "safe")
+    return (
+      <span className="badge neutral">
+        <Icon name="shield" size={11} /> Safe
+      </span>
+    );
   return null;
 }
 
 function AccountSwitcher() {
   const { t } = useT();
   const vault = useVault();
+  const safes = useSafes();
   const accounts = useAccounts();
   const active = useActiveAccount();
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renamingWatch, setRenamingWatch] = useState<string | null>(null);
+  const [renamingSafe, setRenamingSafe] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [pinned, setPinned] = useState<string[]>(() => loadPinnedAccounts());
 
-  const watchAccounts = accounts.filter((a) => !a.signer);
+  const watchAccounts = accounts.filter((a) => a.kind === "watch");
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
   const q = query.trim().toLowerCase();
   const visibleWallets = useMemo(() => {
@@ -1799,8 +1832,31 @@ function AccountSwitcher() {
       );
   }, [pinnedSet, q, t, watchAccounts]);
 
+  const visibleSafes = useMemo(() => {
+    return safes
+      .filter((safe) => {
+        if (!q) return true;
+        return [
+          safe.label,
+          safe.address,
+          safe.ownerAddress,
+          shortAddress(safe.address, 10, 6),
+          "Safe",
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      })
+      .sort(
+        (a, b) =>
+          Number(pinnedSet.has(b.address.toLowerCase())) -
+          Number(pinnedSet.has(a.address.toLowerCase())),
+      );
+  }, [pinnedSet, q, safes]);
+
   const visibleCount =
     visibleWallets.reduce((sum, g) => sum + g.accounts.length, 0) +
+    visibleSafes.length +
     visibleWatchAccounts.length;
 
   function togglePinned(address: string) {
@@ -1818,6 +1874,7 @@ function AccountSwitcher() {
     setOpen(false);
     setRenaming(null);
     setRenamingWatch(null);
+    setRenamingSafe(null);
     setQuery("");
   }
 
@@ -1842,6 +1899,7 @@ function AccountSwitcher() {
                 <Icon name="eye" size={11} /> {t("wallet.watch")}
               </span>
             )}
+            {active.kind === "safe" && <KindBadge kind="safe" t={t} />}
           </div>
           <div className="ad">{shortAddress(active.address, 8, 6)}</div>
         </div>
@@ -1858,7 +1916,7 @@ function AccountSwitcher() {
             <div className="acct-menu-head">
               <span>{t("wallet.wallets")}</span>
               <div className="acct-menu-head-actions">
-                <span>{vault.wallets.length}</span>
+                <span>{vault.wallets.length + safes.length}</span>
                 <button
                   type="button"
                   className="acct-add-wallet-top"
@@ -1922,6 +1980,40 @@ function AccountSwitcher() {
                       onRemove={() => {
                         if (confirm(t("wallet.deleteWatchConfirm"))) {
                           removeWatchAccount(a.address);
+                          toast(t("wallet.removed"));
+                        }
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            )}
+
+            {visibleSafes.length > 0 && (
+              <div className="acct-group">
+                <div className="acct-group-head">
+                  <span>{t("safe.group")}</span>
+                </div>
+                {visibleSafes.map((safe) => {
+                  const isPinned = pinnedSet.has(safe.address.toLowerCase());
+                  return (
+                    <SafeAccountRow
+                      key={safe.address}
+                      safe={safe}
+                      activeAddress={active.address}
+                      isPinned={isPinned}
+                      renaming={renamingSafe === safe.address}
+                      t={t}
+                      onPick={() => {
+                        setActive(safe.address);
+                        close();
+                      }}
+                      onRename={() => setRenamingSafe(safe.address)}
+                      onRenameDone={() => setRenamingSafe(null)}
+                      onTogglePinned={() => togglePinned(safe.address)}
+                      onRemove={() => {
+                        if (confirm(t("safe.removeConfirm"))) {
+                          removeSafeAccount(safe.address);
                           toast(t("wallet.removed"));
                         }
                       }}
@@ -2034,6 +2126,108 @@ function WatchAccountRow({
         className="icon-btn bare acct-copy"
         title={t("wallet.copy")}
         onClick={() => copyAccountAddress(account.address, t)}
+      >
+        <Icon name="copy" size={15} />
+      </button>
+      <button
+        className="icon-btn bare acct-row-edit"
+        title={t("wallet.rename")}
+        onClick={onRename}
+      >
+        <Icon name="edit" size={15} />
+      </button>
+      <button
+        className="icon-btn bare acct-row-act"
+        title={t("wallet.removeWatch")}
+        onClick={onRemove}
+      >
+        <Icon name="trash" size={15} />
+      </button>
+    </div>
+  );
+}
+
+function SafeAccountRow({
+  safe,
+  activeAddress,
+  isPinned,
+  renaming,
+  t,
+  onPick,
+  onRename,
+  onRenameDone,
+  onTogglePinned,
+  onRemove,
+}: {
+  safe: ImportedSafe;
+  activeAddress: string;
+  isPinned: boolean;
+  renaming: boolean;
+  t: TFn;
+  onPick: () => void;
+  onRename: () => void;
+  onRenameDone: () => void;
+  onTogglePinned: () => void;
+  onRemove: () => void;
+}) {
+  const [name, setName] = useState(safe.label);
+
+  function saveName() {
+    const next = name.trim();
+    if (next && next !== safe.label) {
+      renameSafeAccount(safe.address, next);
+      toast(t("wallet.renamed"));
+    }
+    onRenameDone();
+  }
+
+  return (
+    <div className={`acct-row${safe.address === activeAddress ? " on" : ""}`}>
+      {renaming ? (
+        <div className="acct-row-main">
+          <Avatar address={safe.address} size={30} />
+          <input
+            className="input acct-watch-rename"
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveName();
+              if (e.key === "Escape") onRenameDone();
+            }}
+            onBlur={saveName}
+          />
+        </div>
+      ) : (
+        <button className="acct-row-main" onClick={onPick}>
+          <Avatar address={safe.address} size={30} />
+          <div className="meta">
+            <div className="l">
+              {safe.label} <KindBadge kind="safe" t={t} />
+            </div>
+            <div className="a">
+              {shortAddress(safe.address, 10, 6)} · {safe.threshold}/
+              {safe.owners.length}
+            </div>
+          </div>
+          {safe.address === activeAddress && (
+            <span className="check">
+              <Icon name="check" size={16} />
+            </span>
+          )}
+        </button>
+      )}
+      <button
+        className={`icon-btn bare acct-pin${isPinned ? " on" : ""}`}
+        title={t(isPinned ? "wallet.unpinAccount" : "wallet.pinAccount")}
+        onClick={onTogglePinned}
+      >
+        <Icon name="star" size={15} />
+      </button>
+      <button
+        className="icon-btn bare acct-copy"
+        title={t("wallet.copy")}
+        onClick={() => copyAccountAddress(safe.address, t)}
       >
         <Icon name="copy" size={15} />
       </button>
@@ -2224,7 +2418,14 @@ function isApproveResetRequiredError(e: unknown): boolean {
   );
 }
 
-type AddStep = "menu" | "create" | "import" | "ledger" | "watch" | "backup";
+type AddStep =
+  | "menu"
+  | "create"
+  | "import"
+  | "ledger"
+  | "safe"
+  | "watch"
+  | "backup";
 
 function AddWalletModal({
   hasPassword,
@@ -2248,6 +2449,7 @@ function AddWalletModal({
       coral: true,
     },
     { s: "ledger", ic: "ledger", label: t("wallet.connectLedger") },
+    { s: "safe", ic: "shield", label: t("safe.import") },
     { s: "watch", ic: "eye", label: t("wallet.watchAddress") },
   ];
 
@@ -2304,6 +2506,9 @@ function AddWalletModal({
           )}
           {step === "ledger" && (
             <LedgerForm onBack={() => setStep("menu")} onDone={onDone} />
+          )}
+          {step === "safe" && (
+            <SafeForm onBack={() => setStep("menu")} onDone={onDone} />
           )}
           {step === "watch" && (
             <WatchForm onBack={() => setStep("menu")} onDone={onDone} />
@@ -2606,6 +2811,216 @@ function LedgerForm({
             onClick={scan}
           >
             {loading ? "…" : error ? t("lock.retry") : t("lock.ledgerScan")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SafeForm({
+  onBack,
+  onDone,
+}: {
+  onBack: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useT();
+  const chains = useChains();
+  const vault = useVault();
+  const active = useActiveAccount();
+  const accounts = useAccounts();
+  const [chainId, setChainId] = useState(chains[0]?.id ?? "0x1");
+  const [address, setAddress] = useState("");
+  const [label, setLabel] = useState("");
+  const [serviceUrl, setServiceUrl] = useState(
+    defaultSafeServiceUrl(chains[0]?.id ?? "0x1") ?? "",
+  );
+  const [info, setInfo] = useState<SafeInfo | null>(null);
+  const [ownerAddress, setOwnerAddress] = useState("");
+  const [localOwners, setLocalOwners] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  function changeChain(next: string) {
+    setChainId(next);
+    setServiceUrl(defaultSafeServiceUrl(next) ?? "");
+    setInfo(null);
+    setOwnerAddress("");
+    setLocalOwners([]);
+    setError(null);
+  }
+
+  async function inspect() {
+    const trimmed = address.trim();
+    if (!isAddress(trimmed)) {
+      setError(t("safe.invalidAddress"));
+      return;
+    }
+    if (
+      accounts.some(
+        (account) => account.address.toLowerCase() === trimmed.toLowerCase(),
+      )
+    ) {
+      setError(t("safe.alreadyAdded"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      let inspected = await inspectSafe(chainId, trimmed);
+      const signerAddresses = vault.wallets.flatMap((wallet) => wallet.accounts);
+      // Browser preview has no contract RPC. Use the public demo signer list so
+      // the import UI remains testable without pretending a real Safe exists.
+      if (!isTauri() && inspected.owners.length === 0) {
+        inspected = { ...inspected, owners: signerAddresses, threshold: 1 };
+      }
+      const matches = inspected.owners.filter((owner) =>
+        signerAddresses.some(
+          (signer) => signer.toLowerCase() === owner.toLowerCase(),
+        ),
+      );
+      if (matches.length === 0) {
+        throw new Error(t("safe.noLocalOwner"));
+      }
+      const preferred = matches.find(
+        (owner) => owner.toLowerCase() === active.address.toLowerCase(),
+      );
+      setInfo(inspected);
+      setLocalOwners(matches);
+      setOwnerAddress(preferred ?? matches[0]);
+    } catch (cause) {
+      setError(errText(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function saveSafe() {
+    if (!info) {
+      setError(t("safe.inspectFirst"));
+      return;
+    }
+    if (!ownerAddress) {
+      setError(t("safe.selectOwner"));
+      return;
+    }
+    if (!serviceUrl.trim()) {
+      setError(t("safe.serviceRequired"));
+      return;
+    }
+    try {
+      const safe = addSafeAccount(info, ownerAddress, serviceUrl, label);
+      setActive(safe.address);
+      toast(t("safe.imported"));
+      onDone();
+    } catch (cause) {
+      setError(errText(cause));
+    }
+  }
+
+  return (
+    <div className="add-form">
+      <div className="field">
+        <label className="field-label">{t("approval.network")}</label>
+        <select
+          className="input"
+          value={chainId}
+          onChange={(event) => changeChain(event.target.value)}
+        >
+          {chains.map((chain) => (
+            <option key={chain.id} value={chain.id}>
+              {chain.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label className="field-label">{t("safe.address")}</label>
+        <input
+          className="input mono"
+          autoFocus
+          value={address}
+          placeholder={t("wallet.pasteAddr")}
+          onChange={(event) => {
+            setAddress(event.target.value);
+            setInfo(null);
+            setError(null);
+          }}
+        />
+      </div>
+      <div className="field">
+        <label className="field-label">{t("safe.name")}</label>
+        <input
+          className="input"
+          value={label}
+          placeholder={t("safe.namePlaceholder")}
+          onChange={(event) => setLabel(event.target.value)}
+        />
+      </div>
+      <div className="field">
+        <label className="field-label">{t("safe.serviceUrl")}</label>
+        <input
+          className="input mono"
+          value={serviceUrl}
+          placeholder="https://…/api"
+          onChange={(event) => {
+            setServiceUrl(event.target.value);
+            setError(null);
+          }}
+        />
+        <div className="add-note">{t("safe.serviceHint")}</div>
+      </div>
+
+      {info && (
+        <div className="safe-import-summary">
+          <div>
+            <span>{t("safe.thresholdLabel")}</span>
+            <b>
+              {info.threshold}/{info.owners.length}
+            </b>
+          </div>
+          <div>
+            <span>{t("safe.nonce")}</span>
+            <b className="mono">{BigInt(info.nonce).toString()}</b>
+          </div>
+          <div className="field">
+            <label className="field-label">{t("safe.localOwner")}</label>
+            <select
+              className="input mono"
+              value={ownerAddress}
+              onChange={(event) => setOwnerAddress(event.target.value)}
+            >
+              {localOwners.map((owner) => (
+                <option key={owner} value={owner}>
+                  {owner}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="lock-err">
+          <Icon name="alert" size={16} /> {error}
+        </div>
+      )}
+      <div className="add-acts">
+        <button className="btn btn-ghost btn-sm" onClick={onBack}>
+          {t("lock.back")}
+        </button>
+        {info ? (
+          <button className="btn btn-primary btn-sm" onClick={saveSafe}>
+            {t("safe.import")}
+          </button>
+        ) : (
+          <button
+            className="btn btn-aurora btn-sm"
+            disabled={busy || !address.trim()}
+            onClick={() => void inspect()}
+          >
+            {busy ? "…" : t("safe.inspect")}
           </button>
         )}
       </div>

@@ -225,6 +225,26 @@ fn with_active_key<T>(f: impl FnOnce(&SigningKey) -> T) -> Result<T, String> {
     }
 }
 
+/// Run `f` with a specific unlocked software account. Safe accounts are
+/// represented in the UI by their contract address, while their confirmations
+/// must be signed by one of the local owner EOAs. Looking the owner up by address
+/// avoids switching the dApp-visible account away from the Safe.
+fn with_key_for<T>(address: &str, f: impl FnOnce(&SigningKey) -> T) -> Result<T, String> {
+    let address = normalize_evm_address(address)?;
+    let guard = store_state().lock().unwrap();
+    let s = guard.as_ref().ok_or("wallet is locked")?;
+    let acct = s
+        .wallets
+        .iter()
+        .flat_map(|w| &w.accounts)
+        .find(|a| a.address == address)
+        .ok_or_else(|| format!("{address} is not an unlocked local account"))?;
+    match &acct.signer {
+        Signer::Local(key) => Ok(f(key)),
+        Signer::Ledger { .. } => Err("account is a Ledger — sign on the device".to_string()),
+    }
+}
+
 /// Snapshot the active account's signing kind (and Ledger path) without holding the
 /// store lock during the (slow) device round-trip.
 fn active_signer_kind() -> Result<ActiveKind, String> {
@@ -240,6 +260,32 @@ fn active_signer_kind() -> Result<ActiveKind, String> {
         Signer::Local(_) => ActiveKind::Local,
         Signer::Ledger { path } => ActiveKind::Ledger(path.clone()),
     })
+}
+
+/// Snapshot a specific unlocked account's signing kind. Used by Safe owner
+/// confirmations, where the selected account is the Safe contract but the signer
+/// is one of its local owners.
+fn signer_kind_for(address: &str) -> Result<ActiveKind, String> {
+    let address = normalize_evm_address(address)?;
+    let guard = store_state().lock().unwrap();
+    let s = guard.as_ref().ok_or("wallet is locked")?;
+    let acct = s
+        .wallets
+        .iter()
+        .flat_map(|w| &w.accounts)
+        .find(|a| a.address == address)
+        .ok_or_else(|| format!("{address} is not an unlocked local account"))?;
+    Ok(match &acct.signer {
+        Signer::Local(_) => ActiveKind::Local,
+        Signer::Ledger { path } => ActiveKind::Ledger(path.clone()),
+    })
+}
+
+fn signer_kind_name(kind: &ActiveKind) -> &'static str {
+    match kind {
+        ActiveKind::Local => "local",
+        ActiveKind::Ledger(_) => "ledger",
+    }
 }
 
 /// Derive `count` (≥1) HD accounts from `mnemonic` into unlocked accounts + their
@@ -1243,6 +1289,399 @@ async fn node_rpc(
     node_rpc_call(&chain, &method, &params.unwrap_or_default()).await
 }
 
+// ---------------------------------------------------------------------------
+// Safe smart-account integration (trusted shell only).
+//
+// Import is verified against the Safe contract itself (getOwners/getThreshold/
+// nonce). Pending transactions and off-chain confirmations use the Safe
+// Transaction Service. The service never receives a private key: the selected
+// local owner signs the canonical SafeTx EIP-712 digest in Rust or on Ledger,
+// after the normal dedicated approval window.
+// ---------------------------------------------------------------------------
+
+const SAFE_GET_OWNERS_SELECTOR: &str = "0xa0e67e2b";
+const SAFE_GET_THRESHOLD_SELECTOR: &str = "0xe75235b8";
+const SAFE_NONCE_SELECTOR: &str = "0xaffed0e0";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SafeInfo {
+    address: String,
+    chain_id: String,
+    owners: Vec<String>,
+    threshold: u64,
+    /// Kept as an RPC hex quantity so large nonces are never rounded in JS.
+    nonce: String,
+}
+
+fn decode_abi_bytes(raw: &Value, field: &str) -> Result<Vec<u8>, String> {
+    let value = raw
+        .as_str()
+        .ok_or_else(|| format!("{field}: eth_call did not return hex"))?;
+    let body = value
+        .strip_prefix("0x")
+        .ok_or_else(|| format!("{field}: expected 0x response"))?;
+    hex::decode(body).map_err(|e| format!("{field}: malformed ABI response: {e}"))
+}
+
+fn word_to_usize(word: &[u8], field: &str) -> Result<usize, String> {
+    if word.len() != 32 {
+        return Err(format!("{field}: ABI word must be 32 bytes"));
+    }
+    if word[..24].iter().any(|b| *b != 0) {
+        return Err(format!("{field}: ABI integer is too large"));
+    }
+    let mut tail = [0u8; 8];
+    tail.copy_from_slice(&word[24..]);
+    usize::try_from(u64::from_be_bytes(tail))
+        .map_err(|_| format!("{field}: ABI integer does not fit this platform"))
+}
+
+fn decode_abi_uint_u64(raw: &Value, field: &str) -> Result<u64, String> {
+    let bytes = decode_abi_bytes(raw, field)?;
+    if bytes.len() != 32 || bytes[..24].iter().any(|b| *b != 0) {
+        return Err(format!("{field}: expected one uint64-compatible ABI word"));
+    }
+    let mut tail = [0u8; 8];
+    tail.copy_from_slice(&bytes[24..]);
+    Ok(u64::from_be_bytes(tail))
+}
+
+fn decode_abi_addresses(raw: &Value, field: &str) -> Result<Vec<String>, String> {
+    let bytes = decode_abi_bytes(raw, field)?;
+    if bytes.len() < 64 {
+        return Err(format!("{field}: response is too short"));
+    }
+    let offset = word_to_usize(&bytes[..32], field)?;
+    if offset.checked_add(32).is_none_or(|end| end > bytes.len()) {
+        return Err(format!("{field}: invalid array offset"));
+    }
+    let len = word_to_usize(&bytes[offset..offset + 32], field)?;
+    let start = offset + 32;
+    let end = start
+        .checked_add(
+            len.checked_mul(32)
+                .ok_or_else(|| format!("{field}: array length overflow"))?,
+        )
+        .ok_or_else(|| format!("{field}: array length overflow"))?;
+    if end > bytes.len() {
+        return Err(format!("{field}: truncated address array"));
+    }
+    let mut owners = Vec::with_capacity(len);
+    for i in 0..len {
+        let word = &bytes[start + i * 32..start + (i + 1) * 32];
+        if word[..12].iter().any(|b| *b != 0) {
+            return Err(format!("{field}: malformed address word"));
+        }
+        owners.push(format!("0x{}", hex::encode(&word[12..])));
+    }
+    Ok(owners)
+}
+
+async fn safe_contract_call(
+    chain: &ChainCfg,
+    safe_address: &str,
+    data: &str,
+) -> Result<Value, String> {
+    node_rpc_call(
+        chain,
+        "eth_call",
+        &[json!({ "to": safe_address, "data": data }), json!("latest")],
+    )
+    .await
+}
+
+async fn inspect_safe_contract(chain_id: &str, address: &str) -> Result<SafeInfo, String> {
+    let address = normalize_evm_address(address)?;
+    let chain = find_chain(chain_id).ok_or_else(|| format!("Safe: unknown chain {chain_id}"))?;
+    let code = node_rpc_call(&chain, "eth_getCode", &[json!(address), json!("latest")]).await?;
+    let code = code
+        .as_str()
+        .ok_or("Safe: eth_getCode returned a non-string")?;
+    if code == "0x" || code == "0x0" {
+        return Err(
+            "No deployed contract exists at this address on the selected network".to_string(),
+        );
+    }
+
+    let owners = decode_abi_addresses(
+        &safe_contract_call(&chain, &address, SAFE_GET_OWNERS_SELECTOR).await?,
+        "Safe.getOwners",
+    )?;
+    if owners.is_empty() {
+        return Err("The contract returned no Safe owners".to_string());
+    }
+    let threshold = decode_abi_uint_u64(
+        &safe_contract_call(&chain, &address, SAFE_GET_THRESHOLD_SELECTOR).await?,
+        "Safe.getThreshold",
+    )?;
+    if threshold == 0 || threshold as usize > owners.len() {
+        return Err(format!(
+            "Invalid Safe threshold {threshold} for {} owners",
+            owners.len()
+        ));
+    }
+    let nonce = safe_contract_call(&chain, &address, SAFE_NONCE_SELECTOR)
+        .await?
+        .as_str()
+        .ok_or("Safe.nonce returned a non-string")?
+        .to_string();
+    Ok(SafeInfo {
+        address,
+        chain_id: chain.id,
+        owners,
+        threshold,
+        nonce,
+    })
+}
+
+#[tauri::command]
+async fn inspect_safe(chain_id: String, address: String) -> Result<SafeInfo, String> {
+    inspect_safe_contract(&chain_id, &address).await
+}
+
+fn safe_service_base_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let url = reqwest::Url::parse(trimmed)
+        .map_err(|e| format!("Invalid Safe Transaction Service URL: {e}"))?;
+    if url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(
+            "Safe Transaction Service URL must not contain credentials, query, or fragment"
+                .to_string(),
+        );
+    }
+    let local_http =
+        url.scheme() == "http" && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if url.scheme() != "https" && !local_http {
+        return Err(
+            "Safe Transaction Service URL must use HTTPS (HTTP is allowed only for localhost)"
+                .to_string(),
+        );
+    }
+    Ok(trimmed.to_string())
+}
+
+fn safe_api_key() -> Option<String> {
+    std::env::var("SAFE_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| read_env_file_value("SAFE_API_KEY"))
+        .or_else(|| {
+            option_env!("SAFE_API_KEY")
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn is_official_safe_service_url(raw: &str) -> bool {
+    reqwest::Url::parse(raw)
+        .is_ok_and(|url| url.scheme() == "https" && url.host_str() == Some("api.safe.global"))
+}
+
+/// Attach the shared Safe Infrastructure key only to Safe's official HTTPS
+/// endpoint. A user-supplied/self-hosted Transaction Service must never receive
+/// this credential.
+fn authorize_safe_request(
+    request: reqwest::RequestBuilder,
+    endpoint: &str,
+) -> reqwest::RequestBuilder {
+    if !is_official_safe_service_url(endpoint) {
+        return request;
+    }
+    match safe_api_key() {
+        Some(key) => request.bearer_auth(key),
+        None => request,
+    }
+}
+
+async fn response_json(resp: reqwest::Response, context: &str) -> Result<Value, String> {
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("{context}: failed to read response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("{context}: HTTP {status}: {text}"));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("{context}: invalid JSON: {e}"))
+}
+
+#[tauri::command]
+async fn safe_pending_transactions(
+    service_url: String,
+    safe_address: String,
+) -> Result<Value, String> {
+    normalize_evm_address(&safe_address)?;
+    let base = safe_service_base_url(&service_url)?;
+    let endpoint = format!(
+        "{base}/v1/safes/{}/multisig-transactions/?executed=false&trusted=true&ordering=nonce&limit=100",
+        safe_address.trim()
+    );
+    let resp = authorize_safe_request(http().get(&endpoint), &endpoint)
+        .send()
+        .await
+        .map_err(|e| format!("Safe pending transactions request failed: {e}"))?;
+    response_json(resp, "Safe pending transactions").await
+}
+
+fn safe_tx_value(tx: &Value, field: &str) -> Result<Value, String> {
+    tx.get(field)
+        .cloned()
+        .ok_or_else(|| format!("Safe transaction is missing {field}"))
+}
+
+fn safe_tx_string(tx: &Value, field: &str) -> Result<String, String> {
+    tx.get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("Safe transaction {field} must be a string"))
+}
+
+fn safe_transaction_typed_data(
+    chain_id: &str,
+    safe_address: &str,
+    tx: &Value,
+) -> Result<Value, String> {
+    let safe_address = normalize_evm_address(safe_address)?;
+    let tx_safe = normalize_evm_address(&safe_tx_string(tx, "safe")?)?;
+    if tx_safe != safe_address {
+        return Err("Safe transaction address does not match the imported Safe".to_string());
+    }
+    let chain_number = if let Some(hex_id) = chain_id.strip_prefix("0x") {
+        Value::String(format!("0x{hex_id}"))
+    } else {
+        Value::String(chain_id.to_string())
+    };
+    let data = match tx.get("data") {
+        Some(Value::String(value)) => Value::String(value.clone()),
+        Some(Value::Null) | None => Value::String("0x".to_string()),
+        _ => return Err("Safe transaction data must be hex or null".to_string()),
+    };
+    Ok(json!({
+        "types": {
+            "EIP712Domain": [
+                { "name": "chainId", "type": "uint256" },
+                { "name": "verifyingContract", "type": "address" }
+            ],
+            "SafeTx": [
+                { "name": "to", "type": "address" },
+                { "name": "value", "type": "uint256" },
+                { "name": "data", "type": "bytes" },
+                { "name": "operation", "type": "uint8" },
+                { "name": "safeTxGas", "type": "uint256" },
+                { "name": "baseGas", "type": "uint256" },
+                { "name": "gasPrice", "type": "uint256" },
+                { "name": "gasToken", "type": "address" },
+                { "name": "refundReceiver", "type": "address" },
+                { "name": "nonce", "type": "uint256" }
+            ]
+        },
+        "domain": {
+            "chainId": chain_number,
+            "verifyingContract": safe_address
+        },
+        "primaryType": "SafeTx",
+        "message": {
+            "to": safe_tx_value(tx, "to")?,
+            "value": safe_tx_value(tx, "value")?,
+            "data": data,
+            "operation": safe_tx_value(tx, "operation")?,
+            "safeTxGas": safe_tx_value(tx, "safeTxGas")?,
+            "baseGas": safe_tx_value(tx, "baseGas")?,
+            "gasPrice": safe_tx_value(tx, "gasPrice")?,
+            "gasToken": safe_tx_value(tx, "gasToken")?,
+            "refundReceiver": safe_tx_value(tx, "refundReceiver")?,
+            "nonce": safe_tx_value(tx, "nonce")?
+        }
+    }))
+}
+
+fn safe_tx_already_confirmed(tx: &Value, owner_address: &str) -> bool {
+    tx.get("confirmations")
+        .and_then(Value::as_array)
+        .is_some_and(|confirmations| {
+            confirmations.iter().any(|confirmation| {
+                confirmation
+                    .get("owner")
+                    .and_then(Value::as_str)
+                    .is_some_and(|owner| owner.eq_ignore_ascii_case(owner_address))
+            })
+        })
+}
+
+#[tauri::command]
+async fn safe_confirm_transaction<R: Runtime>(
+    app: AppHandle<R>,
+    chain_id: String,
+    service_url: String,
+    safe_address: String,
+    owner_address: String,
+    transaction: Value,
+) -> Result<String, String> {
+    let safe_address_normalized = normalize_evm_address(&safe_address)?;
+    let owner_address = normalize_evm_address(&owner_address)?;
+    let info = inspect_safe_contract(&chain_id, &safe_address_normalized).await?;
+    if !info
+        .owners
+        .iter()
+        .any(|owner| owner.eq_ignore_ascii_case(&owner_address))
+    {
+        return Err(format!(
+            "{owner_address} is no longer an owner of this Safe"
+        ));
+    }
+    let signer_kind = signer_kind_for(&owner_address)?;
+    if safe_tx_already_confirmed(&transaction, &owner_address) {
+        return Err("This local owner has already confirmed the transaction".to_string());
+    }
+
+    let typed = safe_transaction_typed_data(&chain_id, &safe_address_normalized, &transaction)?;
+    let digest = eip712::signing_hash(&typed)?;
+    let calculated_hash = format!("0x{}", hex::encode(digest));
+    let advertised_hash = safe_tx_string(&transaction, "safeTxHash")?;
+    if !calculated_hash.eq_ignore_ascii_case(&advertised_hash) {
+        return Err(format!(
+            "Safe transaction hash mismatch: service returned {advertised_hash}, locally calculated {calculated_hash}"
+        ));
+    }
+
+    let req = PendingRequest {
+        id: next_request_id(),
+        method: "safe_confirmTransaction".to_string(),
+        origin: service_url.clone(),
+        signer_address: Some(owner_address.clone()),
+        signer_kind: Some(signer_kind_name(&signer_kind).to_string()),
+        summary: format!(
+            "Confirm Safe transaction\nSafe: {safe_address}\nNonce: {}\nTo: {}",
+            transaction
+                .get("nonce")
+                .map(Value::to_string)
+                .unwrap_or_else(|| "?".to_string()),
+            transaction.get("to").and_then(Value::as_str).unwrap_or("?")
+        ),
+        tx: None,
+        typed_data: Some(typed.clone()),
+    };
+    if !request_approval(&app, req).await.approved {
+        return Err("User rejected the Safe confirmation (4001)".to_string());
+    }
+
+    let signature = sign_typed_data_for(&owner_address, &typed)?;
+    let base = safe_service_base_url(&service_url)?;
+    let endpoint = format!("{base}/v1/multisig-transactions/{advertised_hash}/confirmations/");
+    let resp = authorize_safe_request(http().post(&endpoint), &endpoint)
+        .json(&json!({ "signature": signature }))
+        .send()
+        .await
+        .map_err(|e| format!("Safe confirmation submission failed: {e}"))?;
+    response_json(resp, "Safe confirmation submission").await?;
+    Ok(signature)
+}
+
 const BCS_API_URL: &str = "https://balance-change-simulate-api.wanscan.org/simulate";
 
 #[derive(Debug, Deserialize)]
@@ -1307,6 +1746,13 @@ struct PendingRequest {
     id: String,
     method: String,
     origin: String,
+    /// The exact local owner that will sign. Usually this is the active EOA; for
+    /// a Safe confirmation it is the Safe's bound local owner while the Safe
+    /// contract address remains selected in the main window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signer_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signer_kind: Option<String>,
     /// Human-readable summary of what is being signed (decoded message text).
     summary: String,
     /// For `eth_sendTransaction`: the fully-resolved transaction to display
@@ -1459,6 +1905,15 @@ async fn handle_signing<R: Runtime>(
     if active_account_address().is_none() {
         return Err("wallet is locked".to_string());
     }
+    if matches!(
+        exposed_account_state().lock().unwrap().as_ref(),
+        Some(ExposedAccount::WatchOnly(_))
+    ) {
+        return Err(
+            "the selected account cannot sign direct EIP-1193 requests; Safe transactions must be confirmed from the Safe queue"
+                .to_string(),
+        );
+    }
 
     match method {
         "personal_sign" => {
@@ -1472,6 +1927,10 @@ async fn handle_signing<R: Runtime>(
                 id: next_request_id(),
                 method: method.to_string(),
                 origin: origin.to_string(),
+                signer_address: active_account_address(),
+                signer_kind: active_signer_kind()
+                    .ok()
+                    .map(|kind| signer_kind_name(&kind).to_string()),
                 summary: preview_message(&message),
                 tx: None,
                 typed_data: None,
@@ -1509,6 +1968,10 @@ async fn handle_signing<R: Runtime>(
                 id: next_request_id(),
                 method: method.to_string(),
                 origin: origin.to_string(),
+                signer_address: active_account_address(),
+                signer_kind: active_signer_kind()
+                    .ok()
+                    .map(|kind| signer_kind_name(&kind).to_string()),
                 summary: preview_typed_data(&typed),
                 tx: None,
                 typed_data: Some(typed.clone()),
@@ -1545,6 +2008,27 @@ fn sign_typed_data(typed: &Value) -> Result<Value, String> {
         }
     };
     Ok(json!(format!("0x{}", hex::encode(sig))))
+}
+
+/// Sign EIP-712 typed data with a specific local account without changing the
+/// app's active/dApp-visible account. This is the Safe owner signing primitive.
+fn sign_typed_data_for(address: &str, typed: &Value) -> Result<String, String> {
+    let sig = match signer_kind_for(address)? {
+        ActiveKind::Local => {
+            let digest = eip712::signing_hash(typed)?;
+            let (signature, recovery_id) =
+                with_key_for(address, |k| k.sign_prehash_recoverable(&digest))?
+                    .map_err(|e| format!("Safe transaction signing failed: {e}"))?;
+            let mut sig = signature.to_bytes().to_vec();
+            sig.push(27 + recovery_id.to_byte());
+            sig
+        }
+        ActiveKind::Ledger(path) => {
+            let (domain_separator, message_hash) = eip712::domain_and_message_hash(typed)?;
+            ledger::sign_eip712(&path, &domain_separator, &message_hash)?.to_vec()
+        }
+    };
+    Ok(format!("0x{}", hex::encode(sig)))
 }
 
 /// A human-readable summary of typed data for the approval window.
@@ -1769,6 +2253,10 @@ async fn approve_and_send<R: Runtime>(
         id: next_request_id(),
         method: "eth_sendTransaction".to_string(),
         origin: origin.to_string(),
+        signer_address: active_account_address(),
+        signer_kind: active_signer_kind()
+            .ok()
+            .map(|kind| signer_kind_name(&kind).to_string()),
         summary: preview_tx(tx),
         tx: Some(prepared.clone()),
         typed_data: None,
@@ -1855,6 +2343,8 @@ async fn handle_rpc<R: Runtime>(
                         id: next_request_id(),
                         method: "wallet_addEthereumChain".to_string(),
                         origin: origin.to_string(),
+                        signer_address: None,
+                        signer_kind: None,
                         summary,
                         tx: None,
                         typed_data: None,
@@ -3134,6 +3624,10 @@ async fn replace_activity_transaction<R: Runtime>(
         id: next_request_id(),
         method: "eth_sendTransaction".to_string(),
         origin: "AutoDesktop Wallet".to_string(),
+        signer_address: active_account_address(),
+        signer_kind: active_signer_kind()
+            .ok()
+            .map(|kind| signer_kind_name(&kind).to_string()),
         summary: if is_cancel {
             format!("Cancel pending transaction\nOriginal: {}", original.hash)
         } else {
@@ -6034,6 +6528,9 @@ pub fn run() {
             close_dapp,
             open_external_url,
             node_rpc,
+            inspect_safe,
+            safe_pending_transactions,
+            safe_confirm_transaction,
             simulate_tx,
             wallet_send,
             set_active_chain,
@@ -6239,6 +6736,105 @@ mod tests {
         }
     }
 
+    #[test]
+    fn decodes_safe_owner_array_strictly() {
+        let raw = json!(concat!(
+            "0x",
+            "0000000000000000000000000000000000000000000000000000000000000020",
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            "0000000000000000000000001111111111111111111111111111111111111111",
+            "0000000000000000000000002222222222222222222222222222222222222222"
+        ));
+        assert_eq!(
+            decode_abi_addresses(&raw, "owners").unwrap(),
+            vec![
+                "0x1111111111111111111111111111111111111111",
+                "0x2222222222222222222222222222222222222222"
+            ]
+        );
+        assert!(decode_abi_addresses(&json!("0x20"), "owners").is_err());
+    }
+
+    #[test]
+    fn safe_api_key_is_scoped_to_official_https_service() {
+        assert!(is_official_safe_service_url(
+            "https://api.safe.global/tx-service/eth/api/v1/about/"
+        ));
+        assert!(!is_official_safe_service_url(
+            "http://api.safe.global/tx-service/eth/api/v1/about/"
+        ));
+        assert!(!is_official_safe_service_url(
+            "https://api.safe.global.attacker.example/tx-service/eth/api"
+        ));
+        assert!(!is_official_safe_service_url(
+            "https://safe.internal.example/api"
+        ));
+    }
+
+    #[test]
+    fn safe_typed_data_matches_contract_hash_formula() {
+        let safe = "0x2222222222222222222222222222222222222222";
+        let to = "0x1111111111111111111111111111111111111111";
+        let tx = json!({
+            "safe": safe,
+            "to": to,
+            "value": "5",
+            "data": "0x1234",
+            "operation": 0,
+            "safeTxGas": "0",
+            "baseGas": "0",
+            "gasPrice": "0",
+            "gasToken": "0x0000000000000000000000000000000000000000",
+            "refundReceiver": "0x0000000000000000000000000000000000000000",
+            "nonce": "7",
+            "safeTxHash": "0x00"
+        });
+        let typed = safe_transaction_typed_data("0x1", safe, &tx).unwrap();
+        let actual = eip712::signing_hash(&typed).unwrap();
+
+        let mut domain_preimage = Vec::new();
+        domain_preimage.extend_from_slice(
+            &hex::decode("47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218")
+                .unwrap(),
+        );
+        let mut chain_word = [0u8; 32];
+        chain_word[31] = 1;
+        domain_preimage.extend_from_slice(&chain_word);
+        let mut safe_word = [0u8; 32];
+        safe_word[12..].copy_from_slice(&hex::decode(&safe[2..]).unwrap());
+        domain_preimage.extend_from_slice(&safe_word);
+        let domain_hash = Keccak256::digest(&domain_preimage);
+
+        let mut struct_preimage = Vec::new();
+        struct_preimage.extend_from_slice(
+            &hex::decode("bb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8")
+                .unwrap(),
+        );
+        let mut to_word = [0u8; 32];
+        to_word[12..].copy_from_slice(&hex::decode(&to[2..]).unwrap());
+        struct_preimage.extend_from_slice(&to_word);
+        let mut value_word = [0u8; 32];
+        value_word[31] = 5;
+        struct_preimage.extend_from_slice(&value_word);
+        struct_preimage.extend_from_slice(&Keccak256::digest([0x12, 0x34]));
+        struct_preimage.extend_from_slice(&[0u8; 32]); // operation
+        struct_preimage.extend_from_slice(&[0u8; 32]); // safeTxGas
+        struct_preimage.extend_from_slice(&[0u8; 32]); // baseGas
+        struct_preimage.extend_from_slice(&[0u8; 32]); // gasPrice
+        struct_preimage.extend_from_slice(&[0u8; 32]); // gasToken
+        struct_preimage.extend_from_slice(&[0u8; 32]); // refundReceiver
+        let mut nonce_word = [0u8; 32];
+        nonce_word[31] = 7;
+        struct_preimage.extend_from_slice(&nonce_word);
+        let struct_hash = Keccak256::digest(&struct_preimage);
+
+        let mut digest_preimage = vec![0x19, 0x01];
+        digest_preimage.extend_from_slice(&domain_hash);
+        digest_preimage.extend_from_slice(&struct_hash);
+        let expected = Keccak256::digest(&digest_preimage);
+        assert_eq!(&actual[..], &expected[..]);
+    }
+
     /// A chains.json written by an old app version (fewer built-ins) must not
     /// freeze the registry: built-ins added in later releases have to appear
     /// after the merge, while user RPC edits and custom chains survive.
@@ -6296,7 +6892,10 @@ mod tests {
         let merged = merge_persisted_chains(persisted);
         let bnb = merged.iter().find(|c| c.id == "0x38").unwrap();
         assert!(bnb.builtin, "matching built-in id must be promoted");
-        assert_eq!(bnb.name, "BSC", "user's edits win over the built-in defaults");
+        assert_eq!(
+            bnb.name, "BSC",
+            "user's edits win over the built-in defaults"
+        );
         assert_eq!(bnb.rpc, "https://bsc-dataseed.bnbchain.org");
         assert_eq!(
             bnb.explorer_url.as_deref(),
@@ -6806,6 +7405,9 @@ mod e2e {
                 close_dapp,
                 open_external_url,
                 node_rpc,
+                inspect_safe,
+                safe_pending_transactions,
+                safe_confirm_transaction,
                 wallet_send,
                 set_active_chain,
                 get_active_chain,
@@ -7144,6 +7746,14 @@ mod e2e {
         );
         invoke(&shell, "expose_dapp_account", json!({ "address": watch }))
             .expect("shell can expose the watch-only address again");
+
+        let err = call(&wv, "personal_sign", json!(["0x48656c6c6f", watch])).unwrap_err();
+        assert!(
+            err.as_str()
+                .unwrap_or_default()
+                .contains("cannot sign direct EIP-1193"),
+            "expected unlocked watch-only signing to be blocked, got: {err}"
+        );
 
         super::lock_vault();
         assert_eq!(
@@ -7650,6 +8260,86 @@ mod e2e {
             err.as_str().unwrap_or_default().contains("unknown chain"),
             "expected unknown-chain rejection, got: {err}"
         );
+    }
+
+    /// The trusted shell must be able to reach every Safe command. Invalid
+    /// addresses deliberately stop each handler before network or signing work,
+    /// so this locks down the IPC registration + ACL seam deterministically.
+    #[test]
+    fn e2e_shell_can_reach_safe_commands() {
+        let app = build_app();
+        let shell = shell_webview(app);
+
+        for (command, args) in [
+            (
+                "inspect_safe",
+                json!({ "chainId": "0x2105", "address": "not-an-address" }),
+            ),
+            (
+                "safe_pending_transactions",
+                json!({
+                    "serviceUrl": "https://api.safe.global/tx-service/base/api",
+                    "safeAddress": "not-an-address"
+                }),
+            ),
+            (
+                "safe_confirm_transaction",
+                json!({
+                    "chainId": "0x2105",
+                    "serviceUrl": "https://api.safe.global/tx-service/base/api",
+                    "safeAddress": "not-an-address",
+                    "ownerAddress": "not-an-address",
+                    "transaction": {}
+                }),
+            ),
+        ] {
+            let err = invoke(&shell, command, args).unwrap_err();
+            let message = err.as_str().unwrap_or_default();
+            assert!(
+                message.to_ascii_lowercase().contains("address"),
+                "{command} did not reach its argument validation: {err}"
+            );
+        }
+    }
+
+    /// SECURITY: Safe management and owner-signing commands stay shell-only.
+    /// Registering their permissions must never make them callable by a remote
+    /// dApp webview.
+    #[test]
+    fn e2e_dapp_cannot_reach_safe_commands() {
+        let app = build_app();
+        let dapp = dapp_webview(app);
+
+        for (command, args) in [
+            (
+                "inspect_safe",
+                json!({ "chainId": "0x2105", "address": "not-an-address" }),
+            ),
+            (
+                "safe_pending_transactions",
+                json!({
+                    "serviceUrl": "https://api.safe.global/tx-service/base/api",
+                    "safeAddress": "not-an-address"
+                }),
+            ),
+            (
+                "safe_confirm_transaction",
+                json!({
+                    "chainId": "0x2105",
+                    "serviceUrl": "https://api.safe.global/tx-service/base/api",
+                    "safeAddress": "not-an-address",
+                    "ownerAddress": "not-an-address",
+                    "transaction": {}
+                }),
+            ),
+        ] {
+            let err = invoke(&dapp, command, args).unwrap_err();
+            let message = err.as_str().unwrap_or_default();
+            assert!(
+                message.contains("not allowed") || message.contains("not found"),
+                "remote dapp unexpectedly reached {command}: {err}"
+            );
+        }
     }
 
     /// The trusted shell CAN drive a tab webview: open (show), reposition, hide,

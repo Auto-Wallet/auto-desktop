@@ -38,6 +38,8 @@ interface PendingRequest {
   id: string;
   method: string;
   origin: string;
+  signer_address?: string;
+  signer_kind?: "local" | "ledger";
   summary: string;
   tx?: TxDisplay;
   typed_data?: TypedDataPayload;
@@ -66,6 +68,8 @@ function kindMeta(method: string, t: TFn): { title: string; icon: IconName; cora
       return { title: t("approval.sendTx"), icon: "send", coral: true };
     case "wallet_addEthereumChain":
       return { title: t("approval.addNetwork"), icon: "globe", coral: false };
+    case "safe_confirmTransaction":
+      return { title: t("approval.confirmSafe"), icon: "shield", coral: false };
     default:
       return { title: method, icon: "shield", coral: false };
   }
@@ -288,7 +292,10 @@ function ApprovalView() {
   }
 
   const meta = kindMeta(current.method, t);
-  const isLedger = signer?.kind === "ledger";
+  const requestSignerAddress = current.signer_address ?? signer?.address;
+  const isLedger =
+    current.signer_kind === "ledger" ||
+    (current.signer_kind === undefined && signer?.kind === "ledger");
   // Title says what the tx actually DOES when the calldata is decoded; the raw
   // method name is demoted to a corner tag.
   const title = approvalDetails
@@ -385,11 +392,11 @@ function ApprovalView() {
           </div>
         )}
 
-        {signer?.address && (
+        {requestSignerAddress && (
           <div className="apv-signer">
-            <Avatar address={signer.address} size={20} />
+            <Avatar address={requestSignerAddress} size={20} />
             <span className="sl">{t("approval.signingWith")}</span>
-            <span className="sn">{shortAddress(signer.address, 8, 6)}</span>
+            <span className="sn">{shortAddress(requestSignerAddress, 8, 6)}</span>
             {isLedger && (
               <span className="badge ledger">
                 <Icon name="ledger" size={11} /> Ledger

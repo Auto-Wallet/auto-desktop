@@ -20,6 +20,13 @@ import {
   type VaultKind,
   type VaultState,
 } from "./vault";
+import {
+  getSafeByAddress,
+  getSafes,
+  useSafes,
+  type ImportedSafe,
+} from "./safes";
+import { setActiveChain } from "./activeChain";
 
 export type Account = {
   address: string;
@@ -27,11 +34,15 @@ export type Account = {
   /** true = a vault wallet holds this key and can sign; false = watch-only. */
   signer: boolean;
   /** Secret kind of the owning wallet, or "watch" for a watch-only address. */
-  kind: VaultKind | "watch";
+  kind: VaultKind | "watch" | "safe";
   /** Owning wallet id ("" for watch-only). */
   walletId: string;
   /** Account index within its wallet (for labels). */
   index: number;
+  /** Safe-only metadata. */
+  chainId?: string;
+  ownerAddress?: string;
+  threshold?: number;
 };
 
 type Watch = { address: string; label: string };
@@ -81,16 +92,31 @@ function watchAccounts(): Account[] {
   }));
 }
 
-function allAccounts(vault: VaultState): Account[] {
-  return [...signerAccounts(vault), ...watchAccounts()];
+function safeAccounts(safes: ImportedSafe[]): Account[] {
+  return safes.map((safe) => ({
+    address: safe.address,
+    label: safe.label,
+    signer: false,
+    kind: "safe" as const,
+    walletId: "",
+    index: 0,
+    chainId: safe.chainId,
+    ownerAddress: safe.ownerAddress,
+    threshold: safe.threshold,
+  }));
+}
+
+function allAccounts(vault: VaultState, safes: ImportedSafe[]): Account[] {
+  return [...signerAccounts(vault), ...safeAccounts(safes), ...watchAccounts()];
 }
 
 /** The active account; falls back to the backend's active signer (then the first
  *  account) when no local selection (or a stale one) is set. */
 export function useActiveAccount(): Account {
   const vault = useVault();
+  const safes = useSafes();
   const local = useSyncExternalStore(subscribe, () => activeAddress);
-  const all = allAccounts(vault);
+  const all = allAccounts(vault, safes);
   const pick = (addr: string | null | undefined) =>
     addr
       ? all.find((a) => a.address.toLowerCase() === addr.toLowerCase())
@@ -109,8 +135,9 @@ export function useActiveAccount(): Account {
 
 export function useAccounts(): Account[] {
   const vault = useVault();
+  const safes = useSafes();
   useSyncExternalStore(subscribe, () => watch); // re-render on watch changes
-  return allAccounts(vault);
+  return allAccounts(vault, safes);
 }
 
 /** Keep the backend's dApp-visible account in lockstep with the shell. Signers also
@@ -131,8 +158,18 @@ export function useActiveAccountSync(): void {
       void selectAccount(active.address);
       return;
     }
+    if (active.kind === "safe" && active.chainId) {
+      void setActiveChain(active.chainId);
+    }
     void exposeDappAccount(active.address);
-  }, [vault.phase, vault.active, active.address, active.signer]);
+  }, [
+    vault.phase,
+    vault.active,
+    active.address,
+    active.signer,
+    active.kind,
+    active.chainId,
+  ]);
 }
 
 /** The wallet that owns the active account (for per-wallet UI like Settings → Security). */
@@ -159,6 +196,8 @@ export function setActive(address: string) {
   if (signer) {
     void selectAccount(address);
   } else {
+    const safe = getSafeByAddress(address);
+    if (safe) void setActiveChain(safe.chainId);
     void exposeDappAccount(address);
   }
 }
@@ -168,7 +207,11 @@ export function addWatchAccount(address: string, label?: string) {
   const addr = address.trim();
   if (!isAddress(addr)) throw new Error(`Not a valid address: ${address}`);
   const lower = addr.toLowerCase();
-  const existing = [...getVaultAccounts(), ...watch.map((w) => w.address)].find(
+  const existing = [
+    ...getVaultAccounts(),
+    ...getSafes().map((safe) => safe.address),
+    ...watch.map((w) => w.address),
+  ].find(
     (a) => a.toLowerCase() === lower,
   );
   if (existing) {

@@ -1,0 +1,17 @@
+# Permissions for Safe smart-account operations. These are granted only to the
+# trusted shell webview; remote dApps must continue to use the narrow wallet
+# bridge and can never inspect imported Safes or submit owner confirmations.
+[[permission]]
+identifier = "allow-inspect-safe"
+description = "Allow the trusted shell to verify a Safe contract on-chain."
+commands.allow = ["inspect_safe"]
+
+[[permission]]
+identifier = "allow-safe-pending-transactions"
+description = "Allow the trusted shell to load pending transactions for an imported Safe."
+commands.allow = ["safe_pending_transactions"]
+
+[[permission]]
+identifier = "allow-safe-confirm-transaction"
+description = "Allow the trusted shell to request approval, sign with a local Safe owner, and submit the confirmation."
+commands.allow = ["safe_confirm_transaction"]

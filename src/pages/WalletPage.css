@@ -1927,6 +1927,39 @@
   color: var(--ink-3);
   font-size: 13px;
 }
+.safe-banner {
+  color: var(--ink-2);
+}
+.safe-banner svg {
+  color: var(--brand);
+}
+
+.safe-import-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.safe-import-summary > div:not(.field) {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.safe-import-summary span {
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 700;
+}
+.safe-import-summary b {
+  color: var(--ink);
+  font-size: 13px;
+}
+.safe-import-summary .field {
+  grid-column: 1 / -1;
+}
 
 /* token / activity section */
 .holdings {
