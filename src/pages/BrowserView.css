@@ -202,6 +202,59 @@
   padding: 6px;
   animation: pop 0.16s ease;
 }
+.chain-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: min(520px, calc(100vh - 76px));
+  overflow: hidden;
+}
+.chain-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin-bottom: 5px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--ink-3);
+  transition-property: border-color, box-shadow, background-color;
+  transition-duration: 0.13s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.chain-search:focus-within {
+  border-color: var(--brand);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+  color: var(--brand-ink);
+}
+.chain-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+.chain-search input::placeholder {
+  color: var(--ink-3);
+}
+.chain-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+.chain-empty {
+  display: grid;
+  min-height: 72px;
+  place-items: center;
+  padding: 12px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  text-align: center;
+}
 .chain-opt {
   display: flex;
   align-items: center;

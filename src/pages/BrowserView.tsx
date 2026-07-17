@@ -10,6 +10,7 @@ import { Icon } from "../lib/icons";
 import { Avatar } from "../lib/ui";
 import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
+import { filterChains } from "../lib/chainSearch";
 import { faviconOf, hostOf, type Dapp } from "../lib/dapps";
 import {
   dappLabel,
@@ -392,9 +393,12 @@ function AcctChip() {
 
 // Same native-vs-preview split as AcctChip: native renders in the menu overlay.
 function ChainChip({ chain, chains }: { chain: Chain; chains: Chain[] }) {
+  const { t } = useT();
   const native = isTauri();
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
+  const filteredChains = useMemo(() => filterChains(chains, query), [chains, query]);
   const payload = useMemo<MenuOverlayPayload | null>(
     () =>
       anchor
@@ -416,7 +420,10 @@ function ChainChip({ chain, chains }: { chain: Chain; chains: Chain[] }) {
       <button
         className="chain-chip"
         onClick={(e) => {
-          if (!native) return setOpen((o) => !o);
+          if (!native) {
+            setQuery("");
+            return setOpen((o) => !o);
+          }
           const next = menuAnchorFor(e.currentTarget);
           setAnchor((a) => (a ? null : next));
         }}
@@ -427,26 +434,53 @@ function ChainChip({ chain, chains }: { chain: Chain; chains: Chain[] }) {
       </button>
       {open && (
         <>
-          <div style={{ position: "fixed", inset: 0, zIndex: 30 }} onClick={() => setOpen(false)} />
-          <div className="chain-menu">
-            {chains.map((c) => (
-              <button
-                key={c.id}
-                className={`chain-opt${c.id === chain.id ? " on" : ""}`}
-                onClick={() => {
-                  void setActiveChain(c.id);
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 30 }}
+            onClick={() => {
+              setOpen(false);
+              setQuery("");
+            }}
+          />
+          <div className="chain-menu chain-picker">
+            <label className="chain-search">
+              <Icon name="search" size={15} />
+              <input
+                value={query}
+                autoFocus
+                aria-label={t("browser.searchNetworks")}
+                placeholder={t("browser.searchNetworks")}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
                   setOpen(false);
+                  setQuery("");
                 }}
-              >
-                <ChainIcon chain={c} size={20} />
-                <span className="nm">{c.name}</span>
-                {c.id === chain.id && (
-                  <span className="check">
-                    <Icon name="check" size={16} />
-                  </span>
-                )}
-              </button>
-            ))}
+              />
+            </label>
+            <div className="chain-list scroll">
+              {filteredChains.map((c) => (
+                <button
+                  key={c.id}
+                  className={`chain-opt${c.id === chain.id ? " on" : ""}`}
+                  onClick={() => {
+                    void setActiveChain(c.id);
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                >
+                  <ChainIcon chain={c} size={20} />
+                  <span className="nm">{c.name}</span>
+                  {c.id === chain.id && (
+                    <span className="check">
+                      <Icon name="check" size={16} />
+                    </span>
+                  )}
+                </button>
+              ))}
+              {filteredChains.length === 0 && (
+                <div className="chain-empty">{t("browser.noNetworkMatches")}</div>
+              )}
+            </div>
           </div>
         </>
       )}

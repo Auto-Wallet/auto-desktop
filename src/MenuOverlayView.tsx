@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   MENU_OVERLAY_CHANNEL,
   MENU_OVERLAY_KEY,
@@ -9,6 +9,8 @@ import { shortAddress } from "./lib/format";
 import { Avatar } from "./lib/ui";
 import { Icon } from "./lib/icons";
 import { ChainIcon } from "./lib/ChainIcon";
+import { filterChains } from "./lib/chainSearch";
+import { useT } from "./lib/i18n";
 
 // The interactive twin of ToastOverlayView: renders the browser top-bar dropdown
 // menus (account / chain switcher) inside the transparent full-window
@@ -69,8 +71,12 @@ export default function MenuOverlayView() {
   return (
     <div className="menu-overlay-root" onMouseDown={() => post({ type: "dismiss" })}>
       <div
-        className={`chain-menu menu-overlay-menu${menu.kind === "account" ? " acct-pop scroll" : ""}`}
-        style={{ top: menu.anchor.top, right: menu.anchor.right }}
+        className={`chain-menu menu-overlay-menu${menu.kind === "account" ? " acct-pop scroll" : " chain-picker"}`}
+        style={{
+          top: menu.anchor.top,
+          right: menu.anchor.right,
+          maxHeight: menu.kind === "chain" ? `calc(100vh - ${menu.anchor.top + 12}px)` : undefined,
+        }}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {menu.kind === "account" ? <AcctMenu menu={menu} /> : <ChainMenu menu={menu} />}
@@ -179,23 +185,42 @@ function AcctMenu({ menu }: { menu: Extract<MenuOverlayPayload, { kind: "account
 
 // Markup mirrors ChainChip's in-shell dropdown (BrowserView.tsx).
 function ChainMenu({ menu }: { menu: Extract<MenuOverlayPayload, { kind: "chain" }> }) {
+  const { t } = useT();
+  const [query, setQuery] = useState("");
+  const filteredChains = useMemo(() => filterChains(menu.chains, query), [menu.chains, query]);
+
   return (
     <>
-      {menu.chains.map((c) => (
-        <button
-          key={c.id}
-          className={`chain-opt${c.id === menu.activeChainId ? " on" : ""}`}
-          onClick={() => post({ type: "select-chain", id: c.id })}
-        >
-          <ChainIcon chain={c} size={20} />
-          <span className="nm">{c.name}</span>
-          {c.id === menu.activeChainId && (
-            <span className="check">
-              <Icon name="check" size={16} />
-            </span>
-          )}
-        </button>
-      ))}
+      <label className="chain-search">
+        <Icon name="search" size={15} />
+        <input
+          value={query}
+          autoFocus
+          aria-label={t("browser.searchNetworks")}
+          placeholder={t("browser.searchNetworks")}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
+      <div className="chain-list scroll">
+        {filteredChains.map((c) => (
+          <button
+            key={c.id}
+            className={`chain-opt${c.id === menu.activeChainId ? " on" : ""}`}
+            onClick={() => post({ type: "select-chain", id: c.id })}
+          >
+            <ChainIcon chain={c} size={20} />
+            <span className="nm">{c.name}</span>
+            {c.id === menu.activeChainId && (
+              <span className="check">
+                <Icon name="check" size={16} />
+              </span>
+            )}
+          </button>
+        ))}
+        {filteredChains.length === 0 && (
+          <div className="chain-empty">{t("browser.noNetworkMatches")}</div>
+        )}
+      </div>
     </>
   );
 }

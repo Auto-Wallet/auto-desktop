@@ -372,6 +372,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "browser.reload": "Reload",
     "browser.reloaded": "Reloaded",
     "browser.loadingDapp": "Loading dApp",
+    "browser.searchNetworks": "Search networks",
+    "browser.noNetworkMatches": "No matching networks.",
     "browser.dialogTitle": "Page dialog",
     "browser.promptPlaceholder": "Enter value",
 
@@ -833,6 +835,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "browser.reload": "刷新",
     "browser.reloaded": "已刷新",
     "browser.loadingDapp": "正在加载 dApp",
+    "browser.searchNetworks": "搜索网络",
+    "browser.noNetworkMatches": "没有匹配的网络。",
     "browser.dialogTitle": "网页弹窗",
     "browser.promptPlaceholder": "输入内容",
 
