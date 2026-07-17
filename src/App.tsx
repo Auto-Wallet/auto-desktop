@@ -7,7 +7,7 @@ import DappsPage from "./pages/DappsPage";
 import BrowserView from "./pages/BrowserView";
 import SettingsPage from "./pages/SettingsPage";
 import LockScreen from "./pages/LockScreen";
-import { ensureDapp, faviconOf, type Dapp } from "./lib/dapps";
+import { dappIconOf, ensureDapp, type Dapp } from "./lib/dapps";
 import {
   closeDapp,
   dappLabel,
@@ -25,7 +25,7 @@ import { useT } from "./lib/i18n";
 import { Icon } from "./lib/icons";
 import { setThemePref, useEffectiveTheme } from "./lib/theme";
 import { shortAddress } from "./lib/format";
-import { ToastHost } from "./lib/ui";
+import { ToastHost, DappAvatar } from "./lib/ui";
 import { toast, useToasts } from "./lib/toast";
 import {
   loadActivity,
@@ -455,7 +455,19 @@ function Sidebar({
                 title={collapsed ? tab.dapp.name : ""}
                 onClick={() => onOpenTab(tab.id)}
               >
-                <img className="tab-fav" src={faviconOf(tab.dapp.url)} alt="" />
+                {dappIconOf(tab.dapp.url) ? (
+                  <img
+                    className="tab-fav"
+                    src={dappIconOf(tab.dapp.url)}
+                    alt=""
+                  />
+                ) : (
+                  <DappAvatar
+                    name={tab.dapp.name}
+                    size={18}
+                    radius={5}
+                  />
+                )}
                 {!collapsed && (
                   <>
                     <span className="tab-name">{tab.dapp.name}</span>

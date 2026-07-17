@@ -60,33 +60,76 @@ export function toHexQuantity(n: bigint): string {
 /** USD amount, e.g. `$1,234.56` (or `+$12.30` / `−$4.00` with sign). */
 export function fmtUsd(n: number, opts: { sign?: boolean; dp?: number } = {}): string {
   const { sign = false, dp = 2 } = opts;
+  const pre = (sign && n > 0 ? "+" : n < 0 ? "−" : "") + "$";
+  const tiny = fmtTiny(n);
+  if (tiny) return pre + tiny;
   const abs = Math.abs(n);
   const s = abs.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-  const pre = (sign && n > 0 ? "+" : n < 0 ? "−" : "") + "$";
   return pre + s;
 }
 
+const SUB_DIGITS = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
+
 /**
- * Token amount for card display. Numbers must stay readable, never ellipsized:
- * below 1M the full value is shown (with thousands separators from 1,000 up);
- * from 1M the integer part alone would overflow a card, so it compacts to
- * `2.5M` / `8.72B` style — callers put the exact value in the element's title
- * so hover reveals it.
+ * Subscript notation for tiny magnitudes: 0.0000123 -> "0.0₄123" — the
+ * subscript counts the zeros between the decimal point and the first
+ * significant digit (a widespread crypto convention for dust). Returns null
+ * outside (0, 0.0001) so callers keep their normal formatting there.
+ */
+export function fmtTiny(n: number): string | null {
+  if (!Number.isFinite(n)) return null;
+  const abs = Math.abs(n);
+  if (abs === 0 || abs >= 0.0001) return null;
+  // Zeros between the decimal point and the first significant digit.
+  let zeros = Math.ceil(-Math.log10(abs)) - 1;
+  const sig = abs * 10 ** (zeros + 1); // in [1, 10)
+  let sigStr = sig.toPrecision(4);
+  if (Number.parseFloat(sigStr) >= 10) {
+    // Rounding bumped 9.999… up to 10 — one zero fewer, shift the digit down.
+    zeros -= 1;
+    sigStr = (sig / 10).toPrecision(4);
+  }
+  if (sigStr.includes(".")) sigStr = sigStr.replace(/0+$/, "").replace(/\.$/, "");
+  // The significand reads as a continuation of the decimals: "0.0₄123",
+  // never "0.0₄1.23".
+  sigStr = sigStr.replace(".", "");
+  const sub = String(zeros)
+    .split("")
+    .map((d) => SUB_DIGITS[Number(d)])
+    .join("");
+  return `0.0${sub}${sigStr}`;
+}
+
+/**
+ * Display-only token amount from base units: subscript notation for dust
+ * (0.0₄123), otherwise 6 significant digits via fmtAmount. Never for editable
+ * inputs — the subscript glyphs don't parse (parseUnits would reject them).
+ */
+export function fmtUnitsDisplay(value: string, decimals = 18): string {
+  return fmtAmount(formatUnits(value, decimals, Math.min(decimals, 18)));
+}
+
+/**
+ * Token amount for display. Readability beats raw precision (the exact value
+ * always sits in the element's title tooltip): dust (<0.0001) uses subscript
+ * notation, 1M+ compacts to `2.5M` / `8.72B`, and everything in between keeps
+ * 6 significant digits with thousands separators and trimmed trailing zeros.
  */
 export function fmtAmount(value: string): string {
   const n = Number.parseFloat(value);
   if (!Number.isFinite(n)) return value;
   const abs = Math.abs(n);
+  const tiny = fmtTiny(abs);
+  if (tiny) return (n < 0 ? "−" : "") + tiny;
   if (abs >= 1_000_000) {
     return n.toLocaleString("en-US", {
       notation: "compact",
       maximumFractionDigits: 2,
     });
   }
-  if (abs >= 1_000) {
-    return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
-  }
-  return value;
+  // 6 significant digits, re-rounded then localized ("33.6506" / "25,755.3").
+  const rounded = Number.parseFloat(n.toPrecision(6));
+  return rounded.toLocaleString("en-US", { maximumFractionDigits: 6 });
 }
 
 /** Signed percent, e.g. `+2.40%` / `−1.10%`. */

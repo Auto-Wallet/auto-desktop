@@ -55,6 +55,7 @@
   height: 16px;
   border-radius: 4px;
   flex: none;
+  background: #fff;
   outline: 1px solid var(--img-outline);
   outline-offset: -1px;
 }

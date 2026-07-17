@@ -28,6 +28,59 @@ export function Avatar({
   );
 }
 
+/** Deterministic two-hue gradient from any string (dApp names, hosts). */
+export function nameGradient(name: string): string {
+  const s = name.trim().toLowerCase() || "?";
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  const h1 = Math.abs(h) % 360;
+  const h2 = (h1 + 36 + (Math.abs(h >> 8) % 72)) % 360;
+  return `linear-gradient(135deg, hsl(${h1} 74% 60%), hsl(${h2} 70% 46%))`;
+}
+
+/**
+ * Letter avatar for dApps without a bundled icon — deterministic gradient by
+ * name, so "Twap-web" always gets the same face. Rounded-square like the app
+ * icons it sits next to.
+ */
+export function DappAvatar({
+  name,
+  size = 50,
+  radius,
+  style,
+}: {
+  name: string;
+  size?: number;
+  radius?: number;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: size,
+        height: size,
+        borderRadius: radius ?? Math.round(size * 0.3),
+        background: nameGradient(name),
+        color: "#fff",
+        display: "inline-grid",
+        placeItems: "center",
+        fontFamily: "var(--font-display)",
+        fontWeight: 700,
+        fontSize: Math.round(size * 0.44),
+        lineHeight: 1,
+        flex: "none",
+        boxShadow: "inset 0 0 0 1px rgba(0, 0, 0, 0.08)",
+        textShadow: "0 1px 2px rgba(0, 0, 0, 0.18)",
+        userSelect: "none",
+        ...style,
+      }}
+    >
+      {name.trim().charAt(0).toUpperCase() || "?"}
+    </span>
+  );
+}
+
 export function ToastHost() {
   const toasts = useToasts();
   if (toasts.length === 0) return null;

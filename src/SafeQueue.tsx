@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./SafeQueue.css";
 import { findChain } from "./lib/chains";
-import { formatUnits, shortAddress } from "./lib/format";
+import { fmtUnitsDisplay, shortAddress } from "./lib/format";
 import { Icon } from "./lib/icons";
 import { useT } from "./lib/i18n";
 import { openExternalUrl } from "./lib/platform";
@@ -147,7 +147,7 @@ export function SafeQueue({ address }: { address: string }) {
                     {shortAddress(transaction.to, 10, 8)}
                   </div>
                   <div className="safe-tx-meta">
-                    {formatUnits(transaction.value, 18, 8)}{" "}
+                    {fmtUnitsDisplay(transaction.value, 18)}{" "}
                     {chain?.symbol ?? ""}
                     <span>·</span>
                     {t("safe.confirmations", {

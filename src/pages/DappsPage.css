@@ -143,19 +143,12 @@
   height: 50px;
   border-radius: 15px;
   object-fit: cover;
-  background: var(--surface-3);
+  /* Fixed white: glyph icons with transparency (Aave, 1inch) vanish on dark
+     surfaces otherwise. Icons with their own background are unaffected. */
+  background: #fff;
   outline: 1px solid var(--img-outline);
   outline-offset: -1px;
   margin-top: 6px;
-}
-.dapp-logo.fb {
-  display: grid;
-  place-items: center;
-  font-family: var(--font-display);
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--brand-ink);
-  background: var(--brand-soft);
 }
 .dapp-name {
   width: 100%;

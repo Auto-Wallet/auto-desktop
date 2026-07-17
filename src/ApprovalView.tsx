@@ -4,7 +4,7 @@ import "./ApprovalView.css";
 import { Icon, type IconName } from "./lib/icons";
 import { Avatar } from "./lib/ui";
 import { useT, type TFn } from "./lib/i18n";
-import { formatUnits, parseUnits, shortAddress, toHexQuantity } from "./lib/format";
+import { formatUnits, fmtUnitsDisplay, parseUnits, shortAddress, toHexQuantity } from "./lib/format";
 import { isTauri } from "./lib/platform";
 import { rpc } from "./lib/rpc";
 import { simulateTx, type SimulationPreview } from "./lib/simulation";
@@ -444,7 +444,7 @@ function PlainTxCard({ tx, t }: { tx: TxDisplay; t: TFn }) {
         mono
         value={tx.to ? shortAddress(tx.to, 10, 8) : t("approval.newContract")}
       />
-      <Row label={t("approval.amount")} value={`${formatUnits(tx.value, 18)} ${tx.symbol}`} />
+      <Row label={t("approval.amount")} value={`${fmtUnitsDisplay(tx.value, 18)} ${tx.symbol}`} />
     </div>
   );
 }
@@ -579,7 +579,7 @@ function FeeSection({
   try {
     const gas = BigInt(tx.gas || "0x0");
     const maxFeeWei = parseUnits(maxFeeGwei, 9);
-    const amount = formatUnits(toHexQuantity(gas * maxFeeWei), 18, 8);
+    const amount = fmtUnitsDisplay(toHexQuantity(gas * maxFeeWei), 18);
     // Dust totals (cheap L2s) round to "0" — the Gwei figure alone says more.
     feeSummary = amount === "0" ? "" : t("approval.feeUpTo", { amount, symbol: tx.symbol });
   } catch {

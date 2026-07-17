@@ -192,7 +192,7 @@
   height: 18px;
   border-radius: 5px;
   flex: none;
-  background: var(--surface-3);
+  background: #fff;
   object-fit: cover;
   outline: 1px solid var(--img-outline);
   outline-offset: -1px;

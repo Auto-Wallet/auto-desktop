@@ -1,12 +1,19 @@
 /* ===================== WALLET (Aurora) ===================== */
 .wallet-pad {
-  max-width: 1280px;
+  max-width: 1360px;
   margin: 0 auto;
   padding: 22px 28px 44px;
   /* Size container so the layout below adapts to the actual content width
      (sidebar can collapse, so viewport media queries would be wrong). */
   container-type: inline-size;
   container-name: wallet;
+}
+/* Ultrawide monitors: let the content breathe past 1360 instead of leaving
+   half the window as dead margins. */
+@media (min-width: 1900px) {
+  .wallet-pad {
+    max-width: 1520px;
+  }
 }
 
 /* wallet header row — account switcher + copy, aligned with the hero (#1, #2) */
@@ -1167,7 +1174,7 @@
 .swap-picker-token-sub {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
 }
 .swap-picker-token-top strong {
@@ -1698,10 +1705,22 @@
   position: relative;
   overflow: hidden;
   border-radius: var(--r-xl);
-  background: var(--aurora);
+  background: var(--hero-grad);
   color: #fff;
-  padding: 24px 26px 22px;
-  box-shadow: var(--sh-brand);
+  padding: 26px 28px 22px;
+  box-shadow: var(--hero-shadow);
+}
+.hero-main {
+  min-width: 0;
+}
+/* Dark mode: the white corner sheen reads as glare on the midnight gradient —
+   pull it way back. */
+[data-theme="dark"] .hero::after {
+  background: radial-gradient(
+    120% 80% at 88% -10%,
+    rgba(255, 255, 255, 0.12),
+    transparent 60%
+  );
 }
 .hero::after {
   content: "";
@@ -1734,19 +1753,27 @@
 }
 .hero-total {
   font-family: var(--font-display);
-  font-size: 44px;
+  font-size: 46px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  margin: 8px 0 4px;
+  margin: 10px 0 6px;
   line-height: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
 }
+/* One inline unit so the flex gap above only separates the amount from the
+   refreshing pill — never the dollars from the cents. */
+.hero-amt {
+  display: inline-flex;
+  align-items: baseline;
+  white-space: nowrap;
+}
 .hero-total .cents {
-  opacity: 0.66;
-  font-size: 28px;
+  opacity: 0.68;
+  font-size: 0.58em;
+  font-weight: 600;
 }
 .hero-loading {
   display: inline-flex;
@@ -1811,10 +1838,10 @@
 }
 .hero-chart {
   position: absolute;
-  top: 18px;
-  right: 74px;
-  bottom: 16px;
-  left: min(410px, 46%);
+  top: 16px;
+  right: 76px;
+  bottom: 82px;
+  left: min(430px, 47%);
   color: rgba(255, 255, 255, 0.78);
   pointer-events: none;
   opacity: 0.92;
@@ -1850,76 +1877,46 @@
   background: rgba(255, 255, 255, 0.18);
 }
 
-/* quick actions */
-.quick {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-top: 16px;
-}
-
-/* On wide windows the hero and the quick actions sit side by side: the hero
-   stretches to match the 2×2 action grid instead of leaving a thin banner
-   floating over a wall of whitespace. */
-@container wallet (min-width: 1020px) {
-  .wallet-top {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 396px;
-    gap: 14px;
-    align-items: stretch;
-  }
-  .wallet-top .hero {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-  }
-  .wallet-top .quick {
-    grid-template-columns: repeat(2, 1fr);
-    margin-top: 0;
-  }
-}
-.quick-btn {
+/* Primary actions — glass pills living INSIDE the hero, so the balance and
+   what you can do with it read as one unit. */
+.hero-actions {
+  position: relative;
+  z-index: 1;
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+.hero-action {
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 16px 8px 13px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  cursor: pointer;
-  transition:
-    transform 0.12s,
-    box-shadow 0.12s,
-    border-color 0.12s;
+  gap: 8px;
+  height: 38px;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
   font: inherit;
-}
-.quick-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--sh-md);
-  border-color: var(--line-2);
-}
-.quick-ic {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: var(--brand-soft);
-  color: var(--brand-ink);
-}
-.quick-btn.coral .quick-ic {
-  background: var(--coral-soft);
-  color: var(--coral-2);
-}
-.quick-btn .lbl {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 700;
-  color: var(--ink);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition-property: transform, background-color, border-color;
+  transition-duration: 0.13s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.hero-action:hover {
+  background: rgba(255, 255, 255, 0.27);
+  border-color: rgba(255, 255, 255, 0.42);
+}
+.hero-action:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .watch-banner {
-  grid-column: 1 / -1;
+  margin-top: 12px;
   padding: 14px 16px;
   display: flex;
   gap: 10px;
@@ -1983,47 +1980,148 @@
 }
 .chain-filter {
   display: flex;
-  gap: 7px;
-  flex-wrap: wrap;
   margin-bottom: 14px;
 }
-.cf-pill {
+.cf-select {
+  position: relative;
+}
+.cf-select-btn {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  height: 32px;
-  padding: 0 12px;
-  white-space: nowrap;
-  border-radius: var(--r-pill);
+  gap: 8px;
+  height: 34px;
+  padding: 0 13px;
   border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
   background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
   font-size: 12.5px;
   font-weight: 700;
-  color: var(--ink-2);
   cursor: pointer;
-  transition-property: transform, background-color, border-color, color;
+  box-shadow: var(--sh-sm);
+  transition-property: transform, background-color, border-color, color,
+    box-shadow;
   transition-duration: 0.12s;
   transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
-.cf-pill:active:not(:disabled) {
+.cf-select-btn:active:not(:disabled) {
   transform: scale(0.96);
 }
-.cf-pill:hover {
+.cf-select-btn:hover {
   background: var(--surface-2);
-}
-.cf-pill.on {
-  background: var(--ink);
-  color: var(--bg);
-  border-color: var(--ink);
-}
-/* Search hit: the pill is spotlighted in place (never filtered out). */
-.cf-pill.hl {
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px var(--brand-ring);
   color: var(--ink);
 }
-.cf-pill.on.hl {
-  color: var(--bg);
+.cf-select-btn.on {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+/* Search hit spotlight (chains matching the token search box). */
+.cf-select-btn.hl {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+.cf-select-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cf-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+.cf-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 264px;
+  max-height: 336px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg);
+  padding: 6px;
+  animation: pop 0.16s ease;
+}
+.cf-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 2px 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--ink-4);
+}
+.cf-search:focus-within {
+  border-color: var(--brand);
+  background: var(--surface);
+}
+.cf-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.cf-search input::placeholder {
+  color: var(--ink-4);
+}
+.cf-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition-property: background-color, color;
+  transition-duration: 0.1s;
+}
+.cf-item:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.cf-item.on {
+  color: var(--brand-ink);
+}
+.cf-item.on .cf-item-name {
+  font-weight: 700;
+}
+.cf-item.hl .cf-item-name {
+  color: var(--brand-ink);
+}
+.cf-item-ic {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+}
+.cf-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .asset-section {
@@ -2141,10 +2239,15 @@
   font-weight: 700;
 }
 
+/* Token holdings — brand-tinted cards. Each card glows faintly with the
+   token's own color (top-left radial wash + tinted border). Layout is a
+   two-zone split with both edges anchored: identity left, numbers right
+   (money aligns right). Hierarchy inside the number zone: balance (the
+   headline) > USD value > @unit price > 24h change (a quiet inline chip). */
 .token-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 14px;
 }
 .zero-token-toggle {
   display: block;
@@ -2164,53 +2267,203 @@
   background: var(--surface-2);
   color: var(--ink-2);
 }
-.token-row {
+.token-card {
+  --tk: var(--brand);
   position: relative;
-  /* Real columns (icon | meta | value) — the value block used to be an
-     absolutely-positioned overlay, so long chain names and long amounts
-     printed on top of each other on narrow cards. Numbers are sacred: the
-     value track always gets its full content width while the card has room;
-     when space runs out the meta column yields first (down to a 56px floor
-     that keeps the symbol readable), and only then may the amount ellipsize
-     (full value stays in the tooltip). */
-  display: grid;
-  grid-template-columns: auto minmax(56px, 1fr) minmax(0, max-content);
+  display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 92px;
-  padding: 12px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 80px;
+  padding: 15px 16px;
+  border: 1px solid color-mix(in srgb, var(--tk) 13%, var(--line));
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(
+      150% 160% at 0% 0%,
+      color-mix(in srgb, var(--tk) 9%, transparent),
+      transparent 58%
+    ),
+    var(--surface);
   box-shadow: var(--sh-sm);
   overflow: hidden;
   transition:
-    border-color 0.12s,
-    box-shadow 0.12s,
+    border-color 0.14s,
+    box-shadow 0.14s,
+    transform 0.14s;
+}
+.token-card:hover {
+  border-color: color-mix(in srgb, var(--tk) 32%, var(--line-2));
+  box-shadow:
+    0 12px 28px color-mix(in srgb, var(--tk) 14%, transparent),
+    var(--sh-sm);
+  transform: translateY(-2px);
+}
+/* Left zone: what the asset IS. */
+.token-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.token-card .coin {
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tk) 20%, transparent);
+}
+.token-id-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.token-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.token-sub {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.token-chain {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Right zone: how much of it there is — money aligns right. */
+.token-nums {
+  flex: none;
+  max-width: 62%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+  min-width: 0;
+  text-align: right;
+}
+.token-balance {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  line-height: 1.2;
+}
+.token-balance-sym {
+  margin-left: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.token-card-foot {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: opacity 0.12s;
+}
+.token-card:hover .token-card-foot,
+.token-card:focus-within .token-card-foot {
+  opacity: 0;
+}
+.token-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.token-price {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-4);
+}
+.token-chg {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  font-size: 10.5px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.token-chg.up {
+  background: var(--up-soft);
+  color: var(--up);
+}
+.token-chg.down {
+  background: var(--down-soft);
+  color: var(--down);
+}
+.token-actions {
+  position: absolute;
+  right: 12px;
+  bottom: 9px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(5px);
+  transition:
+    opacity 0.12s,
     transform 0.12s;
 }
-.token-row:hover {
-  border-color: var(--line-3);
-  box-shadow: var(--sh-md);
-  transform: translateY(-1px);
-}
-.token-row:hover .token-actions,
-.token-row:focus-within .token-actions {
+.token-card:hover .token-actions,
+.token-card:focus-within .token-actions {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
 }
-.token-row:hover .token-right,
-.token-row:focus-within .token-right {
-  transform: translateY(-14px);
-}
-.token-row:hover .token-usd,
-.token-row:focus-within .token-usd {
-  font-size: 16px;
-}
-.token-row:hover .token-amt,
-.token-row:focus-within .token-amt {
+.token-action {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
   font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--sh-sm);
+  transition-property: border-color, background-color, color;
+  transition-duration: 0.12s;
+}
+.token-action:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+.token-action.send {
+  color: var(--coral-2);
+}
+.token-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.token-action:disabled:hover {
+  border-color: var(--line-2);
+  background: var(--surface-2);
 }
 .coin {
   position: relative;
@@ -2242,130 +2495,47 @@
   border: 2px solid var(--bg);
   box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.1);
 }
-.token-meta {
-  min-width: 0;
-}
-.token-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--ink);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-}
-.token-sub {
-  font-size: 11.5px;
-  color: var(--ink-3);
-  margin-top: 1px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  white-space: nowrap;
-}
-.token-chain {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.token-sub .chg {
-  flex: none;
-}
-.token-right {
-  /* Default (stretch) alignment: the block is exactly its grid track, so an
-     overlong amount hits the ellipsis guards instead of bleeding over the
-     meta column (fit-content sizing would overflow via min-content). */
-  min-width: 0;
-  text-align: right;
-  transition: transform 0.14s ease;
-}
-.token-actions {
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(6px);
-  transition:
-    opacity 0.12s,
-    transform 0.12s;
-}
-.token-action {
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-pill);
-  background: var(--surface-2);
-  color: var(--ink);
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.token-action:hover {
-  border-color: var(--brand);
-  background: var(--brand-soft);
-  color: var(--brand-ink);
-}
-.token-action.send {
-  color: var(--coral-2);
-}
-.token-action:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.token-action:disabled:hover {
-  border-color: var(--line-2);
-  background: var(--surface-2);
-}
 .activity-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+  overflow: hidden;
 }
 .activity-row {
   display: flex;
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  min-height: 62px;
+  padding: 11px 16px;
+  border: 0;
+  background: transparent;
   color: var(--ink);
   cursor: pointer;
   font: inherit;
   text-align: left;
-  box-shadow: var(--sh-sm);
   position: relative;
   overflow: hidden;
+  transition: background-color 0.12s;
+}
+.activity-row + .activity-row {
+  border-top: 1px solid var(--line);
 }
 .activity-row:hover {
-  border-color: var(--brand);
   background: var(--surface-2);
 }
 .activity-row.disabled {
   cursor: default;
 }
 .activity-row.disabled:hover {
-  border-color: var(--line-2);
-  background: var(--surface);
+  background: transparent;
 }
 .activity-row.failed {
-  border-color: color-mix(in srgb, var(--coral-2) 34%, var(--line-2));
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--coral-2) 9%, transparent), transparent 52%),
-    var(--surface);
+    linear-gradient(90deg, color-mix(in srgb, var(--coral-2) 9%, transparent), transparent 52%);
 }
 .activity-row.failed::before {
   content: "";
@@ -2378,10 +2548,8 @@
   background: var(--coral-2);
 }
 .activity-row.failed:hover {
-  border-color: color-mix(in srgb, var(--coral-2) 54%, var(--line-2));
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--coral-2) 12%, transparent), transparent 56%),
-    var(--surface);
+    linear-gradient(90deg, color-mix(in srgb, var(--coral-2) 13%, transparent), transparent 56%);
 }
 .activity-row.failed .activity-ic {
   background: var(--coral-soft);
@@ -2392,11 +2560,8 @@
   font-weight: 800;
 }
 .activity-row.confirmed .activity-hash span {
-  color: var(--green);
+  color: var(--up);
   font-weight: 800;
-}
-.activity-row.submitted {
-  border-color: color-mix(in srgb, var(--brand) 18%, var(--line-2));
 }
 .activity-row.submitted .activity-ic {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 8%, transparent);
@@ -2423,8 +2588,8 @@
   color: var(--brand-ink);
 }
 .activity-ic.token_send {
-  background: color-mix(in srgb, var(--green) 14%, var(--surface));
-  color: var(--green);
+  background: color-mix(in srgb, var(--up) 14%, var(--surface));
+  color: var(--up);
 }
 .activity-ic.speedup {
   background: var(--brand-soft);
@@ -2500,7 +2665,7 @@
   font-family: var(--font-mono);
 }
 .activity-change.in {
-  color: var(--green);
+  color: var(--up);
 }
 .activity-change.out {
   color: var(--coral-2);
@@ -2566,41 +2731,11 @@
   font-size: 12px;
   font-weight: 800;
 }
-.token-usd {
-  font-size: 19px;
-  font-weight: 700;
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: font-size 0.14s ease;
-}
-.token-amt {
-  font-size: 13px;
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-  margin-top: 1px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: font-size 0.14s ease;
-}
 .token-err {
   font-size: 12.5px;
   color: var(--down);
   font-weight: 600;
   cursor: help;
-}
-.chg {
-  font-size: 12px;
-  font-weight: 700;
-}
-.chg.up {
-  color: var(--up);
-}
-.chg.down {
-  color: var(--down);
 }
 
 .add-token {
@@ -2813,7 +2948,7 @@
   row-gap: 6px;
   margin-top: auto;
   padding-top: 9px;
-  border-top: 1px solid var(--line-1);
+  border-top: 1px solid var(--line);
 }
 .defi-token-symbol {
   min-width: 0;

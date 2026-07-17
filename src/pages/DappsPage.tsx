@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import "./DappsPage.css";
 import {
   addDapp,
-  faviconOf,
+  dappIconOf,
   hostOf,
   isDappUrlInput,
   removeDapp,
@@ -13,6 +13,7 @@ import {
 } from "../lib/dapps";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
+import { DappAvatar } from "../lib/ui";
 import { toast } from "../lib/toast";
 
 // dApps page (VISION ②) — Aurora: search + add, a Pinned section, the grid, and
@@ -254,16 +255,11 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
 }
 
 function Favicon({ dapp }: { dapp: Dapp }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) {
-    return <div className="dapp-logo fb">{dapp.name.charAt(0).toUpperCase()}</div>;
+  const local = dappIconOf(dapp.url);
+  if (local) {
+    return <img className="dapp-logo" src={local} alt="" />;
   }
   return (
-    <img
-      className="dapp-logo"
-      src={faviconOf(dapp.url)}
-      alt=""
-      onError={() => setFailed(true)}
-    />
+    <DappAvatar name={dapp.name} size={50} style={{ marginTop: 6 }} />
   );
 }

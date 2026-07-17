@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import "./WalletPage.css";
 import { chainLogo, findChain, useChains, type Chain } from "../lib/chains";
+import { filterChains } from "../lib/chainSearch";
 import {
   loadActivity,
   replaceActivityTransaction,
@@ -17,6 +18,7 @@ import {
   fmtPct,
   fmtUsd,
   formatUnits,
+  fmtUnitsDisplay,
   isAddress,
   parseUnits,
   shortAddress,
@@ -196,6 +198,8 @@ export default function WalletPage() {
 
   const [tab, setTab] = useState<"tokens" | "activity">("tokens");
   const [filter, setFilter] = useState<string>("all");
+  const [chainMenuOpen, setChainMenuOpen] = useState(false);
+  const [chainQuery, setChainQuery] = useState("");
   const [showReceive, setShowReceive] = useState(false);
   const [showAddToken, setShowAddToken] = useState(false);
   const [showSend, setShowSend] = useState(false);
@@ -319,6 +323,27 @@ export default function WalletPage() {
         .map((c) => c.id),
     );
   }, [chains, tokenSearch]);
+  // Network filter menu: chains with actual holdings float to the top so the
+  // useful ones are one click away; the rest stay searchable, not plastered
+  // across the page as a wall of pills.
+  const chainMenuChains = useMemo(() => {
+    const withAssets = new Set(tokenListRows.map((r) => r.chainId));
+    return filterChains(chains, chainQuery).sort(
+      (a, b) =>
+        Number(withAssets.has(b.id)) - Number(withAssets.has(a.id)) ||
+        a.name.localeCompare(b.name),
+    );
+  }, [chains, chainQuery, tokenListRows]);
+  const filterChain =
+    filter === "all" ? null : (chains.find((c) => c.id === filter) ?? null);
+  useEffect(() => {
+    if (!chainMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setChainMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chainMenuOpen]);
   const hiddenZeroTokenCount = useMemo(
     () => searchedRows.filter(isZeroBalanceRow).length,
     [searchedRows],
@@ -405,12 +430,13 @@ export default function WalletPage() {
           </button>
         </div>
 
-        {/* Portfolio hero + quick actions — side by side on wide windows
-            (container query on .wallet-pad), stacked otherwise. */}
+        {/* Portfolio hero — balance, trend and the primary actions as ONE visual
+            unit (previously a gradient card plus separate floating action tiles,
+            which read as disconnected patches). */}
         <div className="wallet-top">
           <div className="hero">
             <div className="hero-row">
-              <div>
+              <div className="hero-main">
                 <div className="hero-label">
                   <Icon name="wallet" size={15} /> {t("wallet.total")} ·{" "}
                   {active.label}
@@ -463,50 +489,44 @@ export default function WalletPage() {
                 <Icon name="refresh" size={17} />
               </button>
             </div>
+            {!isWatch && (
+              <div className="hero-actions">
+                <HeroAction
+                  icon="receive"
+                  label={t("wallet.receive")}
+                  onClick={() => setShowReceive(true)}
+                />
+                {!isSafe && (
+                  <>
+                    <HeroAction
+                      icon="send"
+                      label={t("wallet.send")}
+                      onClick={() => {
+                        setSendAssetKey(undefined);
+                        setShowSend(true);
+                      }}
+                    />
+                    <HeroAction
+                      icon="bridge"
+                      label={t("wallet.swap")}
+                      onClick={() => {
+                        setBridgeAssetKey(undefined);
+                        setShowBridge(true);
+                      }}
+                    />
+                  </>
+                )}
+              </div>
+            )}
           </div>
-
-          {/* Quick actions */}
-          {isWatch ? (
-            <div className="quick">
-              <div className="card watch-banner">
-                <Icon name="eye" size={18} /> {t("wallet.watchOnly")}
-              </div>
+          {isWatch && (
+            <div className="card watch-banner">
+              <Icon name="eye" size={18} /> {t("wallet.watchOnly")}
             </div>
-          ) : isSafe ? (
-            <div className="quick">
-              <QuickBtn
-                icon="receive"
-                label={t("wallet.receive")}
-                onClick={() => setShowReceive(true)}
-              />
-              <div className="card watch-banner safe-banner">
-                <Icon name="shield" size={18} /> {t("safe.manualSigning")}
-              </div>
-            </div>
-          ) : (
-            <div className="quick">
-              <QuickBtn
-                icon="receive"
-                label={t("wallet.receive")}
-                onClick={() => setShowReceive(true)}
-              />
-              <QuickBtn
-                icon="send"
-                coral
-                label={t("wallet.send")}
-                onClick={() => {
-                  setSendAssetKey(undefined);
-                  setShowSend(true);
-                }}
-              />
-              <QuickBtn
-                icon="bridge"
-                label={t("wallet.swap")}
-                onClick={() => {
-                  setBridgeAssetKey(undefined);
-                  setShowBridge(true);
-                }}
-              />
+          )}
+          {isSafe && (
+            <div className="card watch-banner safe-banner">
+              <Icon name="shield" size={18} /> {t("safe.manualSigning")}
             </div>
           )}
         </div>
@@ -544,24 +564,80 @@ export default function WalletPage() {
           {tab === "tokens" ? (
             <>
               <div className="chain-filter">
-                <button
-                  className={`cf-pill${filter === "all" ? " on" : ""}`}
-                  onClick={() => setFilter("all")}
-                >
-                  {t("wallet.allNetworks")}
-                </button>
-                {chains.map((c) => (
+                <div className="cf-select">
                   <button
-                    key={c.id}
-                    className={`cf-pill${filter === c.id ? " on" : ""}${
-                      highlightedChainIds.has(c.id) ? " hl" : ""
+                    className={`cf-select-btn${filterChain ? " on" : ""}${
+                      highlightedChainIds.size > 0 ? " hl" : ""
                     }`}
-                    onClick={() => setFilter(c.id)}
+                    onClick={() => {
+                      setChainQuery("");
+                      setChainMenuOpen((o) => !o);
+                    }}
                   >
-                    <ChainIcon chain={c} size={12} />
-                    {c.name}
+                    {filterChain ? (
+                      <ChainIcon chain={filterChain} size={15} />
+                    ) : (
+                      <Icon name="globe" size={15} />
+                    )}
+                    <span className="cf-select-label">
+                      {filterChain ? filterChain.name : t("wallet.allNetworks")}
+                    </span>
+                    <Icon name="chevronD" size={14} />
                   </button>
-                ))}
+                  {chainMenuOpen && (
+                    <>
+                      <div
+                        className="cf-scrim"
+                        onClick={() => setChainMenuOpen(false)}
+                      />
+                      <div className="cf-menu scroll">
+                        <label className="cf-search">
+                          <Icon name="search" size={14} />
+                          <input
+                            value={chainQuery}
+                            onChange={(e) => setChainQuery(e.target.value)}
+                            placeholder={t("browser.searchNetworks")}
+                            autoComplete="off"
+                            autoFocus
+                          />
+                        </label>
+                        <button
+                          className={`cf-item${filter === "all" ? " on" : ""}`}
+                          onClick={() => {
+                            setFilter("all");
+                            setChainMenuOpen(false);
+                          }}
+                        >
+                          <span className="cf-item-ic">
+                            <Icon name="globe" size={15} />
+                          </span>
+                          <span className="cf-item-name">
+                            {t("wallet.allNetworks")}
+                          </span>
+                          {filter === "all" && <Icon name="check" size={15} />}
+                        </button>
+                        {chainMenuChains.map((c) => (
+                          <button
+                            key={c.id}
+                            className={`cf-item${filter === c.id ? " on" : ""}${
+                              highlightedChainIds.has(c.id) ? " hl" : ""
+                            }`}
+                            onClick={() => {
+                              setFilter(c.id);
+                              setChainMenuOpen(false);
+                            }}
+                          >
+                            <span className="cf-item-ic">
+                              <ChainIcon chain={c} size={16} />
+                            </span>
+                            <span className="cf-item-name">{c.name}</span>
+                            {filter === c.id && <Icon name="check" size={15} />}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
               <section className="asset-section">
                 <div className="asset-section-head">
@@ -1224,11 +1300,14 @@ function computePortfolio(
 
 function HeroAmount({ n }: { n: number }) {
   const [whole, cents] = fmtUsd(n).replace("$", "").split(".");
+  // Wrapped in one inline element: .hero-total is a flex row with a gap, so a
+  // bare fragment would split "$144" and ".54" into separate flex items and
+  // print a gap between them.
   return (
-    <>
+    <span className="hero-amt">
       ${whole}
       <span className="cents">.{cents}</span>
-    </>
+    </span>
   );
 }
 
@@ -1255,23 +1334,19 @@ function PortfolioSparkline({ trend }: { trend: PortfolioTrend }) {
   );
 }
 
-function QuickBtn({
+function HeroAction({
   icon,
   label,
-  coral,
   onClick,
 }: {
   icon: IconName;
   label: string;
-  coral?: boolean;
   onClick: () => void;
 }) {
   return (
-    <button className={`quick-btn${coral ? " coral" : ""}`} onClick={onClick}>
-      <span className="quick-ic">
-        <Icon name={icon} size={20} />
-      </span>
-      <span className="lbl">{label}</span>
+    <button className="hero-action" onClick={onClick}>
+      <Icon name={icon} size={16} />
+      <span>{label}</span>
     </button>
   );
 }
@@ -1350,69 +1425,91 @@ function HoldingRow({
     row.state?.status === "ok" &&
     BigInt(row.state.wei) > 0n;
   return (
-    <div className="token-row">
-      <Coin symbol={row.symbol} color={row.color} logo={row.logo} />
-      <div className="token-meta">
-        <div className="token-name">
-          {row.symbol}
-          {row.isCustom && (
-            <span className="badge neutral">{t("wallet.custom")}</span>
-          )}
-        </div>
-        <div className="token-sub">
-          <ChainIcon
-            chain={{
-              id: row.chainId,
-              name: row.chainName,
-              symbol: row.chainSymbol,
-              color: row.chainColor,
-            }}
-            size={12}
-          />
-          <span className="token-chain" title={row.chainName}>
-            {row.chainName}
+    <div
+      className="token-card"
+      style={{ "--tk": row.color } as React.CSSProperties}
+    >
+      <div className="token-id">
+        <Coin symbol={row.symbol} color={row.color} logo={row.logo} size={36} />
+        <div className="token-id-meta">
+          <span className="token-name">
+            {row.symbol}
+            {row.isCustom && (
+              <span className="badge neutral">{t("wallet.custom")}</span>
+            )}
           </span>
-          {showPriceChange && row.price && (
-            <span className={`chg ${up ? "up" : "down"}`}>
-              {fmtPct(row.price.change24h)}
+          <span className="token-sub">
+            <ChainIcon
+              chain={{
+                id: row.chainId,
+                name: row.chainName,
+                symbol: row.chainSymbol,
+                color: row.chainColor,
+              }}
+              size={11}
+            />
+            <span className="token-chain" title={row.chainName}>
+              {row.chainName}
             </span>
-          )}
+          </span>
         </div>
       </div>
+      {/* Two zones, both edges anchored: identity left, numbers right (money
+          aligns right). Hierarchy inside the number zone: balance is the
+          headline, then one quiet line — value · @price · 24h (the change
+          belongs to the price, so it lives there, not in a lonely corner). */}
+      {!row.state || row.state.status === "loading" ? (
+        <div className="token-nums">
+          <span className="skeleton" style={{ width: 96, height: 15 }} />
+          <span className="skeleton" style={{ width: 64, height: 11 }} />
+        </div>
+      ) : row.state.status === "error" ? (
+        <div className="token-nums">
+          <span className="token-err" title={row.state.message}>
+            failed
+          </span>
+        </div>
+      ) : (
+        <div className="token-nums">
+          <div
+            className="token-balance disp tnum"
+            title={`${formatUnits(row.state.wei, row.decimals, row.decimals)} ${row.symbol}`}
+          >
+            {fmtUnitsDisplay(row.state.wei, row.decimals)}
+            <span className="token-balance-sym">{row.symbol}</span>
+          </div>
+          <div className="token-card-foot">
+            {usd != null && (
+              <span className="token-value tnum">{fmtUsd(usd)}</span>
+            )}
+            {row.price && (
+              <span className="token-price tnum">
+                @ {fmtUsd(row.price.usd, { dp: row.price.usd < 1 ? 4 : 2 })}
+              </span>
+            )}
+            {row.price && showPriceChange && (
+              <span className={`token-chg ${up ? "up" : "down"}`}>
+                {fmtPct(row.price.change24h)}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
       <div className="token-actions">
         <button
           className="token-action send"
           disabled={!canSend}
           onClick={() => sendAssetKey && onSend(sendAssetKey)}
         >
-          <Icon name="send" size={14} /> {t("wallet.send")}
+          <Icon name="send" size={12} /> {t("wallet.send")}
         </button>
         <button
           className="token-action"
           disabled={!canSend}
           onClick={() => sendAssetKey && onSwap(sendAssetKey)}
         >
-          <Icon name="swap" size={14} /> {t("wallet.swap")}
+          <Icon name="swap" size={12} /> {t("wallet.swap")}
         </button>
-      </div>
-      <div className="token-right">
-        {!row.state || row.state.status === "loading" ? (
-          <span className="skeleton" style={{ width: 72, height: 14 }} />
-        ) : row.state.status === "error" ? (
-          <span className="token-err" title={row.state.message}>
-            failed
-          </span>
-        ) : (
-          <>
-            {usd != null && <div className="token-usd tnum">{fmtUsd(usd)}</div>}
-            <div
-              className="token-amt"
-              title={`${formatUnits(row.state.wei, row.decimals)} ${row.symbol}`}
-            >
-              {fmtAmount(formatUnits(row.state.wei, row.decimals))} {row.symbol}
-            </div>
-          </>
-        )}
       </div>
     </div>
   );
@@ -1546,7 +1643,7 @@ function ActivityList({
               ) : (
                 <span className="activity-value">
                   {amountWei > 0n && decimals != null
-                    ? `${formatUnits(amount, decimals)} ${symbol}`
+                    ? `${fmtUnitsDisplay(amount, decimals)} ${symbol}`
                     : t("wallet.activityNoValue")}
                 </span>
               )}
@@ -3400,7 +3497,7 @@ function AssetSelect({
           <span className="asset-sub">{current.chainName}</span>
         </span>
         <span className="asset-balance">
-          {formatUnits(current.wei, current.decimals)} {current.symbol}
+          {fmtUnitsDisplay(current.wei, current.decimals)} {current.symbol}
         </span>
         <Icon name="chevronD" size={16} />
       </button>
@@ -3434,7 +3531,7 @@ function AssetSelect({
                   </span>
                 </span>
                 <span className="asset-option-balance">
-                  {formatUnits(asset.wei, asset.decimals)} {asset.symbol}
+                  {fmtUnitsDisplay(asset.wei, asset.decimals)} {asset.symbol}
                 </span>
                 {asset.key === current.key && <Icon name="check" size={16} />}
               </button>
@@ -3944,7 +4041,7 @@ function CrossChainModal({
             chainSymbol: a.symbol,
             key: a.key,
             token,
-            balance: `${formatUnits(a.wei, a.decimals)} ${a.symbol}`,
+            balance: `${fmtUnitsDisplay(a.wei, a.decimals)} ${a.symbol}`,
             providers: swapTokenProviders(token),
             sourceAssetKey: a.key,
           } satisfies SwapPickerItem];
@@ -4200,7 +4297,7 @@ function CrossChainModal({
                 token={sourceToken}
                 chainName={asset?.chainName}
                 chainLogo={asset?.logo}
-                balance={asset ? `${formatUnits(asset.wei, asset.decimals)} ${asset.symbol}` : undefined}
+                balance={asset ? `${fmtUnitsDisplay(asset.wei, asset.decimals)} ${asset.symbol}` : undefined}
                 providers={swapTokenProviders(sourceToken)}
                 onClick={() => setPickerMode("source")}
                 placeholder={t("wallet.selectToken")}
@@ -4216,7 +4313,7 @@ function CrossChainModal({
             {asset && (
               <div className="swap-side-meta">
                 <span>
-                  {t("wallet.available")}: {formatUnits(asset.wei, asset.decimals)} {asset.symbol}
+                  {t("wallet.available")}: {fmtUnitsDisplay(asset.wei, asset.decimals)} {asset.symbol}
                 </span>
                 <button className="swap-mini-btn" onClick={setMax}>{t("wallet.max")}</button>
               </div>
@@ -4513,7 +4610,7 @@ function SendModal({
                   {asset && (
                     <span className="field-aux">
                       {t("wallet.available")}:{" "}
-                      {formatUnits(asset.wei, asset.decimals)} {asset.symbol}
+                      {fmtUnitsDisplay(asset.wei, asset.decimals)} {asset.symbol}
                     </span>
                   )}
                 </label>

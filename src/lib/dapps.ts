@@ -72,6 +72,31 @@ export function faviconOf(url: string): string {
   return `https://icons.duckduckgo.com/ip3/${hostOf(url)}.ico`;
 }
 
+/**
+ * Bundled icons for the built-in dApps (downloaded once, shipped in
+ * public/logos/dapps). Remote favicon services answer 404s with a real image
+ * body (a grey placeholder), so <img> onError never fires and cards showed a
+ * wall of grey chevrons. Bundled icons + letter avatars keep the grid pretty
+ * and fully offline.
+ */
+const LOCAL_ICONS: Record<string, string> = {
+  "app.uniswap.org": "/logos/dapps/uniswap.png",
+  "app.aave.com": "/logos/dapps/aave.png",
+  "stake.lido.fi": "/logos/dapps/lido.png",
+  "curve.fi": "/logos/dapps/curve.png",
+  "app.1inch.io": "/logos/dapps/1inch.png",
+  "opensea.io": "/logos/dapps/opensea.png",
+  "bridge.wanchain.org": "/logos/dapps/wanchain-bridge.png",
+  "relay.link": "/logos/dapps/relay.png",
+  "app.pendle.finance": "/logos/dapps/pendle.png",
+  "app.benqi.fi": "/logos/dapps/benqi.png",
+};
+
+/** Bundled icon path for a known dApp URL, or undefined (use a letter avatar). */
+export function dappIconOf(url: string): string | undefined {
+  return LOCAL_ICONS[hostOf(url)];
+}
+
 // "app.uniswap.org" -> "Uniswap": drop common sub-parts and the TLD, capitalize.
 function deriveName(url: string): string {
   const host = hostOf(url).replace(/^www\./, "");

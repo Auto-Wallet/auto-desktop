@@ -7,11 +7,11 @@ import { setActive, useAccounts, useActiveAccount } from "../lib/accounts";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
-import { Avatar } from "../lib/ui";
+import { Avatar, DappAvatar } from "../lib/ui";
 import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
 import { filterChains } from "../lib/chainSearch";
-import { faviconOf, hostOf, type Dapp } from "../lib/dapps";
+import { dappIconOf, hostOf, type Dapp } from "../lib/dapps";
 import {
   dappLabel,
   hideDapp,
@@ -206,7 +206,11 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
           <span className="lock-ic">
             <Icon name="lock" size={14} />
           </span>
-          <img className="url-fav" src={faviconOf(dapp.url)} alt="" />
+          {dappIconOf(dapp.url) ? (
+            <img className="url-fav" src={dappIconOf(dapp.url)} alt="" />
+          ) : (
+            <DappAvatar name={dapp.name} size={18} radius={5} />
+          )}
           <input
             value={url}
             spellCheck={false}
@@ -272,7 +276,11 @@ function DappLoadingOverlay({
     <div className="dapp-loading" role="status" aria-live="polite">
       <div className="dapp-loading-orbit">
         <span />
-        <img src={faviconOf(`https://${host}`)} alt="" />
+        {dappIconOf(`https://${host}`) ? (
+          <img src={dappIconOf(`https://${host}`)} alt="" />
+        ) : (
+          <DappAvatar name={name} size={34} radius={10} />
+        )}
       </div>
       <div className="dapp-loading-title">{label}</div>
       <div className="dapp-loading-sub">
