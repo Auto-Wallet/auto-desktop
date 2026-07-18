@@ -1,5 +1,5 @@
 # Permission for the server-side DeFi portfolio query. Granted ONLY to the
-# trusted shell webview so the Zapper API key never enters a remote dApp.
+# trusted shell webview so the Zerion API key never enters a remote dApp.
 [[permission]]
 identifier = "allow-get-defi-positions"
 description = "Allow the trusted shell to fetch DeFi positions for a wallet address via the backend."

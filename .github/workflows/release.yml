@@ -145,7 +145,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           SAFE_API_KEY: ${{ secrets.SAFE_API_KEY }}
-          ZAPPER_APIKEY: ${{ secrets.ZAPPER_APIKEY }}
+          ZERION_APIKEY: ${{ secrets.ZERION_APIKEY }}
           OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
           OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
           OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
@@ -325,7 +325,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           SAFE_API_KEY: ${{ secrets.SAFE_API_KEY }}
-          ZAPPER_APIKEY: ${{ secrets.ZAPPER_APIKEY }}
+          ZERION_APIKEY: ${{ secrets.ZERION_APIKEY }}
           OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
           OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
           OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}

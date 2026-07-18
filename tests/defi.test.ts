@@ -121,7 +121,7 @@ describe("DeFi refresh state", () => {
       source: "DeBank",
     });
 
-    newerRequest.resolve(response("Zapper", []));
+    newerRequest.resolve(response("Zerion", []));
     await newerRefresh;
 
     expect(harness.state).toEqual({
@@ -150,7 +150,7 @@ describe("DeFi refresh state", () => {
 
     trueRequest.resolve(response("DeBank", [position("newer")]));
     await newer;
-    falseRequest.reject(new Error("Zapper unavailable"));
+    falseRequest.reject(new Error("Zerion unavailable"));
     await older;
 
     expect(harness.state).toEqual({
@@ -218,7 +218,7 @@ function createHarness({
   };
 }
 
-function response(source: "Zapper" | "DeBank", positions: DefiPosition[]) {
+function response(source: "Zerion" | "DeBank", positions: DefiPosition[]) {
   return { source, positions };
 }
 

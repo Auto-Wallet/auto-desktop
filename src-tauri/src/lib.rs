@@ -3826,24 +3826,24 @@ fn read_env_file_value(name: &str) -> Option<String> {
     None
 }
 
-fn zapper_api_key() -> Option<String> {
-    std::env::var("ZAPPER_APIKEY")
+fn zerion_api_key() -> Option<String> {
+    std::env::var("ZERION_APIKEY")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .or_else(|| {
-            std::env::var("ZAPPER_API_KEY")
+            std::env::var("ZERION_API_KEY")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
         })
-        .or_else(|| read_env_file_value("ZAPPER_APIKEY"))
-        .or_else(|| read_env_file_value("ZAPPER_API_KEY"))
+        .or_else(|| read_env_file_value("ZERION_APIKEY"))
+        .or_else(|| read_env_file_value("ZERION_API_KEY"))
         .or_else(|| {
-            option_env!("ZAPPER_APIKEY")
+            option_env!("ZERION_APIKEY")
                 .filter(|v| !v.trim().is_empty())
                 .map(str::to_string)
         })
         .or_else(|| {
-            option_env!("ZAPPER_API_KEY")
+            option_env!("ZERION_API_KEY")
                 .filter(|v| !v.trim().is_empty())
                 .map(str::to_string)
         })
@@ -4165,223 +4165,179 @@ fn value_as_string(value: Option<&Value>) -> Option<String> {
     }
 }
 
-fn zapper_display_label(node: &Value) -> String {
-    value_as_string(node.pointer("/displayProps/label"))
-        .or_else(|| value_as_string(node.get("groupLabel")))
-        .or_else(|| value_as_string(node.get("type")))
+/// Zerion chain slug -> (display name, external hex chain id), from GET /v1/chains/.
+type ZerionChainMap = HashMap<String, (String, String)>;
+
+fn zerion_chains_cache() -> &'static Mutex<Option<ZerionChainMap>> {
+    static C: OnceLock<Mutex<Option<ZerionChainMap>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
+}
+
+/// Prettify a Zerion chain slug ("binance-smart-chain" -> "Binance Smart Chain")
+/// for the rare case the /v1/chains/ lookup is unavailable.
+fn prettify_chain_slug(slug: &str) -> String {
+    slug.split('-')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+async fn zerion_chain_map(key: &str) -> ZerionChainMap {
+    if let Some(map) = zerion_chains_cache().lock().unwrap().clone() {
+        return map;
+    }
+    let fetched: Result<Value, String> = async {
+        reqwest::Client::builder()
+            .timeout(DEFI_PROVIDER_TIMEOUT)
+            .build()
+            .map_err(|e| format!("building Zerion client: {e}"))?
+            .get("https://api.zerion.io/v1/chains/")
+            .basic_auth(key, Some(""))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|e| format!("querying Zerion chains: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("querying Zerion chains: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("reading Zerion chains response: {e}"))
+    }
+    .await;
+    match fetched {
+        Ok(data) => {
+            let mut map = ZerionChainMap::new();
+            for item in data.get("data").and_then(Value::as_array).unwrap_or(&Vec::new()) {
+                let Some(id) = value_as_string(item.get("id")) else {
+                    continue;
+                };
+                let name = value_as_string(item.pointer("/attributes/name"))
+                    .unwrap_or_else(|| prettify_chain_slug(&id));
+                let external_id = value_as_string(item.pointer("/attributes/external_id"))
+                    .unwrap_or_else(|| id.clone());
+                map.insert(id, (name, external_id));
+            }
+            *zerion_chains_cache().lock().unwrap() = Some(map.clone());
+            map
+        }
+        Err(err) => {
+            println!("[AutoDesktop] defi Zerion chains lookup failed error={err}");
+            ZerionChainMap::new()
+        }
+    }
+}
+
+fn zerion_position_label(attributes: &Value) -> String {
+    value_as_string(attributes.get("name"))
+        .filter(|name| name != "Asset")
+        .or_else(|| {
+            value_as_string(attributes.get("position_type")).map(|t| prettify_chain_slug(&t))
+        })
         .unwrap_or_else(|| "Position".to_string())
 }
 
-fn zapper_position_tokens(node: &Value) -> Vec<DefiPositionToken> {
-    let mut out = Vec::new();
-    if let Some(symbol) = value_as_string(node.get("symbol")) {
-        out.push(DefiPositionToken {
-            symbol,
-            balance: value_as_string(node.get("balance")),
-            balance_usd: value_as_f64(node.get("balanceUSD")),
-        });
-    }
-    if let Some(tokens) = node.get("tokens").and_then(Value::as_array) {
-        for token in tokens {
-            let inner = token.get("token").unwrap_or(token);
-            let Some(symbol) = value_as_string(inner.get("symbol")) else {
-                continue;
-            };
-            out.push(DefiPositionToken {
-                symbol,
-                balance: value_as_string(inner.get("balance")),
-                balance_usd: value_as_f64(inner.get("balanceUSD")),
-            });
-        }
-    }
-    out
-}
-
-fn parse_zapper_positions(data: &Value) -> Vec<DefiPosition> {
-    let Some(app_edges) = data
-        .pointer("/data/portfolioV2/appBalances/byApp/edges")
-        .and_then(Value::as_array)
-    else {
-        return Vec::new();
+fn parse_zerion_positions(data: &Value, chains: &ZerionChainMap) -> (Vec<DefiPosition>, f64) {
+    let Some(items) = data.get("data").and_then(Value::as_array) else {
+        return (Vec::new(), 0.0);
     };
     let mut positions = Vec::new();
-    for (app_index, edge) in app_edges.iter().enumerate() {
-        let node = edge.get("node").unwrap_or(edge);
-        let app_name = value_as_string(node.pointer("/app/displayName"))
-            .unwrap_or_else(|| "DeFi app".to_string());
-        let app_image_url = value_as_string(node.pointer("/app/imgUrl"));
-        let app_url = value_as_string(node.pointer("/app/url"))
-            .or_else(|| value_as_string(node.pointer("/app/websiteUrl")));
-        let network_name = value_as_string(node.pointer("/network/name"))
-            .unwrap_or_else(|| "Unknown network".to_string());
-        let chain_id =
-            value_as_string(node.pointer("/network/chainId")).unwrap_or_else(|| "unknown".into());
-        let app_balance = value_as_f64(node.get("balanceUSD")).unwrap_or(0.0);
-        let Some(position_edges) = node
-            .pointer("/positionBalances/edges")
-            .and_then(Value::as_array)
-        else {
-            if app_balance > 0.0 {
-                positions.push(DefiPosition {
-                    id: format!("{app_name}:{chain_id}:{app_index}:summary"),
-                    app_name,
-                    app_image_url,
-                    app_url,
-                    network_name,
-                    chain_id,
-                    label: "Position".to_string(),
-                    group_label: None,
-                    balance_usd: app_balance,
-                    symbols: Vec::new(),
-                    tokens: Vec::new(),
-                });
-            }
+    let mut total_usd = 0.0;
+    for (index, item) in items.iter().enumerate() {
+        let attributes = item.get("attributes").unwrap_or(item);
+        let balance_usd = value_as_f64(attributes.get("value")).unwrap_or(0.0);
+        if balance_usd <= 0.0 {
             continue;
-        };
-        for (position_index, position_edge) in position_edges.iter().enumerate() {
-            let position = position_edge.get("node").unwrap_or(position_edge);
-            let balance_usd = value_as_f64(position.get("balanceUSD")).unwrap_or(0.0);
-            if balance_usd <= 0.0 {
-                continue;
-            }
-            let tokens = zapper_position_tokens(position);
-            let mut symbols = Vec::new();
-            for token in &tokens {
-                if !symbols.iter().any(|s| s == &token.symbol) {
-                    symbols.push(token.symbol.clone());
-                }
-            }
-            positions.push(DefiPosition {
-                id: format!("{app_name}:{chain_id}:{app_index}:{position_index}"),
-                app_name: app_name.clone(),
-                app_image_url: app_image_url.clone(),
-                app_url: app_url.clone(),
-                network_name: network_name.clone(),
-                chain_id: chain_id.clone(),
-                label: zapper_display_label(position),
-                group_label: value_as_string(position.get("groupLabel")),
-                balance_usd,
-                symbols,
-                tokens,
+        }
+        total_usd += balance_usd;
+        let app_name = value_as_string(attributes.pointer("/application_metadata/name"))
+            .or_else(|| value_as_string(attributes.get("protocol")))
+            .unwrap_or_else(|| "DeFi app".to_string());
+        let app_image_url = value_as_string(attributes.pointer("/application_metadata/icon/url"));
+        let app_url = value_as_string(attributes.pointer("/application_metadata/url"));
+        let chain_slug = value_as_string(item.pointer("/relationships/chain/data/id"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let (network_name, chain_id) = chains
+            .get(&chain_slug)
+            .cloned()
+            .unwrap_or_else(|| (prettify_chain_slug(&chain_slug), chain_slug.clone()));
+        let mut tokens = Vec::new();
+        if let Some(symbol) = value_as_string(attributes.pointer("/fungible_info/symbol")) {
+            tokens.push(DefiPositionToken {
+                symbol,
+                balance: value_as_string(attributes.pointer("/quantity/numeric")),
+                balance_usd: Some(balance_usd),
             });
         }
+        let symbols = tokens.iter().map(|t| t.symbol.clone()).collect();
+        let id = value_as_string(item.get("id"))
+            .unwrap_or_else(|| format!("{app_name}:{chain_slug}:{index}"));
+        positions.push(DefiPosition {
+            id,
+            app_name,
+            app_image_url,
+            app_url,
+            network_name,
+            chain_id,
+            label: zerion_position_label(attributes),
+            group_label: value_as_string(attributes.get("position_type"))
+                .map(|t| prettify_chain_slug(&t)),
+            balance_usd,
+            symbols,
+            tokens,
+        });
     }
     positions.sort_by(|a, b| {
         b.balance_usd
             .partial_cmp(&a.balance_usd)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    positions
+    (positions, total_usd)
 }
 
-fn zapper_app_balance_usd(data: &Value) -> f64 {
-    value_as_f64(data.pointer("/data/portfolioV2/appBalances/totalBalanceUSD")).unwrap_or(0.0)
-}
-
-async fn fetch_zapper_defi_positions(address: &str) -> Result<(Vec<DefiPosition>, f64), String> {
-    let key = zapper_api_key().ok_or_else(|| "ZAPPER_APIKEY is not configured".to_string())?;
-    println!("[AutoDesktop] defi Zapper start address={address}");
-    const QUERY: &str = r#"
-query AppBalances($addresses: [Address!]!, $first: Int = 30) {
-  portfolioV2(addresses: $addresses) {
-    appBalances {
-      totalBalanceUSD
-      byApp(first: $first) {
-        totalCount
-        edges {
-          node {
-            balanceUSD
-            app {
-              displayName
-              imgUrl
-              url
-              websiteUrl
-              description
-              category { name }
-            }
-            network { name chainId }
-            positionBalances(first: 30) {
-              edges {
-                node {
-                  ... on AppTokenPositionBalance {
-                    type
-                    symbol
-                    balance
-                    balanceUSD
-                    price
-                    groupLabel
-                    displayProps { label images }
-                  }
-                  ... on ContractPositionBalance {
-                    type
-                    balanceUSD
-                    groupLabel
-                    tokens {
-                      metaType
-                      token {
-                        ... on BaseTokenPositionBalance {
-                          symbol
-                          balance
-                          balanceUSD
-                        }
-                      }
-                    }
-                    displayProps { label images }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-"#;
-    let body = json!({
-        "query": QUERY,
-        "variables": {
-            "addresses": [address],
-            "first": 30,
-        }
-    });
+async fn fetch_zerion_defi_positions(address: &str) -> Result<(Vec<DefiPosition>, f64), String> {
+    let key = zerion_api_key().ok_or_else(|| "ZERION_APIKEY is not configured".to_string())?;
+    println!("[AutoDesktop] defi Zerion start address={address}");
     let data: Value = reqwest::Client::builder()
         .timeout(DEFI_PROVIDER_TIMEOUT)
         .build()
-        .map_err(|e| format!("building Zapper client: {e}"))?
-        .post("https://public.zapper.xyz/graphql")
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header("x-zapper-api-key", key)
+        .map_err(|e| format!("building Zerion client: {e}"))?
+        .get(format!(
+            "https://api.zerion.io/v1/wallets/{address}/positions/"
+        ))
+        .query(&[
+            ("filter[positions]", "only_complex"),
+            ("currency", "usd"),
+            ("filter[trash]", "only_non_trash"),
+            ("sort", "value"),
+        ])
+        .basic_auth(&key, Some(""))
         .header(reqwest::header::ACCEPT, "application/json")
-        .header(reqwest::header::CACHE_CONTROL, "no-cache")
-        .header(reqwest::header::PRAGMA, "no-cache")
-        .header(
-            reqwest::header::USER_AGENT,
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AutoDesktop/1.0",
-        )
-        .header(reqwest::header::ORIGIN, "https://build.zapper.xyz")
-        .header(reqwest::header::REFERER, "https://build.zapper.xyz/")
-        .json(&body)
         .send()
         .await
-        .map_err(|e| format!("querying Zapper: {e}"))?
+        .map_err(|e| format!("querying Zerion: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("querying Zapper: {e}"))?
+        .map_err(|e| format!("querying Zerion: {e}"))?
         .json()
         .await
-        .map_err(|e| format!("reading Zapper response: {e}"))?;
+        .map_err(|e| format!("reading Zerion response: {e}"))?;
     if let Some(errors) = data.get("errors").and_then(Value::as_array) {
         let msg = errors
             .first()
-            .and_then(|e| e.get("message"))
+            .and_then(|e| e.get("title").or_else(|| e.get("detail")))
             .and_then(Value::as_str)
-            .unwrap_or("Zapper returned an error");
+            .unwrap_or("Zerion returned an error");
         return Err(msg.to_string());
     }
-    let positions = parse_zapper_positions(&data);
-    let app_balance = zapper_app_balance_usd(&data);
+    let chains = zerion_chain_map(&key).await;
+    let (positions, app_balance) = parse_zerion_positions(&data, &chains);
     println!(
-        "[AutoDesktop] defi Zapper done address={address} positions={} appBalanceUsd={app_balance}",
+        "[AutoDesktop] defi Zerion done address={address} positions={} appBalanceUsd={app_balance}",
         positions.len()
     );
     Ok((positions, app_balance))
@@ -5378,13 +5334,13 @@ async fn get_defi_positions<R: Runtime>(
     let debank_available = debank_api_key().is_some();
     let price_oracle = PriceOracleStore::from_app(&app);
     let custom = fetch_custom_defi_positions(price_oracle, address).await;
-    let zapper = fetch_zapper_defi_positions(address).await;
-    let (zapper_positions, zapper_balance_usd) = match zapper {
+    let zerion = fetch_zerion_defi_positions(address).await;
+    let (zerion_positions, zerion_balance_usd) = match zerion {
         Ok(result) => result,
         Err(err) => {
             if has_wallet_assets && debank_available {
                 println!(
-                    "[AutoDesktop] defi fallback source=DeBank address={address} reason=zapper-error error={err}"
+                    "[AutoDesktop] defi fallback source=DeBank address={address} reason=zerion-error error={err}"
                 );
                 let positions = fetch_debank_defi_positions(address).await?;
                 println!(
@@ -5395,27 +5351,27 @@ async fn get_defi_positions<R: Runtime>(
             }
             if custom.as_ref().is_ok_and(|positions| !positions.is_empty()) {
                 println!(
-                    "[AutoDesktop] defi fallback source=Custom address={address} reason=zapper-error error={err}"
+                    "[AutoDesktop] defi fallback source=Custom address={address} reason=zerion-error error={err}"
                 );
                 return custom_only_defi_response(custom);
             }
-            println!("[AutoDesktop] defi Zapper failed address={address} error={err}");
+            println!("[AutoDesktop] defi Zerion failed address={address} error={err}");
             return Err(err);
         }
     };
-    if !zapper_positions.is_empty()
-        || zapper_balance_usd > 0.0
+    if !zerion_positions.is_empty()
+        || zerion_balance_usd > 0.0
         || !has_wallet_assets
         || !debank_available
     {
         println!(
-            "[AutoDesktop] defi response source=Zapper address={address} positions={}",
-            zapper_positions.len()
+            "[AutoDesktop] defi response source=Zerion address={address} positions={}",
+            zerion_positions.len()
         );
-        return Ok(merge_defi_positions("Zapper", zapper_positions, custom));
+        return Ok(merge_defi_positions("Zerion", zerion_positions, custom));
     }
     println!(
-        "[AutoDesktop] defi fallback source=DeBank address={address} reason=zapper-empty-wallet-assets-present"
+        "[AutoDesktop] defi fallback source=DeBank address={address} reason=zerion-empty-wallet-assets-present"
     );
     let positions = fetch_debank_defi_positions(address).await?;
     println!(
@@ -7064,9 +7020,100 @@ mod tests {
     }
 
     #[test]
+    fn parses_zerion_positions() {
+        let data = json!({
+            "data": [
+                {
+                    "type": "positions",
+                    "id": "0xabc-ethereum-asset-none-",
+                    "attributes": {
+                        "protocol": "aave",
+                        "name": "Asset",
+                        "position_type": "deposit",
+                        "quantity": { "numeric": "123.45", "float": 123.45 },
+                        "value": 5.38,
+                        "fungible_info": { "symbol": "USDC" },
+                        "application_metadata": {
+                            "name": "AAVE",
+                            "icon": { "url": "https://icon.example/aave.png" },
+                            "url": "https://app.aave.com/"
+                        }
+                    },
+                    "relationships": {
+                        "chain": { "data": { "type": "chains", "id": "ethereum" } }
+                    }
+                },
+                {
+                    "type": "positions",
+                    "id": "0xdef-base-asset-none-",
+                    "attributes": {
+                        "protocol": "uniswap",
+                        "name": "Asset",
+                        "position_type": "staked",
+                        "value": null,
+                        "fungible_info": { "symbol": "UNI" }
+                    },
+                    "relationships": {
+                        "chain": { "data": { "type": "chains", "id": "base" } }
+                    }
+                },
+                {
+                    "type": "positions",
+                    "id": "0x123-binance-smart-chain-asset-none-",
+                    "attributes": {
+                        "protocol": "pancakeswap",
+                        "name": "CAKE-BNB LP",
+                        "position_type": "locked",
+                        "quantity": { "numeric": "2.5" },
+                        "value": 11.5,
+                        "fungible_info": { "symbol": "CAKE-BNB" }
+                    },
+                    "relationships": {
+                        "chain": { "data": { "type": "chains", "id": "binance-smart-chain" } }
+                    }
+                }
+            ]
+        });
+        let mut chains = ZerionChainMap::new();
+        chains.insert(
+            "ethereum".to_string(),
+            ("Ethereum".to_string(), "0x1".to_string()),
+        );
+        let (positions, total_usd) = parse_zerion_positions(&data, &chains);
+
+        // The null-value position is dropped; the rest sort by USD desc.
+        assert_eq!(positions.len(), 2);
+        assert_eq!(total_usd, 16.88);
+
+        assert_eq!(positions[0].id, "0x123-binance-smart-chain-asset-none-");
+        assert_eq!(positions[0].app_name, "pancakeswap");
+        assert_eq!(positions[0].balance_usd, 11.5);
+        assert_eq!(positions[0].label, "CAKE-BNB LP");
+        assert_eq!(positions[0].group_label.as_deref(), Some("Locked"));
+        // Slug missing from the chain map falls back to the prettified slug.
+        assert_eq!(positions[0].network_name, "Binance Smart Chain");
+        assert_eq!(positions[0].chain_id, "binance-smart-chain");
+
+        assert_eq!(positions[1].app_name, "AAVE");
+        assert_eq!(
+            positions[1].app_image_url.as_deref(),
+            Some("https://icon.example/aave.png")
+        );
+        assert_eq!(positions[1].app_url.as_deref(), Some("https://app.aave.com/"));
+        assert_eq!(positions[1].network_name, "Ethereum");
+        assert_eq!(positions[1].chain_id, "0x1");
+        // The generic "Asset" name gives way to the position type.
+        assert_eq!(positions[1].label, "Deposit");
+        assert_eq!(positions[1].symbols, vec!["USDC"]);
+        assert_eq!(positions[1].tokens.len(), 1);
+        assert_eq!(positions[1].tokens[0].balance.as_deref(), Some("123.45"));
+        assert_eq!(positions[1].tokens[0].balance_usd, Some(5.38));
+    }
+
+    #[test]
     fn merges_custom_defi_with_primary_source() {
         let primary = DefiPosition {
-            id: "zapper:aave:0".to_string(),
+            id: "zerion:aave:0".to_string(),
             app_name: "Aave".to_string(),
             app_image_url: None,
             app_url: None,
@@ -7092,9 +7139,9 @@ mod tests {
             tokens: Vec::new(),
         };
 
-        let response = merge_defi_positions("Zapper", vec![primary], Ok(vec![custom]));
+        let response = merge_defi_positions("Zerion", vec![primary], Ok(vec![custom]));
 
-        assert_eq!(response.source, "Zapper + Custom");
+        assert_eq!(response.source, "Zerion + Custom");
         assert_eq!(response.positions.len(), 2);
         assert_eq!(response.positions[0].app_name, "XStake Farming");
         assert_eq!(response.positions[1].app_name, "Aave");
