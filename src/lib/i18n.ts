@@ -344,8 +344,9 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Safe assets are controlled through multisig proposals. Sign pending proposals in the queue below.",
     "wallet.rename": "Rename",
     "wallet.delete": "Delete wallet",
-    "wallet.deleteConfirm":
-      "Delete this wallet? Make sure its recovery phrase or private key is backed up — this can't be undone.",
+    "wallet.deleteConfirm": "Delete this wallet?",
+    "wallet.deleteConfirmDetail":
+      "Make sure its recovery phrase or private key is backed up — this can't be undone.",
     "wallet.deleteWatchConfirm": "Remove this watch-only address?",
     "wallet.removeWatch": "Remove",
     "wallet.walletName": "Wallet name",
@@ -807,8 +808,8 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Safe 资产通过多签提案控制。请在下方队列中审核并签署待处理提案。",
     "wallet.rename": "重命名",
     "wallet.delete": "删除钱包",
-    "wallet.deleteConfirm":
-      "删除这个钱包？请确认其助记词或私钥已备份 —— 此操作无法撤销。",
+    "wallet.deleteConfirm": "删除这个钱包？",
+    "wallet.deleteConfirmDetail": "请确认其助记词或私钥已备份 —— 此操作无法撤销。",
     "wallet.deleteWatchConfirm": "移除这个观察地址？",
     "wallet.removeWatch": "移除",
     "wallet.walletName": "钱包名称",
@@ -987,6 +988,9 @@ export function useT(): { t: TFn; lang: Lang } {
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
+    () => lang,
+    // Server snapshot: without it useSyncExternalStore throws under
+    // renderToStaticMarkup, which the component tests use.
     () => lang,
   );
   return { t: (key, vars) => translate(current, key, vars), lang: current };

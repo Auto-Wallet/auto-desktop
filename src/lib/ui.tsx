@@ -1,7 +1,12 @@
 // Shared presentational atoms used across the shell, Wallet, and the approval
 // window: the deterministic gradient Avatar and the ToastHost.
 
-import { useToasts } from "./toast";
+import { useCallback, useEffect, useRef } from "react";
+import { resolveConfirm, useConfirm, type ConfirmRequest } from "./confirm";
+import { Icon } from "./icons";
+import { useT } from "./i18n";
+import { useToasts, type Toast } from "./toast";
+import { motionMs, useEnterExit, useIconSwap, useModalExit } from "./transitions";
 
 /** Deterministic gradient from an address — distinct per account, no image/network. */
 export function avatarBg(address: string): string {
@@ -81,34 +86,155 @@ export function DappAvatar({
   );
 }
 
+/**
+ * Copy-to-clipboard button whose icon cross-fades to a check for a beat.
+ *
+ * Each instance owns its swap state, so one row in a list of accounts confirms
+ * on its own instead of flipping every sibling. `onCopied` runs after the write
+ * — that is where the toast goes.
+ */
+export function CopyButton({
+  value,
+  title,
+  className = "icon-btn",
+  size = 16,
+  onCopied,
+  children,
+}: {
+  value: string;
+  title?: string;
+  className?: string;
+  size?: number;
+  onCopied?: () => void;
+  children?: React.ReactNode;
+}) {
+  const { state, fire } = useIconSwap();
+  return (
+    <button
+      type="button"
+      className={className}
+      title={title}
+      aria-label={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        void navigator.clipboard.writeText(value);
+        fire();
+        onCopied?.();
+      }}
+    >
+      <span className="t-icon-swap" data-state={state}>
+        <span className="t-icon" data-icon="a">
+          <Icon name="copy" size={size} />
+        </span>
+        <span className="t-icon" data-icon="b">
+          <Icon name="check" size={size} />
+        </span>
+      </span>
+      {children}
+    </button>
+  );
+}
+
+/**
+ * One toast, riding the .t-toast rise-from-below. The snippet's resting state
+ * IS the closed state, so `.is-open` alone gives the slow-in / quick-out
+ * asymmetry — `leaving` (set by the store just before removal) drops it.
+ */
+function ToastItem({ t }: { t: Toast }) {
+  const { cls } = useEnterExit(!t.leaving, motionMs("--toast-close", 250));
+  const open = cls === "is-open" ? " is-open" : "";
+  const base = `toast t-toast${open} ${t.kind}${t.card ? " card" : ""}`;
+  const content = (
+    <>
+      <span className="tdot" />
+      <span className="toast-msg">{t.msg}</span>
+      {t.action?.label && <span className="toast-action">{t.action.label}</span>}
+    </>
+  );
+  return t.action ? (
+    <button type="button" className={`${base} actionable`} onClick={t.action.onClick}>
+      {content}
+    </button>
+  ) : (
+    <div className={base}>{content}</div>
+  );
+}
+
 export function ToastHost() {
   const toasts = useToasts();
   if (toasts.length === 0) return null;
   return (
     <div className="toast-wrap">
-      {toasts.map((t) => {
-        const content = (
-          <>
-            <span className="tdot" />
-            <span className="toast-msg">{t.msg}</span>
-            {t.action?.label && <span className="toast-action">{t.action.label}</span>}
-          </>
-        );
-        return t.action ? (
-          <button
-            key={t.id}
-            type="button"
-            className={`toast ${t.kind}${t.card ? " card" : ""} actionable`}
-            onClick={t.action.onClick}
-          >
-            {content}
-          </button>
-        ) : (
-          <div key={t.id} className={`toast ${t.kind}${t.card ? " card" : ""}`}>
-            {content}
+      {toasts.map((t) => (
+        <ToastItem key={t.id} t={t} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Renders whatever askConfirm() is waiting on. Mount it once, next to
+ * <ToastHost/>. See lib/confirm.ts for why the app can't use window.confirm.
+ */
+export function ConfirmHost() {
+  const req = useConfirm();
+  // Keyed by id so each request replays the modal's enter transition instead of
+  // inheriting the previous one's finished state.
+  return req ? <ConfirmDialog key={req.id} req={req} /> : null;
+}
+
+function ConfirmDialog({ req }: { req: ConfirmRequest }) {
+  const { t } = useT();
+  // useModalExit takes a single completion callback, so the answer rides a ref:
+  // the button sets it, `close` plays the exit, and the store is told last.
+  const answer = useRef(false);
+  const { cls, close } = useModalExit(() => resolveConfirm(req.id, answer.current));
+  const settle = useCallback(
+    (ok: boolean) => {
+      answer.current = ok;
+      close();
+    },
+    [close],
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") settle(false);
+      if (e.key === "Enter") settle(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [settle]);
+
+  return (
+    <div className={`scrim t-scrim ${cls}`} onClick={() => settle(false)}>
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        className={`modal confirm-modal t-modal ${cls}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <div className="modal-title">{req.title}</div>
+        </div>
+        {req.message && (
+          <div className="modal-body">
+            <p className="confirm-msg">{req.message}</p>
           </div>
-        );
-      })}
+        )}
+        <div className="modal-actions">
+          <button className="btn btn-ghost" onClick={() => settle(false)}>
+            {req.cancelLabel ?? t("common.cancel")}
+          </button>
+          <button
+            autoFocus
+            className={`btn ${req.danger ? "btn-danger" : "btn-primary"}`}
+            onClick={() => settle(true)}
+          >
+            {req.confirmLabel ?? t("common.confirm")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

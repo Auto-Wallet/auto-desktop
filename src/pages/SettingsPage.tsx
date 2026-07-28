@@ -27,7 +27,10 @@ import {
 } from "../lib/updater";
 import { updateBarState } from "../lib/updateBar";
 import { openExternalUrl } from "../lib/platform";
+import { useSegPill, useToggleInit } from "../lib/transitions";
 import { Icon, type IconName } from "../lib/icons";
+import { CopyButton } from "../lib/ui";
+import { askConfirm } from "../lib/confirm";
 import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
 
@@ -51,7 +54,10 @@ export default function SettingsPage() {
   const chains = useChains();
   const activeChain = useActiveChain();
   const themePref = useThemePref();
+  const themeSegRef = useSegPill<HTMLDivElement>(themePref);
+  const langSegRef = useSegPill<HTMLDivElement>(lang);
   const closeBehavior = useCloseBehavior();
+  const closeToggle = useToggleInit(closeBehavior === "hide");
   const activeWallet = useActiveWallet();
   const [updated, setUpdated] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -214,9 +220,15 @@ export default function SettingsPage() {
                         <button
                           className="icon-btn bare"
                           title={t("settings.remove")}
-                          onClick={() => {
-                            if (confirm(t("settings.removeConfirm"))) {
-                              void removeChain(c.id);
+                          onClick={async () => {
+                            if (
+                              await askConfirm({
+                                title: t("settings.removeConfirm"),
+                                confirmLabel: t("settings.remove"),
+                                danger: true,
+                              })
+                            ) {
+                              await removeChain(c.id);
                               toast(t("dapps.removed"));
                             }
                           }}
@@ -256,7 +268,8 @@ export default function SettingsPage() {
                   <div className="rl">{t("settings.theme")}</div>
                   <div className="rs">{t("settings.themeHint")}</div>
                 </div>
-                <div className="seg">
+                <div className="seg" ref={themeSegRef}>
+                  <span className="t-tabs-pill" aria-hidden="true" />
                   {themeOpts.map(([v, ic, lbl]) => (
                     <button
                       key={v}
@@ -274,7 +287,10 @@ export default function SettingsPage() {
                   <div className="rs">{t("settings.closeBehaviorHint")}</div>
                 </div>
                 <button
-                  className={`toggle${closeBehavior === "hide" ? " on" : ""}`}
+                  className={`toggle t-toggle${closeToggle.initCls}${
+                    closeBehavior === "hide" ? " on" : ""
+                  }`}
+                  data-on={closeToggle.dataOn}
                   aria-pressed={closeBehavior === "hide"}
                   onClick={() =>
                     void setCloseBehavior(
@@ -282,7 +298,7 @@ export default function SettingsPage() {
                     )
                   }
                 >
-                  <i />
+                  <i className="t-toggle-thumb" />
                 </button>
               </div>
             </div>
@@ -302,7 +318,8 @@ export default function SettingsPage() {
                   <div className="rl">{t("settings.language")}</div>
                   <div className="rs">English · 中文</div>
                 </div>
-                <div className="seg">
+                <div className="seg" ref={langSegRef}>
+                  <span className="t-tabs-pill" aria-hidden="true" />
                   {(["en", "zh"] as Lang[]).map((l) => (
                     <button
                       key={l}
@@ -528,12 +545,6 @@ function ExportSecretModal({
     }
   }
 
-  async function copySecret() {
-    if (!secret) return;
-    await navigator.clipboard.writeText(secret.secret);
-    toast(t("settings.secretCopied"));
-  }
-
   return (
     <div className="scrim" onClick={onClose}>
       <div className="modal export-secret-modal" onClick={(e) => e.stopPropagation()}>
@@ -603,10 +614,14 @@ function ExportSecretModal({
                 <button className="btn btn-ghost" onClick={onClose}>
                   {t("wallet.cancel")}
                 </button>
-                <button className="btn btn-primary" onClick={() => void copySecret()}>
-                  <Icon name="copy" size={15} />
+                <CopyButton
+                  className="btn btn-primary"
+                  size={15}
+                  value={secret.secret}
+                  onCopied={() => toast(t("settings.secretCopied"))}
+                >
                   {t("wallet.copy")}
-                </button>
+                </CopyButton>
               </div>
             </>
           )}

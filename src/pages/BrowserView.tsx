@@ -7,10 +7,11 @@ import { setActive, useAccounts, useActiveAccount } from "../lib/accounts";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
-import { Avatar, DappAvatar } from "../lib/ui";
+import { Avatar, CopyButton, DappAvatar } from "../lib/ui";
 import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
 import { filterChains } from "../lib/chainSearch";
+import { useDropdown } from "../lib/transitions";
 import { dappIconOf, hostOf, type Dapp } from "../lib/dapps";
 import {
   dappLabel,
@@ -305,6 +306,7 @@ function AcctChip() {
   const active = useActiveAccount();
   const native = isTauri();
   const [open, setOpen] = useState(false);
+  const menu = useDropdown(open);
   const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
   const isActive = (addr: string) => addr.toLowerCase() === active.address.toLowerCase();
   function copyAddress(address: string) {
@@ -347,10 +349,13 @@ function AcctChip() {
         <span className="mono">{shortAddress(active.address, 5, 4)}</span>
         <Icon name="chevronD" size={14} />
       </button>
-      {open && (
+      {menu.mounted && (
         <>
           <div style={{ position: "fixed", inset: 0, zIndex: 30 }} onClick={() => setOpen(false)} />
-          <div className="chain-menu acct-pop scroll">
+          <div
+            className={`chain-menu acct-pop scroll t-dropdown ${menu.cls}`}
+            data-origin="top-right"
+          >
             {accounts.map((a) => (
               <div
                 key={a.address}
@@ -373,18 +378,13 @@ function AcctChip() {
                   <span className="l">{a.label}</span>
                   <span className="a">{shortAddress(a.address, 8, 6)}</span>
                 </span>
-                <button
-                  type="button"
+                <CopyButton
                   className="acct-copy"
                   title={t("wallet.copy")}
-                  aria-label={t("wallet.copy")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    copyAddress(a.address);
-                  }}
-                >
-                  <Icon name="copy" size={14} />
-                </button>
+                  size={14}
+                  value={a.address}
+                  onCopied={() => toast(t("common.copied"))}
+                />
                 {isActive(a.address) && (
                   <span className="check">
                     <Icon name="check" size={15} />
@@ -404,6 +404,7 @@ function ChainChip({ chain, chains }: { chain: Chain; chains: Chain[] }) {
   const { t } = useT();
   const native = isTauri();
   const [open, setOpen] = useState(false);
+  const menu = useDropdown(open);
   const [query, setQuery] = useState("");
   const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
   const filteredChains = useMemo(() => filterChains(chains, query), [chains, query]);
@@ -440,7 +441,7 @@ function ChainChip({ chain, chains }: { chain: Chain; chains: Chain[] }) {
         {chain.name}
         <Icon name="chevronD" size={14} />
       </button>
-      {open && (
+      {menu.mounted && (
         <>
           <div
             style={{ position: "fixed", inset: 0, zIndex: 30 }}
@@ -449,7 +450,10 @@ function ChainChip({ chain, chains }: { chain: Chain; chains: Chain[] }) {
               setQuery("");
             }}
           />
-          <div className="chain-menu chain-picker">
+          <div
+            className={`chain-menu chain-picker t-dropdown ${menu.cls}`}
+            data-origin="top-right"
+          >
             <label className="chain-search">
               <Icon name="search" size={15} />
               <input

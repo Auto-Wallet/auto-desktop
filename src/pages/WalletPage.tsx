@@ -38,6 +38,13 @@ import {
 } from "../lib/vault";
 import { LedgerList, useLedgerScan } from "../lib/LedgerPicker";
 import {
+  useDropdown,
+  useHoverGroup,
+  useModalExit,
+  useSegPill,
+  useSpin,
+} from "../lib/transitions";
+import {
   addWatchAccount,
   removeWatchAccount,
   renameWatchAccount,
@@ -89,7 +96,8 @@ import {
 } from "../lib/tokens";
 import { useT, type TFn } from "../lib/i18n";
 import { Icon, type IconName } from "../lib/icons";
-import { Avatar } from "../lib/ui";
+import { Avatar, CopyButton } from "../lib/ui";
+import { askConfirm } from "../lib/confirm";
 import { QrCode } from "../lib/qr";
 import { toast } from "../lib/toast";
 import { rpc } from "../lib/rpc";
@@ -155,11 +163,6 @@ function saveDefiEnabledAccounts(addresses: string[]) {
   );
 }
 
-function copyAccountAddress(address: string, t: TFn) {
-  void navigator.clipboard.writeText(address);
-  toast(t("common.copied"));
-}
-
 // Wallet page (VISION ①). Aurora portfolio: account/wallet switcher (create/import/
 // link + rename/delete), hero with a REAL total (native balances × price-oracle
 // prices), quick actions, a per-chain native token list with USD, and an honest
@@ -197,8 +200,12 @@ export default function WalletPage() {
     useTokenPrices(pricedTokens);
 
   const [tab, setTab] = useState<"tokens" | "activity">("tokens");
+  const holdingsSegRef = useSegPill<HTMLDivElement>(tab);
+  const heroActions = useHoverGroup<HTMLDivElement>();
+  const refreshSpin = useSpin<HTMLSpanElement>();
   const [filter, setFilter] = useState<string>("all");
   const [chainMenuOpen, setChainMenuOpen] = useState(false);
+  const chainMenu = useDropdown(chainMenuOpen);
   const [chainQuery, setChainQuery] = useState("");
   const [showReceive, setShowReceive] = useState(false);
   const [showAddToken, setShowAddToken] = useState(false);
@@ -367,11 +374,8 @@ export default function WalletPage() {
   );
   const trendPercent = trend.percent;
 
-  function copyAddress() {
-    navigator.clipboard.writeText(active.address);
-    toast(t("common.copied"));
-  }
   function refreshAll() {
+    refreshSpin.spin();
     refresh();
     refreshTokens();
     refreshPrices();
@@ -421,13 +425,13 @@ export default function WalletPage() {
             to the wallet switcher. */}
         <div className="wallet-head">
           <AccountSwitcher />
-          <button
+          <CopyButton
             className="icon-btn"
             title={t("wallet.copy")}
-            onClick={copyAddress}
-          >
-            <Icon name="copy" size={17} />
-          </button>
+            size={17}
+            value={active.address}
+            onCopied={() => toast(t("common.copied"))}
+          />
         </div>
 
         {/* Portfolio hero — balance, trend and the primary actions as ONE visual
@@ -486,15 +490,20 @@ export default function WalletPage() {
                 onClick={refreshAll}
                 title={t("wallet.refresh")}
               >
-                <Icon name="refresh" size={17} />
+                <span className="t-spin" ref={refreshSpin.ref}>
+                  <Icon name="refresh" size={17} />
+                </span>
               </button>
             </div>
             {!isWatch && (
-              <div className="hero-actions">
+              // Indices must match DOM order — the comb measures distance off
+              // the rendered .t-avatar list, and Send/Swap drop out for Safe.
+              <div className="hero-actions" {...heroActions.group}>
                 <HeroAction
                   icon="receive"
                   label={t("wallet.receive")}
                   onClick={() => setShowReceive(true)}
+                  hover={heroActions.item(0)}
                 />
                 {!isSafe && (
                   <>
@@ -505,6 +514,7 @@ export default function WalletPage() {
                         setSendAssetKey(undefined);
                         setShowSend(true);
                       }}
+                      hover={heroActions.item(1)}
                     />
                     <HeroAction
                       icon="bridge"
@@ -513,6 +523,7 @@ export default function WalletPage() {
                         setBridgeAssetKey(undefined);
                         setShowBridge(true);
                       }}
+                      hover={heroActions.item(2)}
                     />
                   </>
                 )}
@@ -536,7 +547,8 @@ export default function WalletPage() {
         {/* Tokens / Activity */}
         <div className="holdings">
           <div className="holdings-head">
-            <div className="seg">
+            <div className="seg" ref={holdingsSegRef}>
+              <span className="t-tabs-pill" aria-hidden="true" />
               <button
                 className={tab === "tokens" ? "on" : ""}
                 onClick={() => setTab("tokens")}
@@ -584,13 +596,13 @@ export default function WalletPage() {
                     </span>
                     <Icon name="chevronD" size={14} />
                   </button>
-                  {chainMenuOpen && (
+                  {chainMenu.mounted && (
                     <>
                       <div
                         className="cf-scrim"
                         onClick={() => setChainMenuOpen(false)}
                       />
-                      <div className="cf-menu scroll">
+                      <div className={`cf-menu scroll t-dropdown ${chainMenu.cls}`}>
                         <label className="cf-search">
                           <Icon name="search" size={14} />
                           <input
@@ -1302,7 +1314,8 @@ function HeroAmount({ n }: { n: number }) {
   const [whole, cents] = fmtUsd(n).replace("$", "").split(".");
   // Wrapped in one inline element: .hero-total is a flex row with a gap, so a
   // bare fragment would split "$144" and ".54" into separate flex items and
-  // print a gap between them.
+  // print a gap between them. Deliberately unanimated — the balance repolls on
+  // a timer, so a per-digit re-entry just reads as the number flickering.
   return (
     <span className="hero-amt">
       ${whole}
@@ -1338,13 +1351,19 @@ function HeroAction({
   icon,
   label,
   onClick,
+  hover,
 }: {
   icon: IconName;
   label: string;
   onClick: () => void;
+  hover?: { className: string; onMouseEnter: () => void };
 }) {
   return (
-    <button className="hero-action" onClick={onClick}>
+    <button
+      {...hover}
+      className={`hero-action${hover ? ` ${hover.className}` : ""}`}
+      onClick={onClick}
+    >
       <Icon name={icon} size={16} />
       <span>{label}</span>
     </button>
@@ -1730,6 +1749,7 @@ function ReplaceTxModal({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { cls, close } = useModalExit(onClose);
 
   async function submit() {
     setError(null);
@@ -1761,13 +1781,16 @@ function ReplaceTxModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="send-modal replace-modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`scrim t-scrim ${cls}`} onClick={close}>
+      <div
+        className={`modal replace-modal t-modal ${cls}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-head">
           <h2>
             {action === "speedup" ? t("wallet.speedUpTx") : t("wallet.revokeTx")}
           </h2>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
+          <button className="icon-btn" onClick={close} aria-label="Close">
             <Icon name="x" size={20} />
           </button>
         </div>
@@ -1806,7 +1829,7 @@ function ReplaceTxModal({
         </div>
         {error && <div className="error-line">{error}</div>}
         <div className="modal-actions">
-          <button className="btn ghost" onClick={onClose}>
+          <button className="btn ghost" onClick={close}>
             {t("wallet.cancel")}
           </button>
           <button className="btn primary" onClick={submit} disabled={busy}>
@@ -2074,8 +2097,14 @@ function AccountSwitcher() {
                       onRename={() => setRenamingWatch(a.address)}
                       onRenameDone={() => setRenamingWatch(null)}
                       onTogglePinned={() => togglePinned(a.address)}
-                      onRemove={() => {
-                        if (confirm(t("wallet.deleteWatchConfirm"))) {
+                      onRemove={async () => {
+                        if (
+                          await askConfirm({
+                            title: t("wallet.deleteWatchConfirm"),
+                            confirmLabel: t("wallet.delete"),
+                            danger: true,
+                          })
+                        ) {
                           removeWatchAccount(a.address);
                           toast(t("wallet.removed"));
                         }
@@ -2108,8 +2137,14 @@ function AccountSwitcher() {
                       onRename={() => setRenamingSafe(safe.address)}
                       onRenameDone={() => setRenamingSafe(null)}
                       onTogglePinned={() => togglePinned(safe.address)}
-                      onRemove={() => {
-                        if (confirm(t("safe.removeConfirm"))) {
+                      onRemove={async () => {
+                        if (
+                          await askConfirm({
+                            title: t("safe.removeConfirm"),
+                            confirmLabel: t("wallet.delete"),
+                            danger: true,
+                          })
+                        ) {
                           removeSafeAccount(safe.address);
                           toast(t("wallet.removed"));
                         }
@@ -2219,13 +2254,13 @@ function WatchAccountRow({
       >
         <Icon name="star" size={15} />
       </button>
-      <button
+      <CopyButton
         className="icon-btn bare acct-copy"
         title={t("wallet.copy")}
-        onClick={() => copyAccountAddress(account.address, t)}
-      >
-        <Icon name="copy" size={15} />
-      </button>
+        size={15}
+        value={account.address}
+        onCopied={() => toast(t("common.copied"))}
+      />
       <button
         className="icon-btn bare acct-row-edit"
         title={t("wallet.rename")}
@@ -2321,13 +2356,13 @@ function SafeAccountRow({
       >
         <Icon name="star" size={15} />
       </button>
-      <button
+      <CopyButton
         className="icon-btn bare acct-copy"
         title={t("wallet.copy")}
-        onClick={() => copyAccountAddress(safe.address, t)}
-      >
-        <Icon name="copy" size={15} />
-      </button>
+        size={15}
+        value={safe.address}
+        onCopied={() => toast(t("common.copied"))}
+      />
       <button
         className="icon-btn bare acct-row-edit"
         title={t("wallet.rename")}
@@ -2412,11 +2447,17 @@ function WalletGroup({
               <button
                 className="icon-btn bare"
                 title={t("wallet.delete")}
-                onClick={() => {
-                  if (confirm(t("wallet.deleteConfirm"))) {
-                    void deleteWallet(wallet.id).then(() =>
-                      toast(t("wallet.removed")),
-                    );
+                onClick={async () => {
+                  if (
+                    await askConfirm({
+                      title: t("wallet.deleteConfirm"),
+                      message: t("wallet.deleteConfirmDetail"),
+                      confirmLabel: t("wallet.delete"),
+                      danger: true,
+                    })
+                  ) {
+                    await deleteWallet(wallet.id);
+                    toast(t("wallet.removed"));
                   }
                 }}
               >
@@ -2459,13 +2500,13 @@ function WalletGroup({
             >
               <Icon name="star" size={15} />
             </button>
-            <button
+            <CopyButton
               className="icon-btn bare acct-copy"
               title={t("wallet.copy")}
-              onClick={() => copyAccountAddress(addr, t)}
-            >
-              <Icon name="copy" size={15} />
-            </button>
+              size={15}
+              value={addr}
+              onCopied={() => toast(t("common.copied"))}
+            />
           </div>
         );
       })}
@@ -2534,6 +2575,7 @@ function AddWalletModal({
   onDone: () => void;
 }) {
   const { t } = useT();
+  const { cls, close } = useModalExit(onClose);
   const [step, setStep] = useState<AddStep>("menu");
   const [mnemonic, setMnemonic] = useState("");
 
@@ -2551,9 +2593,9 @@ function AddWalletModal({
   ];
 
   return (
-    <div className="scrim" onClick={onClose}>
+    <div className={`scrim t-scrim ${cls}`} onClick={close}>
       <div
-        className={`modal${step === "ledger" ? " wide" : ""}`}
+        className={`modal t-modal ${cls}${step === "ledger" ? " wide" : ""}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
@@ -2562,7 +2604,7 @@ function AddWalletModal({
               ? t("wallet.backupNew")
               : t("wallet.addWalletTitle")}
           </div>
-          <button className="icon-btn bare" onClick={onClose}>
+          <button className="icon-btn bare" onClick={close}>
             <Icon name="close" size={18} />
           </button>
         </div>
@@ -2746,6 +2788,7 @@ function ImportWalletForm({
 }) {
   const { t } = useT();
   const [tab, setTab] = useState<"phrase" | "privkey">("phrase");
+  const segRef = useSegPill<HTMLDivElement>(tab);
   const [phrase, setPhrase] = useState("");
   const [privkey, setPrivkey] = useState("");
   const [pw, setPw] = useState("");
@@ -2784,7 +2827,8 @@ function ImportWalletForm({
 
   return (
     <div className="add-form">
-      <div className="seg lock-seg">
+      <div className="seg lock-seg" ref={segRef}>
+        <span className="t-tabs-pill" aria-hidden="true" />
         <button
           className={tab === "phrase" ? "on" : ""}
           onClick={() => setTab("phrase")}
@@ -3243,12 +3287,13 @@ function ReceiveModal({
   onClose: () => void;
 }) {
   const { t } = useT();
+  const { cls, close } = useModalExit(onClose);
   return (
-    <div className="scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`scrim t-scrim ${cls}`} onClick={close}>
+      <div className={`modal t-modal ${cls}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title">{t("wallet.receive")}</div>
-          <button className="icon-btn bare" onClick={onClose}>
+          <button className="icon-btn bare" onClick={close}>
             <Icon name="close" size={18} />
           </button>
         </div>
@@ -3262,15 +3307,12 @@ function ReceiveModal({
           </div>
           <div className="addr-box">
             <span className="a">{account.address}</span>
-            <button
+            <CopyButton
               className="icon-btn"
-              onClick={() => {
-                navigator.clipboard.writeText(account.address);
-                toast(t("common.copied"));
-              }}
-            >
-              <Icon name="copy" size={16} />
-            </button>
+              title={t("wallet.copy")}
+              value={account.address}
+              onCopied={() => toast(t("common.copied"))}
+            />
           </div>
           <div className="receive-hint">
             <Icon name="info" size={16} /> {t("wallet.receiveHint")}
@@ -3292,6 +3334,7 @@ function AddTokenModal({
   onClose: () => void;
 }) {
   const { t } = useT();
+  const { cls, close } = useModalExit(onClose);
   const chains = useChains();
   const custom = useCustomTokens();
   const [chainId, setChainId] = useState<string>(
@@ -3336,11 +3379,11 @@ function AddTokenModal({
   }
 
   return (
-    <div className="scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`scrim t-scrim ${cls}`} onClick={close}>
+      <div className={`modal t-modal ${cls}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title">{t("wallet.addToken")}</div>
-          <button className="icon-btn bare" onClick={onClose}>
+          <button className="icon-btn bare" onClick={close}>
             <Icon name="close" size={18} />
           </button>
         </div>
@@ -3997,6 +4040,7 @@ function CrossChainModal({
   onClose: () => void;
 }) {
   const { t } = useT();
+  const { cls, close } = useModalExit(onClose);
   const [sel, setSel] = useState<string>(
     initialAssetKey && assets.some((a) => a.key === initialAssetKey)
       ? initialAssetKey
@@ -4274,14 +4318,17 @@ function CrossChainModal({
   }
 
   return (
-    <div className="scrim" onClick={onClose}>
-      <div className="modal swap-modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`scrim t-scrim ${cls}`} onClick={close}>
+      <div
+        className={`modal swap-modal t-modal ${cls}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-head">
           <div>
             <div className="modal-title">{t("wallet.bridge")}</div>
             <div className="swap-provider-sub">XFlows · Relay</div>
           </div>
-          <button className="icon-btn bare" onClick={onClose}>
+          <button className="icon-btn bare" onClick={close}>
             <Icon name="close" size={18} />
           </button>
         </div>
@@ -4400,7 +4447,7 @@ function CrossChainModal({
           )}
 
           <div className="swap-footer">
-            <button className="btn btn-ghost swap-footer-btn" onClick={onClose}>
+            <button className="btn btn-ghost swap-footer-btn" onClick={close}>
               {t("wallet.cancel")}
             </button>
             {needsApprove ? (
@@ -4455,6 +4502,7 @@ function SendModal({
   onClose: () => void;
 }) {
   const { t } = useT();
+  const { cls, close } = useModalExit(onClose);
   const accounts = useAccounts();
   const [sel, setSel] = useState<string>(
     initialAssetKey && assets.some((a) => a.key === initialAssetKey)
@@ -4536,7 +4584,7 @@ function SendModal({
     setError(null);
     try {
       await walletSend(asset.chainId, tx);
-      onClose();
+      close();
     } catch (e) {
       setError(errText(e));
       setBusy(false);
@@ -4544,11 +4592,11 @@ function SendModal({
   }
 
   return (
-    <div className="scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`scrim t-scrim ${cls}`} onClick={close}>
+      <div className={`modal t-modal ${cls}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title">{t("wallet.send")}</div>
-          <button className="icon-btn bare" onClick={onClose}>
+          <button className="icon-btn bare" onClick={close}>
             <Icon name="close" size={18} />
           </button>
         </div>
@@ -4640,7 +4688,7 @@ function SendModal({
                 <Icon name="info" size={15} /> {t("wallet.sendApprovalHint")}
               </div>
               <div className="add-acts">
-                <button className="btn btn-ghost btn-sm" onClick={onClose}>
+                <button className="btn btn-ghost btn-sm" onClick={close}>
                   {t("wallet.cancel")}
                 </button>
                 <button

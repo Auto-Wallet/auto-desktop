@@ -4,6 +4,7 @@ import mascot from "../assets/mascot.png";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
 import { LedgerList, useLedgerScan } from "../lib/LedgerPicker";
+import { useSegPill, useShake } from "../lib/transitions";
 import {
   createVault,
   importPrivateKey,
@@ -106,16 +107,19 @@ function PasswordField({
   placeholder,
   autoFocus,
   onEnter,
+  shakeRef,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   autoFocus?: boolean;
   onEnter?: () => void;
+  /** Attach to make this field shake when the submit it drives fails. */
+  shakeRef?: React.Ref<HTMLDivElement>;
 }) {
   const [show, setShow] = useState(false);
   return (
-    <div className="lock-input-wrap">
+    <div className="lock-input-wrap t-input" ref={shakeRef}>
       <input
         className="input"
         type={show ? "text" : "password"}
@@ -142,10 +146,19 @@ function CreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: (m: 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const score = pwScore(pw);
+  // Shake whichever field is actually at fault.
+  const pwShake = useShake<HTMLDivElement>();
+  const confirmShake = useShake<HTMLDivElement>();
 
   async function submit() {
-    if (pw.length < 8) return setError(t("lock.errShort"));
-    if (pw !== confirm) return setError(t("lock.errMatch"));
+    if (pw.length < 8) {
+      pwShake.shake();
+      return setError(t("lock.errShort"));
+    }
+    if (pw !== confirm) {
+      confirmShake.shake();
+      return setError(t("lock.errMatch"));
+    }
     setBusy(true);
     setError(null);
     try {
@@ -154,6 +167,7 @@ function CreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: (m: 
     } catch (e) {
       setError(errText(e));
       setBusy(false);
+      pwShake.shake();
     }
   }
 
@@ -170,6 +184,7 @@ function CreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: (m: 
           }}
           placeholder={t("lock.min8")}
           autoFocus
+          shakeRef={pwShake.ref}
         />
         <div className={`pw-strength s${score}`}>
           <i />
@@ -188,6 +203,7 @@ function CreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: (m: 
           }}
           placeholder={t("lock.confirm")}
           onEnter={submit}
+          shakeRef={confirmShake.ref}
         />
       </div>
       {error && (
@@ -208,12 +224,15 @@ function CreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: (m: 
 function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
   const { t } = useT();
   const [tab, setTab] = useState<"phrase" | "privkey">("phrase");
+  const segRef = useSegPill<HTMLDivElement>(tab);
   const [phrase, setPhrase] = useState("");
   const [privkey, setPrivkey] = useState("");
   const [pw, setPw] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const pwShake = useShake<HTMLDivElement>();
+  const confirmShake = useShake<HTMLDivElement>();
 
   async function submit() {
     if (tab === "phrase") {
@@ -223,8 +242,14 @@ function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
       const body = privkey.trim().replace(/^0x/i, "");
       if (!/^[0-9a-fA-F]{64}$/.test(body)) return setError(t("lock.errPrivkey"));
     }
-    if (pw.length < 8) return setError(t("lock.errShort"));
-    if (pw !== confirm) return setError(t("lock.errMatch"));
+    if (pw.length < 8) {
+      pwShake.shake();
+      return setError(t("lock.errShort"));
+    }
+    if (pw !== confirm) {
+      confirmShake.shake();
+      return setError(t("lock.errMatch"));
+    }
     setBusy(true);
     setError(null);
     try {
@@ -234,13 +259,15 @@ function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
     } catch (e) {
       setError(errText(e));
       setBusy(false);
+      pwShake.shake();
     }
   }
 
   return (
     <div className="lock-body">
       <div className="lock-h">{t("lock.optImport")}</div>
-      <div className="seg lock-seg">
+      <div className="seg lock-seg" ref={segRef}>
+        <span className="t-tabs-pill" aria-hidden="true" />
         <button className={tab === "phrase" ? "on" : ""} onClick={() => setTab("phrase")}>
           {t("lock.importTab.phrase")}
         </button>
@@ -283,7 +310,7 @@ function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
 
       <div className="field">
         <label className="field-label">{t("lock.newPassword")}</label>
-        <PasswordField value={pw} onChange={(v) => { setPw(v); setError(null); }} placeholder={t("lock.min8")} />
+        <PasswordField value={pw} onChange={(v) => { setPw(v); setError(null); }} placeholder={t("lock.min8")} shakeRef={pwShake.ref} />
       </div>
       <div className="field">
         <label className="field-label">{t("lock.confirm")}</label>
@@ -292,6 +319,7 @@ function ImportForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
           onChange={(v) => { setConfirm(v); setError(null); }}
           placeholder={t("lock.confirm")}
           onEnter={submit}
+          shakeRef={confirmShake.ref}
         />
       </div>
       {error && (
@@ -405,6 +433,9 @@ function UnlockForm({ onDone, onForgot }: { onDone: () => void; onForgot: () => 
   const [pw, setPw] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Shake on every rejection, not just the first — the message is identical
+  // each time, so React state alone would never re-trigger it.
+  const { ref: pwShakeRef, shake } = useShake<HTMLDivElement>();
 
   async function submit() {
     setBusy(true);
@@ -415,6 +446,7 @@ function UnlockForm({ onDone, onForgot }: { onDone: () => void; onForgot: () => 
     } catch (e) {
       setError(errText(e));
       setBusy(false);
+      shake();
     }
   }
 
@@ -422,7 +454,7 @@ function UnlockForm({ onDone, onForgot }: { onDone: () => void; onForgot: () => 
     <div className="lock-body">
       <div className="field">
         <label className="field-label">{t("lock.password")}</label>
-        <PasswordField value={pw} onChange={(v) => { setPw(v); setError(null); }} placeholder={t("lock.password")} autoFocus onEnter={submit} />
+        <PasswordField value={pw} onChange={(v) => { setPw(v); setError(null); }} placeholder={t("lock.password")} autoFocus onEnter={submit} shakeRef={pwShakeRef} />
       </div>
       {error && (
         <div className="lock-err">

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { openExternalUrl } from "./lib/platform";
 import type { ToastKind } from "./lib/toast";
+import { motionMs, useEnterExit } from "./lib/transitions";
 
 type OverlayToast = {
   id: string;
@@ -40,29 +41,40 @@ export default function ToastOverlayView() {
 
   return (
     <div className="toast-overlay-root">
-      {toasts.map((t) => {
-        const content = (
-          <>
-            <span className="tdot" />
-            <span className="toast-msg">{t.msg}</span>
-            {t.actionLabel && <span className="toast-action">{t.actionLabel}</span>}
-          </>
-        );
-        return t.actionUrl ? (
-          <button
-            key={t.id}
-            type="button"
-            className={`toast ${t.kind}${t.card ? " card" : ""} actionable`}
-            onClick={() => void openExternalUrl(t.actionUrl!)}
-          >
-            {content}
-          </button>
-        ) : (
-          <div key={t.id} className={`toast ${t.kind}${t.card ? " card" : ""}`}>
-            {content}
-          </div>
-        );
-      })}
+      {toasts.map((t) => (
+        <OverlayToastItem key={t.id} t={t} />
+      ))}
     </div>
+  );
+}
+
+/**
+ * The overlay mirrors the shell's toasts into a native child webview, so it
+ * only ever learns about a toast that already exists — it plays the rise-in
+ * on mount. Removal is driven by the next broadcast, so there is no leaving
+ * state to animate here.
+ */
+function OverlayToastItem({ t }: { t: OverlayToast }) {
+  const { cls } = useEnterExit(true, motionMs("--toast-close", 250));
+  const base = `toast t-toast${cls === "is-open" ? " is-open" : ""} ${t.kind}${
+    t.card ? " card" : ""
+  }`;
+  const content = (
+    <>
+      <span className="tdot" />
+      <span className="toast-msg">{t.msg}</span>
+      {t.actionLabel && <span className="toast-action">{t.actionLabel}</span>}
+    </>
+  );
+  return t.actionUrl ? (
+    <button
+      type="button"
+      className={`${base} actionable`}
+      onClick={() => void openExternalUrl(t.actionUrl!)}
+    >
+      {content}
+    </button>
+  ) : (
+    <div className={base}>{content}</div>
   );
 }

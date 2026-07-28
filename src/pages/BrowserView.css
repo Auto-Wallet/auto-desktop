@@ -201,7 +201,6 @@
   border-radius: var(--r-lg);
   box-shadow: var(--sh-lg);
   padding: 6px;
-  animation: pop 0.16s ease;
 }
 .chain-picker {
   display: flex;

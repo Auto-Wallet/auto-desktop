@@ -6,6 +6,7 @@ import { Avatar } from "./lib/ui";
 import { useT, type TFn } from "./lib/i18n";
 import { formatUnits, fmtUnitsDisplay, parseUnits, shortAddress, toHexQuantity } from "./lib/format";
 import { isTauri } from "./lib/platform";
+import { useSegPill } from "./lib/transitions";
 import { rpc } from "./lib/rpc";
 import { simulateTx, type SimulationPreview } from "./lib/simulation";
 import {
@@ -525,13 +526,15 @@ function MetaRow({
 }) {
   const hasData = !!tx.data && tx.data !== "0x" && tx.data.length > 2;
   const dataBytes = hasData ? tx.data.replace(/^0x/, "").length / 2 : 0;
+  const segRef = useSegPill<HTMLDivElement>(view, ".apv-seg-btn.on");
   return (
     <div className="apv-meta">
       <span className="apv-tag mono">Gas {toBigintSafe(tx.gas)}</span>
       <span className="apv-tag mono">Nonce {toBigintSafe(tx.nonce)}</span>
       {hasData && <span className="apv-tag mono">{t("approval.dataBytes", { n: dataBytes })}</span>}
       <span className="apv-meta-spacer" />
-      <div className="apv-seg">
+      <div className="apv-seg" ref={segRef}>
+        <span className="t-tabs-pill" aria-hidden="true" />
         {(["basic", "json", "hex"] as const).map((v) => (
           <button
             key={v}

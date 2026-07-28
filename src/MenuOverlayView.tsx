@@ -11,6 +11,7 @@ import { Icon } from "./lib/icons";
 import { ChainIcon } from "./lib/ChainIcon";
 import { filterChains } from "./lib/chainSearch";
 import { useT } from "./lib/i18n";
+import { useEnterExit, useIconSwap } from "./lib/transitions";
 
 // The interactive twin of ToastOverlayView: renders the browser top-bar dropdown
 // menus (account / chain switcher) inside the transparent full-window
@@ -27,6 +28,9 @@ function post(action: MenuOverlayAction) {
 
 export default function MenuOverlayView() {
   const [menu, setMenu] = useState<MenuOverlayPayload | null>(null);
+  // The shell tears this webview down to dismiss the menu, so only the open
+  // half of the dropdown transition ever runs here.
+  const { cls: openCls } = useEnterExit(!!menu, 0);
 
   useEffect(() => {
     document.body.classList.add("menu-overlay-body");
@@ -71,7 +75,8 @@ export default function MenuOverlayView() {
   return (
     <div className="menu-overlay-root" onMouseDown={() => post({ type: "dismiss" })}>
       <div
-        className={`chain-menu menu-overlay-menu${menu.kind === "account" ? " acct-pop scroll" : " chain-picker"}`}
+        data-origin="top-right"
+        className={`chain-menu menu-overlay-menu t-dropdown ${openCls}${menu.kind === "account" ? " acct-pop scroll" : " chain-picker"}`}
         style={{
           top: menu.anchor.top,
           right: menu.anchor.right,
@@ -136,6 +141,32 @@ function DappDialog({ dialog }: { dialog: Extract<MenuOverlayPayload, { kind: "d
   );
 }
 
+function OverlayCopyButton({ title, onCopy }: { title: string; onCopy: () => void }) {
+  const { state, fire } = useIconSwap();
+  return (
+    <button
+      type="button"
+      className="acct-copy"
+      title={title}
+      aria-label={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        fire();
+        onCopy();
+      }}
+    >
+      <span className="t-icon-swap" data-state={state}>
+        <span className="t-icon" data-icon="a">
+          <Icon name="copy" size={14} />
+        </span>
+        <span className="t-icon" data-icon="b">
+          <Icon name="check" size={14} />
+        </span>
+      </span>
+    </button>
+  );
+}
+
 // Markup mirrors AcctChip's in-shell dropdown (BrowserView.tsx) so both render
 // identically from the same CSS.
 function AcctMenu({ menu }: { menu: Extract<MenuOverlayPayload, { kind: "account" }> }) {
@@ -160,18 +191,12 @@ function AcctMenu({ menu }: { menu: Extract<MenuOverlayPayload, { kind: "account
             <span className="l">{a.label}</span>
             <span className="a">{shortAddress(a.address, 8, 6)}</span>
           </span>
-          <button
-            type="button"
-            className="acct-copy"
+          {/* The shell owns the clipboard here, so this button confirms on its
+              own instead of going through lib/ui's CopyButton. */}
+          <OverlayCopyButton
             title={menu.copyTitle}
-            aria-label={menu.copyTitle}
-            onClick={(e) => {
-              e.stopPropagation();
-              post({ type: "copy-address", address: a.address });
-            }}
-          >
-            <Icon name="copy" size={14} />
-          </button>
+            onCopy={() => post({ type: "copy-address", address: a.address })}
+          />
           {isActive(a.address) && (
             <span className="check">
               <Icon name="check" size={15} />

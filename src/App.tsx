@@ -25,7 +25,7 @@ import { useT } from "./lib/i18n";
 import { Icon } from "./lib/icons";
 import { setThemePref, useEffectiveTheme } from "./lib/theme";
 import { shortAddress } from "./lib/format";
-import { ToastHost, DappAvatar } from "./lib/ui";
+import { ConfirmHost, ToastHost, DappAvatar } from "./lib/ui";
 import { toast, useToasts } from "./lib/toast";
 import {
   loadActivity,
@@ -283,6 +283,7 @@ function App() {
       <>
         <LockScreen onDone={() => setSessionUnlocked(true)} />
         <ToastHost />
+        <ConfirmHost />
       </>
     );
   }
@@ -317,6 +318,7 @@ function App() {
       </main>
 
       <ToastHost />
+      <ConfirmHost />
       <NativeToastOverlay active={page === "browser"} />
     </div>
   );

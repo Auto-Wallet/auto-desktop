@@ -1,4 +1,5 @@
 import { Icon } from "./lib/icons";
+import { useSegPill } from "./lib/transitions";
 
 export function SidebarFooter({
   collapsed,
@@ -9,9 +10,12 @@ export function SidebarFooter({
   theme: "light" | "dark";
   onThemeChange: (theme: "light" | "dark") => void;
 }) {
+  // The bar turns vertical when the sidebar collapses, so re-measure on both.
+  const segRef = useSegPill<HTMLDivElement>(`${theme}:${collapsed}`);
   return (
     <div className={`side-foot${collapsed ? " collapsed" : ""}`}>
-      <div className="theme-seg">
+      <div className="theme-seg" ref={segRef}>
+        <span className="t-tabs-pill" aria-hidden="true" />
         <button
           className={theme === "light" ? "on" : ""}
           title="Light"

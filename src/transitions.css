@@ -1,0 +1,685 @@
+/* ============================================================
+   AutoDesktop — motion layer (transitions.dev).
+   Imported LAST in main.tsx, after the page stylesheets that
+   arrive through the view imports, so the `t-*` snippets and the
+   press layer win the single-class ties they share with them.
+
+   Structure:
+     1. the universal :root motion-token block (verbatim)
+     2. one verbatim block per installed transition
+     3. an "adapters" section that maps the snippets onto this
+        app's existing class names (.seg, .toggle, .hero-amt, …)
+
+   Every snippet keeps its @media (prefers-reduced-motion: reduce)
+   guard — do not strip them.
+   ============================================================ */
+
+/* ── 1. transitions.dev — universal :root install ────────────── */
+:root {
+  /* ── Motion tokens — shared scale ──────────────────────────────
+     Reference these with var(--…) anywhere in your project. The
+     transitions below ship literal values so each snippet works on
+     its own; `transitions refine` maps hardcoded values back to
+     these tokens. */
+  /* Durations */
+  --duration-stagger: 40ms;  /* per-item stagger offset */
+  --duration-micro: 80ms;  /* tooltip/path delay, shake segment, large stagger */
+  --duration-quick: 150ms;  /* modal/dropdown close, text swap, tooltip appear */
+  --duration-fast: 250ms;  /* icon swap, dropdown/modal open, tabs sliding, page slide */
+  --duration-medium: 350ms;  /* panel close, toast close */
+  --duration-slow: 400ms;  /* panel open, skeleton content reveal, input clear */
+  --duration-very-slow: 500ms;  /* emphasis moments, badge appear, text reveal, success check */
+  /* Easings */
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);  /* modal/dropdown/panel open + close, page slide, resize, position change */
+  --ease-in-out: ease-in-out;  /* icon swap, text swap, text reveal, skeleton reveal */
+  --ease-out: ease-out;  /* tooltip open / close */
+  --ease-linear: linear;  /* shimmer, skeleton pulse, spinner */
+  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);  /* badge pop open */
+  --ease-bounce-strong: cubic-bezier(0.34, 3.85, 0.64, 1);  /* bouncy hover-out (avatar return) */
+  /* Distances */
+  --distance-micro: 4px;  /* text swap */
+  --distance-small: 6px;  /* error shake (small segment) */
+  --distance-base: 8px;  /* badge diagonal reveal, page slide, error shake (large segment) */
+  --distance-medium: 12px;  /* text reveal */
+  --distance-large: 30px;  /* check badge appear */
+  /* Scales */
+  --scale-large: 0.96;  /* modal open / close */
+  --scale-medium: 0.97;  /* dropdown open */
+  --scale-small: 0.98;  /* tooltip open */
+  --scale-tiny: 0.99;  /* dropdown close */
+  /* Blur */
+  --blur-small: 2px;  /* panel reveal, icon swap, text swap, skeleton reveal, number pop-in */
+  --blur-medium: 3px;  /* page slide, text reveal */
+  --blur-large: 8px;  /* success check open */
+
+  /* Avatar group hover */
+  --avatar-lift: -4px;
+  --avatar-dur: 320ms;
+  --avatar-scale: 1.05;
+  --avatar-falloff: 0.45;
+  --avatar-ease-in: cubic-bezier(0.22, 1, 0.36, 1);
+  --avatar-ease-out: cubic-bezier(0.34, 3.85, 0.64, 1);
+  /* Icon swap */
+  --icon-swap-dur: 250ms;
+  --icon-swap-blur: 2px;
+  --icon-swap-start-scale: 0.25;
+  --icon-swap-ease: ease-in-out;
+  /* Menu dropdown */
+  --dropdown-open-dur: 250ms;
+  --dropdown-close-dur: 150ms;
+  --dropdown-pre-scale: 0.97;
+  --dropdown-closing-scale: 0.99;
+  --dropdown-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Modal open / close */
+  --modal-open-dur: 250ms;
+  --modal-close-dur: 150ms;
+  --modal-scale: 0.96;
+  --modal-scale-close: 0.96;
+  --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Error state shake */
+  --shake-distance: 6px;
+  --shake-overshoot: 4px;
+  --shake-dur-a: 80ms;
+  --shake-dur-b: 60ms;
+  --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --revert-hold: 3000ms;
+  --revert-dur: 280ms;
+  /* Tabs sliding */
+  --tabs-dur: 250ms;
+  --tabs-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --tabs-text-muted: rgba(15, 15, 15, 0.8);
+  --tabs-text-active: #0f0f0f;
+  --tabs-bar-bg: #f1f1f1;
+  --tabs-pill-bg: #ffffff;
+  /* Toast open / close */
+  --toast-open: 350ms;
+  --toast-close: 250ms;
+  --toast-distance: 16px;
+  --toast-blur: 2px;
+  --toast-scale: 0.97;
+  --toast-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Toggle */
+  --toggle-dur: 350ms;
+  --toggle-travel: 14.66px;
+  --toggle-ov1: 1px;
+  --toggle-ov2: 0px;
+  --toggle-track: 0ms;
+  --toggle-ease: cubic-bezier(0.34, 1.35, 0.64, 1);
+}
+
+/* ── 2a. Menu dropdown ───────────────────────────────────────── */
+.t-dropdown {
+  transform-origin: top left;
+  transform: scale(var(--dropdown-pre-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--dropdown-open-dur) var(--dropdown-ease),
+    opacity   var(--dropdown-open-dur) var(--dropdown-ease);
+  will-change: transform, opacity;
+}
+.t-dropdown[data-origin="top-right"]     { transform-origin: top right; }
+.t-dropdown[data-origin="top-center"]    { transform-origin: top center; }
+.t-dropdown[data-origin="bottom-left"]   { transform-origin: bottom left; }
+.t-dropdown[data-origin="bottom-center"] { transform-origin: bottom center; }
+.t-dropdown[data-origin="bottom-right"]  { transform-origin: bottom right; }
+
+.t-dropdown.is-open {
+  transform: scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+.t-dropdown.is-closing {
+  transform: scale(var(--dropdown-closing-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--dropdown-close-dur) var(--dropdown-ease),
+    opacity   var(--dropdown-close-dur) var(--dropdown-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-dropdown { transition: none !important; }
+}
+
+/* ── 2b. Modal open / close ──────────────────────────────────── */
+.t-modal {
+  transform-origin: center;
+  transform: scale(var(--modal-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    opacity   var(--modal-open-dur) var(--modal-ease);
+  will-change: transform, opacity;
+}
+.t-modal.is-open {
+  transform: scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+.t-modal.is-closing {
+  transform: scale(var(--modal-scale-close));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--modal-close-dur) var(--modal-ease),
+    opacity   var(--modal-close-dur) var(--modal-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-modal { transition: none !important; }
+}
+
+/* ── 2c. Avatar group hover ──────────────────────────────────── */
+/* Hover-spring transition only — bring your own avatar/chip
+   styling (size, shape, border, stacking, background). */
+.t-avatar {
+  transform-origin: center;
+  /* translateY before scale so scale doesn't amplify the lift offset. */
+  transform:
+    translateY(var(--shift, 0px))
+    scale(var(--scale-active, 1));
+  transition: transform var(--avatar-dur) var(--avatar-ease-in);
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-avatar { transition: none !important; transform: none !important; }
+}
+
+/* ── 2d. Tabs sliding ────────────────────────────────────────── */
+/* The bar is just a flex container with padding for the pill
+   to sit inside. Tabs sit on z-index: 1, the pill on z-index: 0,
+   so labels read above the pill background. */
+.t-tabs {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 48px;
+  background: var(--tabs-bar-bg);
+}
+.t-tab {
+  position: relative;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  height: 30px;
+  padding: 4px 12px;
+  color: var(--tabs-text-muted);
+  cursor: pointer;
+  border-radius: 48px;
+  z-index: 1;
+  transition: color var(--tabs-dur) var(--tabs-ease);
+}
+.t-tab:not([aria-selected="true"]):hover,
+.t-tab[aria-selected="true"] {
+  color: var(--tabs-text-active);
+}
+
+/* The pill: width + transform are written inline by JS so
+   the transition tweens between the previous and next
+   measured positions. */
+.t-tabs-pill {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  height: 30px;
+  width: 0;
+  background: var(--tabs-pill-bg);
+  border-radius: 48px;
+  transform: translateX(0);
+  transition:
+    transform var(--tabs-dur) var(--tabs-ease),
+    width     var(--tabs-dur) var(--tabs-ease);
+  will-change: transform, width;
+  z-index: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-tabs-pill, .t-tab { transition: none !important; }
+}
+
+/* ── 2e. Error state shake ───────────────────────────────────── */
+/* Border-color tween. Define your input's default / focused
+   / error border-color in your own component CSS — this rule
+   only owns the interpolation. Use a constant border-width
+   across states so the tween never shifts inner content. */
+.t-input {
+  transition: border-color 150ms ease-out;
+  will-change: transform;
+}
+.t-input.is-error {
+  /* Error border auto-reverts on the hold timer, so the
+     fade-out uses the slower revert duration (matches the
+     message fade). */
+  transition: border-color var(--revert-dur, 280ms) ease-out;
+}
+
+/* Error message reveal. Visibility is delayed by --revert-dur
+   on hide so the message stays painted for the full opacity
+   fade-out. Entering .is-error drops the delay to 0 so the
+   message becomes visible immediately. */
+.t-error-msg {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity    var(--revert-dur, 280ms) ease-out,
+    visibility 0s linear var(--revert-dur, 280ms);
+}
+.t-input-wrap.is-error .t-error-msg {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity    var(--revert-dur, 280ms) ease-out,
+    visibility 0s linear 0s;
+}
+
+/* Multi-segment keyframe with per-stop easing so each leg
+   of the shake follows its own cubic-bezier independently.
+   %-stops are cumulative durations as a fraction of the
+   total (80, 60, 80, 60 = 280ms): 28.57%, 57.14%, 78.57%,
+   100%. Recompute if any segment duration changes. */
+.t-input.is-shaking {
+  animation: t-input-shake calc(
+      var(--shake-dur-a) * 2 + var(--shake-dur-b) * 2
+    ) linear;
+}
+@keyframes t-input-shake {
+  0%      { transform: translateX(0);                                 animation-timing-function: var(--shake-ease); }
+  28.57%  { transform: translateX(var(--shake-distance));             animation-timing-function: var(--shake-ease); }
+  57.14%  { transform: translateX(calc(var(--shake-distance) * -1)); animation-timing-function: var(--shake-ease); }
+  78.57%  { transform: translateX(var(--shake-overshoot));            animation-timing-function: var(--shake-ease); }
+  100%    { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-input { animation: none !important; transform: none !important; }
+}
+
+/* ── 2f. Toast open / close ──────────────────────────────────── */
+.t-toast {
+  opacity: 0;
+  transform: translateY(var(--toast-distance)) scale(var(--toast-scale));
+  filter: blur(var(--toast-blur));
+  will-change: transform, opacity, filter;
+  transition:
+    opacity var(--toast-close) var(--toast-ease),
+    transform var(--toast-close) var(--toast-ease),
+    filter var(--toast-close) var(--toast-ease);
+}
+.t-toast.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  transition:
+    opacity var(--toast-open) var(--toast-ease),
+    transform var(--toast-open) var(--toast-ease),
+    filter var(--toast-open) var(--toast-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-toast { transition: none !important; }
+}
+
+/* ── 2g. Toggle ──────────────────────────────────────────────── */
+.t-toggle { transition: background var(--toggle-track) var(--toggle-ease); }
+.t-toggle-thumb { translate: 0 0; will-change: translate; }
+.t-toggle[data-on="true"] .t-toggle-thumb { translate: var(--toggle-travel) 0; }
+.t-toggle.is-init[data-on="true"] .t-toggle-thumb { animation: t-toggle-on var(--toggle-dur) var(--toggle-ease) both; }
+.t-toggle.is-init[data-on="false"] .t-toggle-thumb { animation: t-toggle-off var(--toggle-dur) var(--toggle-ease) both; }
+@keyframes t-toggle-on {
+  0% { translate: 0 0; }
+  55% { translate: calc(var(--toggle-travel) + var(--toggle-ov1)) 0; }
+  80% { translate: calc(var(--toggle-travel) - var(--toggle-ov2)) 0; }
+  100% { translate: var(--toggle-travel) 0; }
+}
+@keyframes t-toggle-off {
+  0% { translate: var(--toggle-travel) 0; }
+  55% { translate: calc(0px - var(--toggle-ov1)) 0; }
+  80% { translate: var(--toggle-ov2) 0; }
+  100% { translate: 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-toggle-thumb { animation: none !important; }
+}
+
+/* ── 2h. Icon swap ───────────────────────────────────────────── */
+.t-icon-swap {
+  position: relative;
+  display: inline-grid;
+}
+.t-icon-swap .t-icon {
+  grid-area: 1 / 1;
+  transition:
+    opacity   var(--icon-swap-dur) var(--icon-swap-ease),
+    filter    var(--icon-swap-dur) var(--icon-swap-ease),
+    transform var(--icon-swap-dur) var(--icon-swap-ease);
+  will-change: opacity, filter, transform;
+}
+.t-icon-swap[data-state="a"] .t-icon[data-icon="a"],
+.t-icon-swap[data-state="b"] .t-icon[data-icon="b"] {
+  opacity: 1;
+  filter: blur(0);
+  transform: scale(1);
+}
+.t-icon-swap[data-state="a"] .t-icon[data-icon="b"],
+.t-icon-swap[data-state="b"] .t-icon[data-icon="a"] {
+  opacity: 0;
+  filter: blur(var(--icon-swap-blur));
+  transform: scale(var(--icon-swap-start-scale));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-icon-swap .t-icon { transition: none !important; }
+}
+
+/* ============================================================
+   3. Adapters — map the snippets above onto AutoDesktop's own
+   markup. Nothing here rewrites a snippet; these rules only
+   supply this app's colors, sizes, and anchor points.
+   ============================================================ */
+
+/* ---- Modal scrim: fades with the modal it carries ---- */
+.scrim.t-scrim {
+  animation: none;
+  opacity: 0;
+  transition: opacity var(--modal-open-dur) var(--modal-ease);
+}
+.scrim.t-scrim.is-open {
+  opacity: 1;
+}
+.scrim.t-scrim.is-closing {
+  opacity: 0;
+  transition: opacity var(--modal-close-dur) var(--modal-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .scrim.t-scrim { transition: none !important; }
+}
+
+/* ---- Sliding pill inside this app's segmented controls ----
+   Three bars share the behaviour: .seg (wallet / settings / lock),
+   .apv-seg (approval window) and .theme-seg (sidebar footer).
+
+   Opt-in: only a bar that actually contains a pill drops its
+   per-button background, so any bar without one keeps the old look.
+
+   useSegPill (lib/transitions.tsx) measures the active button and
+   writes transform + width + height inline. `top: 0` hands the whole
+   vertical offset to the transform, and `height` joins the transition
+   list because .theme-seg stacks vertically in a collapsed sidebar. */
+.seg,
+.apv-seg,
+.theme-seg {
+  position: relative;
+}
+.seg.has-pill > button.on,
+.apv-seg.has-pill > .apv-seg-btn.on,
+.theme-seg.has-pill > button.on {
+  background: transparent;
+  box-shadow: none;
+}
+/* The snippet's own .t-tab carries `position: relative; z-index: 1` so labels
+   read above the pill. These bars' buttons are unpositioned, which makes
+   z-index a no-op and lets the pill paint over the active label — give them
+   the same stacking context. */
+.seg > button,
+.apv-seg > .apv-seg-btn,
+.theme-seg > button {
+  position: relative;
+  z-index: 1;
+}
+.seg > .t-tabs-pill,
+.apv-seg > .t-tabs-pill,
+.theme-seg > .t-tabs-pill {
+  top: 0;
+  background: var(--surface);
+  border-radius: var(--r-pill);
+  box-shadow: var(--sh-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
+  transition:
+    transform var(--tabs-dur) var(--tabs-ease),
+    width     var(--tabs-dur) var(--tabs-ease),
+    height    var(--tabs-dur) var(--tabs-ease);
+}
+
+/* ---- Toggle: this app's track is 40px wide with an 18px thumb
+   inset by 3px, so the thumb travels 40 - 3 - 3 - 18 = 16px.
+   The track colour keeps its original 180ms cross-fade, and the
+   press-scale keeps its own tween (the .t-toggle rule above sets
+   `transition: background …`, which would otherwise drop it). ---- */
+.toggle.t-toggle {
+  --toggle-travel: 16px;
+  --toggle-track: 180ms;
+  transition:
+    background-color var(--toggle-track) var(--toggle-ease),
+    transform 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ---- Lock screen error shake: the password wrapper owns the
+   visible border via its inner .input, so shake the wrapper. ---- */
+.lock-input-wrap.t-input {
+  will-change: transform;
+}
+
+/* ============================================================
+   4. Press & hover — the one layer every button in the app
+   shares. Attached to the existing class names rather than to a
+   new `t-*` class so it reaches every button without touching
+   markup: buttons in this app are already .btn / .icon-btn /
+   .chip / .hero-action / a .seg child.
+
+   Direction-aware, like the avatar-group snippet: the press goes
+   down fast on a hard ease-in, and the rest-state rule springs it
+   back on release. The press wins over the hover lift because it
+   is declared last at equal specificity.
+   ============================================================ */
+:root {
+  --press-lift: -2px;
+  --press-scale: 0.94;
+  --press-down-dur: 90ms;
+  --press-up-dur: 340ms;
+  --press-hover-dur: 200ms;
+  --press-ease-down: cubic-bezier(0.4, 0, 1, 1);
+  --press-ease-up: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.btn,
+.icon-btn,
+.chip,
+.hero-eye,
+.dapp-icobtn,
+.cf-select-btn,
+.acct-chip,
+.chain-chip,
+.tab-close,
+.seg > button,
+.apv-seg > .apv-seg-btn,
+.theme-seg > button {
+  transform: translateY(0) scale(1);
+  transition:
+    transform  var(--press-up-dur) var(--press-ease-up),
+    box-shadow var(--press-hover-dur) var(--ease-smooth-out),
+    filter     var(--press-hover-dur) var(--ease-smooth-out),
+    background-color var(--press-hover-dur) var(--ease-smooth-out),
+    border-color     var(--press-hover-dur) var(--ease-smooth-out),
+    color            var(--press-hover-dur) var(--ease-smooth-out);
+  will-change: transform;
+}
+
+.btn:hover:not(:disabled),
+.icon-btn:hover:not(:disabled),
+.chip:hover:not(:disabled),
+.hero-eye:hover:not(:disabled),
+.dapp-icobtn:hover:not(:disabled),
+.cf-select-btn:hover:not(:disabled),
+.acct-chip:hover:not(:disabled),
+.chain-chip:hover:not(:disabled),
+.tab-close:hover:not(:disabled),
+.seg > button:hover:not(:disabled):not(.on),
+.apv-seg > .apv-seg-btn:hover:not(:disabled):not(.on),
+.theme-seg > button:hover:not(:disabled):not(.on) {
+  transform: translateY(var(--press-lift)) scale(1);
+}
+
+.btn:active:not(:disabled),
+.icon-btn:active:not(:disabled),
+.chip:active:not(:disabled),
+.hero-eye:active:not(:disabled),
+.dapp-icobtn:active:not(:disabled),
+.cf-select-btn:active:not(:disabled),
+.acct-chip:active:not(:disabled),
+.chain-chip:active:not(:disabled),
+.tab-close:active:not(:disabled),
+.seg > button:active:not(:disabled),
+.apv-seg > .apv-seg-btn:active:not(:disabled),
+.theme-seg > button:active:not(:disabled) {
+  transform: translateY(0) scale(var(--press-scale));
+  transition-duration: var(--press-down-dur);
+  transition-timing-function: var(--press-ease-down);
+}
+
+/* The lift needs a shadow under it or the button just looks
+   misaligned. Only the filled variants carry one at rest. */
+.btn-primary:hover:not(:disabled),
+.btn-danger:hover:not(:disabled) {
+  box-shadow: var(--sh-md, 0 6px 16px rgba(24, 21, 31, 0.14));
+}
+/* .btn-aurora rests on --sh-brand, which is already deeper than
+   --sh-md; swapping it out on hover would flatten the button, so
+   the lift shadow stacks underneath instead. */
+.btn-aurora:hover:not(:disabled) {
+  box-shadow: var(--sh-brand), var(--sh-md, 0 6px 16px rgba(24, 21, 31, 0.14));
+}
+.btn-ghost:hover:not(:disabled),
+.btn-soft:hover:not(:disabled),
+.icon-btn:hover:not(:disabled),
+.chip:hover:not(:disabled) {
+  box-shadow: var(--sh-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
+}
+
+/* A disabled button shouldn't look like it is waiting to be
+   pressed, so it opts out of the whole layer. */
+.btn:disabled,
+.icon-btn:disabled,
+.chip:disabled {
+  transform: none;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .icon-btn,
+  .chip,
+  .hero-eye,
+  .dapp-icobtn,
+  .cf-select-btn,
+  .acct-chip,
+  .chain-chip,
+  .tab-close,
+  .seg > button,
+  .apv-seg > .apv-seg-btn,
+  .theme-seg > button,
+  .nav-item,
+  .acct-opt,
+  .chain-opt,
+  .chain-pick,
+  .asset-option,
+  .cf-item,
+  .add-opt,
+  .opt {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* ---- Clickable rows and list options. A press-scale on a
+   full-width row warps it rather than reading as a press, so
+   these slide toward the pointer instead and only dip a little
+   on the way down. ---- */
+.nav-item,
+.acct-opt,
+.chain-opt,
+.chain-pick,
+.asset-option,
+.cf-item,
+.add-opt,
+.opt {
+  transform: translateX(0) scale(1);
+  transition:
+    transform  var(--press-up-dur) var(--press-ease-up),
+    background-color var(--press-hover-dur) var(--ease-smooth-out),
+    border-color     var(--press-hover-dur) var(--ease-smooth-out),
+    color            var(--press-hover-dur) var(--ease-smooth-out);
+  will-change: transform;
+}
+.nav-item:hover:not(:disabled),
+.acct-opt:hover:not(:disabled),
+.chain-opt:hover:not(:disabled),
+.chain-pick:hover:not(:disabled),
+.asset-option:hover:not(:disabled),
+.cf-item:hover:not(:disabled),
+.add-opt:hover:not(:disabled),
+.opt:hover:not(:disabled) {
+  transform: translateX(3px) scale(1);
+}
+/* .opt is a full-width card on the lock screen, not a list row inside a
+   surface — it reads better lifting than sliding, but keeps the row's
+   gentler press. */
+.opt:hover:not(:disabled) {
+  transform: translateY(var(--press-lift)) scale(1);
+}
+.nav-item:active:not(:disabled),
+.acct-opt:active:not(:disabled),
+.chain-opt:active:not(:disabled),
+.chain-pick:active:not(:disabled),
+.asset-option:active:not(:disabled),
+.cf-item:active:not(:disabled),
+.add-opt:active:not(:disabled),
+.opt:active:not(:disabled) {
+  transform: translateX(3px) scale(0.985);
+  transition-duration: var(--press-down-dur);
+  transition-timing-function: var(--press-ease-down);
+}
+/* Matches the lift above: .opt presses straight down, not sideways. */
+.opt:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+}
+
+/* ---- Hero action row: the three primary actions are a
+   horizontal stack, so they get the avatar-group comb — hovering
+   one lifts it and nudges its neighbours with a falloff, and the
+   whole row springs back on leave.
+
+   The snippet owns `transform` through --shift / --scale-active,
+   so the press rides the same variables instead of writing a
+   second transform that would compose with it. The group's JS
+   sets transition-timing-function inline, which outranks CSS, so
+   only the duration is shortened for the press. ---- */
+.hero-action.t-avatar {
+  /* .t-avatar declares `transition: transform …`, which would drop the row's
+     own hover tint; re-list the colours it animates. */
+  transition:
+    transform var(--avatar-dur) var(--avatar-ease-in),
+    background-color var(--press-hover-dur) var(--ease-smooth-out),
+    border-color     var(--press-hover-dur) var(--ease-smooth-out);
+}
+.hero-action.t-avatar:active:not(:disabled) {
+  --scale-active: var(--press-scale);
+  transition-duration: var(--press-down-dur);
+}
+
+/* ---- Refresh: one turn per click, replayed by useSpin. ---- */
+@keyframes t-spin {
+  to { transform: rotate(360deg); }
+}
+.t-spin.is-spinning {
+  animation: t-spin var(--duration-very-slow) var(--ease-smooth-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-spin.is-spinning { animation: none !important; }
+}
