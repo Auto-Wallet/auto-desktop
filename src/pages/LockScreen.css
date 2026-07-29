@@ -55,12 +55,10 @@
 }
 .lock-mark {
   position: relative;
-  width: 60px;
-  height: 60px;
-  border-radius: 18px;
-  box-shadow: var(--sh-md);
-  outline: 1px solid var(--img-outline);
-  outline-offset: -1px;
+  width: 68px;
+  height: 68px;
+  object-fit: contain;
+  filter: drop-shadow(0 5px 10px rgba(58, 45, 194, 0.24));
 }
 .lock-brand h1 {
   font-family: var(--font-display);

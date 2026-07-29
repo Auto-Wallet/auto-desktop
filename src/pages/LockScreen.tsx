@@ -1,6 +1,6 @@
 import { useState } from "react";
 import "./LockScreen.css";
-import mascot from "../assets/mascot.png";
+import logoMark from "../assets/auto-desktop-mark.png";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
 import { LedgerList, useLedgerScan } from "../lib/LedgerPicker";
@@ -36,7 +36,7 @@ export default function LockScreen({ onDone }: { onDone: () => void }) {
         <div className="lock-brand">
           <div className="lock-mark-wrap">
             <span className="ring" />
-            <img className="lock-mark" src={mascot} alt="" />
+            <img className="lock-mark" src={logoMark} alt="" />
           </div>
           <h1>AutoDesktop</h1>
           <p className="lock-tag">{t("lock.tagline")}</p>

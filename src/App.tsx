@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import mascot from "./assets/mascot.png";
+import logoMark from "./assets/auto-desktop-mark.png";
+import logoWordmark from "./assets/auto-desktop-wordmark.png";
 import WalletPage from "./pages/WalletPage";
 import DappsPage from "./pages/DappsPage";
 import BrowserView from "./pages/BrowserView";
@@ -411,15 +413,14 @@ function Sidebar({
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
       <div className="side-top">
         <div className="brand">
-          <img className="brand-mark" src={mascot} alt="" />
-          {!collapsed && (
-            <span className="brand-name">
-              Auto<b>Desktop</b>
-            </span>
-          )}
+          <img
+            className={collapsed ? "brand-mark" : "brand-wordmark"}
+            src={collapsed ? logoMark : logoWordmark}
+            alt="AutoDesktop"
+          />
         </div>
         <button
-          className="icon-btn bare"
+          className="icon-btn bare side-toggle"
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           onClick={onToggle}
           style={collapsed ? { alignSelf: "center" } : undefined}

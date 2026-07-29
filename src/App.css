@@ -57,6 +57,7 @@
 }
 
 .side-top {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -65,34 +66,34 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 6px 14px;
+  padding: 0 2px 10px;
   min-width: 0;
   flex: 1;
 }
-.brand-mark {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+.brand-wordmark {
+  width: 138px;
+  height: auto;
   flex: none;
-  box-shadow: var(--sh-sm), inset 0 0 0 1px rgba(0, 0, 0, 0.04);
-  object-fit: cover;
-  outline: 1px solid var(--img-outline);
-  outline-offset: -1px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(58, 45, 194, 0.18));
 }
-.brand-name {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 17px;
-  letter-spacing: -0.02em;
-  color: var(--ink);
-  white-space: nowrap;
+.sidebar:not(.collapsed) .side-top {
+  justify-content: center;
+  gap: 6px;
+  padding: 2px 0 10px;
 }
-.brand-name b {
-  color: var(--brand-ink);
-  font-weight: 700;
+.sidebar:not(.collapsed) .brand {
+  flex: none;
+  justify-content: center;
+  padding: 0;
 }
-.sidebar.collapsed .brand-name,
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(58, 45, 194, 0.22));
+}
 .sidebar.collapsed .nav-label,
 .sidebar.collapsed .nav-section,
 .sidebar.collapsed .tab-name,
