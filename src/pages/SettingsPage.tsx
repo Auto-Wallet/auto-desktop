@@ -1,6 +1,6 @@
 import { useState } from "react";
 import "./SettingsPage.css";
-import mascot from "../assets/mascot.png";
+import logoMark from "../assets/auto-desktop-mark.png";
 import {
   addChain,
   removeChain,
@@ -421,7 +421,7 @@ export default function SettingsPage() {
             </div>
             <div className="set-card">
               <div className="about-card">
-                <img className="about-mark" src={mascot} alt="" />
+                <img className="about-mark" src={logoMark} alt="" />
                 <div className="about-meta">
                   <div className="about-name">AutoDesktop</div>
                   <div className="about-tag">{t("settings.tagline")}</div>

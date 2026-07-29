@@ -231,13 +231,11 @@ button.set-row:hover {
   padding: 20px;
 }
 .about-mark {
-  width: 60px;
-  height: 60px;
-  border-radius: 16px;
+  width: 64px;
+  height: 64px;
   flex: none;
-  box-shadow: var(--sh-sm);
-  outline: 1px solid var(--img-outline);
-  outline-offset: -1px;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 8px rgba(58, 45, 194, 0.22));
 }
 .about-meta {
   flex: 1;
