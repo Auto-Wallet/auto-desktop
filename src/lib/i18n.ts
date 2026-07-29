@@ -369,6 +369,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dapps.addHint": "Paste a dApp URL in the search box to add it.",
     "dapps.noMatches": "No matches.",
     "dapps.saveQuery": "Save “{query}”",
+    "dapps.refreshIcon": "Refresh icon",
+    "dapps.iconRefreshed": "Icon refreshed",
+    "dapps.iconRefreshFailed": "Couldn't load this site's icon.",
 
     "browser.reload": "Reload",
     "browser.reloaded": "Reloaded",
@@ -832,6 +835,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dapps.addHint": "在搜索框粘贴 dApp 网址即可添加。",
     "dapps.noMatches": "没有匹配结果。",
     "dapps.saveQuery": "保存“{query}”",
+    "dapps.refreshIcon": "刷新图标",
+    "dapps.iconRefreshed": "图标已刷新",
+    "dapps.iconRefreshFailed": "未能加载该网站的图标。",
 
     "browser.reload": "刷新",
     "browser.reloaded": "已刷新",

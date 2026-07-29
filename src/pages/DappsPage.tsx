@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./DappsPage.css";
 import {
   addDapp,
   dappIconOf,
+  faviconOf,
   hostOf,
   isDappUrlInput,
+  refreshDappIcon,
   removeDapp,
   togglePin,
   updateDapp,
@@ -135,6 +137,7 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
   const [name, setName] = useState(dapp.name);
   const [url, setUrl] = useState(dapp.url);
   const [error, setError] = useState<string | null>(null);
+  const [refreshingIconAt, setRefreshingIconAt] = useState<number | null>(null);
 
   function startEdit() {
     setName(dapp.name);
@@ -160,6 +163,12 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
     }
   }
 
+  function refreshIcon() {
+    const refreshAt = Date.now();
+    setRefreshingIconAt(refreshAt);
+    refreshDappIcon(dapp.id, refreshAt);
+  }
+
   return (
     <div className="dapp-card" onClick={() => !editing && onOpen?.(dapp)}>
       <div className="dapp-top">
@@ -175,6 +184,20 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
         </button>
         <div className="dapp-actions">
           <button
+            type="button"
+            className={`dapp-icobtn refresh${refreshingIconAt !== null ? " refreshing" : ""}`}
+            title={t("dapps.refreshIcon")}
+            aria-label={t("dapps.refreshIcon")}
+            disabled={refreshingIconAt !== null}
+            onClick={(e) => {
+              e.stopPropagation();
+              refreshIcon();
+            }}
+          >
+            <Icon name="refresh" size={14} />
+          </button>
+          <button
+            type="button"
             className="dapp-icobtn edit"
             title={t("settings.edit")}
             onClick={(e) => {
@@ -185,6 +208,7 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
             <Icon name="edit" size={14} />
           </button>
           <button
+            type="button"
             className="dapp-icobtn rm"
             title={t("settings.remove")}
             onClick={(e) => {
@@ -197,7 +221,18 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
         </div>
       </div>
 
-      <Favicon dapp={dapp} />
+      <Favicon
+        key={`${dapp.url}:${dapp.iconRefreshAt === undefined ? "default" : dapp.iconRefreshAt}`}
+        dapp={dapp}
+        refreshing={refreshingIconAt !== null && refreshingIconAt === dapp.iconRefreshAt}
+        onRefreshDone={(loaded) => {
+          setRefreshingIconAt(null);
+          toast(
+            t(loaded ? "dapps.iconRefreshed" : "dapps.iconRefreshFailed"),
+            loaded ? "ok" : "warn",
+          );
+        }}
+      />
 
       {editing ? (
         <div className="dapp-edit-form" onClick={(e) => e.stopPropagation()}>
@@ -254,12 +289,63 @@ function DappCard({ dapp, onOpen }: { dapp: Dapp; onOpen?: (d: Dapp) => void }) 
   );
 }
 
-function Favicon({ dapp }: { dapp: Dapp }) {
+function Favicon({
+  dapp,
+  refreshing,
+  onRefreshDone,
+}: {
+  dapp: Dapp;
+  refreshing: boolean;
+  onRefreshDone: (loaded: boolean) => void;
+}) {
   const local = dappIconOf(dapp.url);
-  if (local) {
-    return <img className="dapp-logo" src={local} alt="" />;
+  const remote = faviconOf(dapp.url, dapp.iconRefreshAt);
+  const [source, setSource] = useState<string | undefined>(
+    dapp.iconRefreshAt !== undefined ? remote : local,
+  );
+  const [failed, setFailed] = useState(false);
+  const settled = useRef(false);
+
+  function finishRefresh(loaded: boolean) {
+    if (!refreshing || settled.current) return;
+    settled.current = true;
+    onRefreshDone(loaded);
   }
+
+  useEffect(() => {
+    if (!refreshing) return undefined;
+    const timeout = window.setTimeout(() => {
+      if (local !== undefined) setSource(local);
+      else setFailed(true);
+      finishRefresh(false);
+    }, 10_000);
+    return () => window.clearTimeout(timeout);
+  });
+
+  if (source === undefined || failed) {
+    return <DappAvatar name={dapp.name} size={50} style={{ marginTop: 6 }} />;
+  }
+
   return (
-    <DappAvatar name={dapp.name} size={50} style={{ marginTop: 6 }} />
+    <img
+      className="dapp-logo"
+      src={source}
+      alt=""
+      onLoad={() => {
+        if (source === remote) finishRefresh(true);
+      }}
+      onError={() => {
+        if (source !== remote) {
+          setFailed(true);
+          return;
+        }
+        finishRefresh(false);
+        if (local !== undefined) {
+          setSource(local);
+          return;
+        }
+        setFailed(true);
+      }}
+    />
   );
 }

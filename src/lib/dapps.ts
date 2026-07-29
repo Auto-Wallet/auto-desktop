@@ -10,6 +10,7 @@ export type Dapp = {
   url: string;
   name: string;
   pinned: boolean;
+  iconRefreshAt?: number;
 };
 
 const SEED: Dapp[] = [
@@ -67,9 +68,16 @@ export function hostOf(url: string): string {
   return new URL(url).hostname;
 }
 
-/** Favicon URL for a dApp — DuckDuckGo's icon service, loaded as an <img>. */
-export function faviconOf(url: string): string {
-  return `https://icons.duckduckgo.com/ip3/${hostOf(url)}.ico`;
+/**
+ * The site's conventional favicon URL. A refresh timestamp bypasses WebKit's
+ * cached failure without routing browsing data through a third-party service.
+ */
+export function faviconOf(url: string, refreshAt?: number): string {
+  const favicon = new URL("/favicon.ico", url);
+  if (refreshAt !== undefined) {
+    favicon.searchParams.set("autodesktop-refresh", String(refreshAt));
+  }
+  return favicon.toString();
 }
 
 /**
@@ -175,6 +183,15 @@ export function removeDapp(id: string) {
 
 export function togglePin(id: string) {
   commit(state.map((d) => (d.id === id ? { ...d, pinned: !d.pinned } : d)));
+}
+
+export function refreshDappIcon(id: string, refreshAt: number) {
+  if (!state.some((d) => d.id === id)) {
+    throw new Error(`dApp not found: ${id}`);
+  }
+  commit(
+    state.map((d) => (d.id === id ? { ...d, iconRefreshAt: refreshAt } : d)),
+  );
 }
 
 export function renameDapp(id: string, name: string) {

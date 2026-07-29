@@ -129,14 +129,33 @@
   color: var(--coral);
 }
 .dapp-card .edit,
+.dapp-card .refresh,
 .dapp-card .rm {
   opacity: 0;
 }
 .dapp-card:hover .edit,
+.dapp-card:hover .refresh,
 .dapp-card:hover .rm,
 .dapp-card:focus-within .edit,
+.dapp-card:focus-within .refresh,
 .dapp-card:focus-within .rm {
   opacity: 1;
+}
+.dapp-icobtn.refreshing {
+  opacity: 1;
+}
+.dapp-icobtn.refreshing svg {
+  animation: dapp-icon-refresh-spin 0.75s linear infinite;
+}
+@keyframes dapp-icon-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dapp-icobtn.refreshing svg {
+    animation: none;
+  }
 }
 .dapp-logo {
   width: 50px;
