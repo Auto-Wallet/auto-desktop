@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./DappsPage.css";
 import {
   addDapp,
-  dappIconOf,
+  dappIconSources,
   faviconOf,
   hostOf,
   isDappUrlInput,
@@ -298,12 +298,12 @@ function Favicon({
   refreshing: boolean;
   onRefreshDone: (loaded: boolean) => void;
 }) {
-  const local = dappIconOf(dapp.url);
+  // Same chain the sidebar and URL bar walk (bundled icon, site favicon, letter
+  // avatar); the card adds the refresh button's success/failure reporting.
+  const sources = dappIconSources(dapp.url, dapp.iconRefreshAt);
   const remote = faviconOf(dapp.url, dapp.iconRefreshAt);
-  const [source, setSource] = useState<string | undefined>(
-    dapp.iconRefreshAt !== undefined ? remote : local,
-  );
-  const [failed, setFailed] = useState(false);
+  const [index, setIndex] = useState(0);
+  const source = sources[index];
   const settled = useRef(false);
 
   function finishRefresh(loaded: boolean) {
@@ -313,16 +313,15 @@ function Favicon({
   }
 
   useEffect(() => {
-    if (!refreshing) return undefined;
+    if (!refreshing || source === undefined) return undefined;
     const timeout = window.setTimeout(() => {
-      if (local !== undefined) setSource(local);
-      else setFailed(true);
+      setIndex(index + 1);
       finishRefresh(false);
     }, 10_000);
     return () => window.clearTimeout(timeout);
   });
 
-  if (source === undefined || failed) {
+  if (source === undefined) {
     return <DappAvatar name={dapp.name} size={50} style={{ marginTop: 6 }} />;
   }
 
@@ -335,16 +334,8 @@ function Favicon({
         if (source === remote) finishRefresh(true);
       }}
       onError={() => {
-        if (source !== remote) {
-          setFailed(true);
-          return;
-        }
-        finishRefresh(false);
-        if (local !== undefined) {
-          setSource(local);
-          return;
-        }
-        setFailed(true);
+        if (source === remote) finishRefresh(false);
+        setIndex(index + 1);
       }}
     />
   );

@@ -1,8 +1,9 @@
 // Shared presentational atoms used across the shell, Wallet, and the approval
 // window: the deterministic gradient Avatar and the ToastHost.
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveConfirm, useConfirm, type ConfirmRequest } from "./confirm";
+import { dappIconSources } from "./dapps";
 import { Icon } from "./icons";
 import { useT } from "./i18n";
 import { useToasts, type Toast } from "./toast";
@@ -83,6 +84,51 @@ export function DappAvatar({
     >
       {name.trim().charAt(0).toUpperCase() || "?"}
     </span>
+  );
+}
+
+/**
+ * A dApp's icon, with the same fallback chain everywhere it shows (sidebar tab,
+ * URL bar, loading overlay): bundled icon, then the site's own favicon, then
+ * the letter avatar. Hand-added dApps have no bundled icon, so skipping the
+ * favicon left them all wearing a letter — the bug this component fixes.
+ */
+export function DappIcon({
+  url,
+  name,
+  size = 18,
+  radius,
+  refreshAt,
+  className,
+  style,
+}: {
+  url: string;
+  name: string;
+  size?: number;
+  radius?: number;
+  refreshAt?: number;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const sources = dappIconSources(url, refreshAt);
+  // Keyed by url so switching tabs restarts the chain instead of inheriting the
+  // previous dApp's failures.
+  const [tried, setTried] = useState({ url, count: 0 });
+  const count = tried.url === url ? tried.count : 0;
+  const src = sources[count];
+
+  if (src === undefined) {
+    return <DappAvatar name={name} size={size} radius={radius} style={style} />;
+  }
+
+  return (
+    <img
+      className={className}
+      src={src}
+      alt=""
+      style={style}
+      onError={() => setTried({ url, count: count + 1 })}
+    />
   );
 }
 

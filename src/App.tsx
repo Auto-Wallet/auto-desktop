@@ -9,7 +9,8 @@ import DappsPage from "./pages/DappsPage";
 import BrowserView from "./pages/BrowserView";
 import SettingsPage from "./pages/SettingsPage";
 import LockScreen from "./pages/LockScreen";
-import { dappIconOf, ensureDapp, type Dapp } from "./lib/dapps";
+import { ensureDapp, type Dapp } from "./lib/dapps";
+import { forgetDappLoad } from "./lib/dappLoadState";
 import {
   closeDapp,
   dappLabel,
@@ -27,7 +28,7 @@ import { useT } from "./lib/i18n";
 import { Icon } from "./lib/icons";
 import { setThemePref, useEffectiveTheme } from "./lib/theme";
 import { shortAddress } from "./lib/format";
-import { ConfirmHost, ToastHost, DappAvatar } from "./lib/ui";
+import { ConfirmHost, ToastHost, DappIcon } from "./lib/ui";
 import { toast, useToasts } from "./lib/toast";
 import {
   loadActivity,
@@ -257,6 +258,9 @@ function App() {
 
   function closeTab(id: string) {
     void closeDapp(dappLabel(id));
+    // The webview dies with the tab, so the next open reloads the page and has
+    // to show the loading animation again.
+    forgetDappLoad(dappLabel(id));
     const remaining = tabs.filter((t) => t.id !== id);
     setTabs(remaining);
     if (activeId === id) {
@@ -458,19 +462,14 @@ function Sidebar({
                 title={collapsed ? tab.dapp.name : ""}
                 onClick={() => onOpenTab(tab.id)}
               >
-                {dappIconOf(tab.dapp.url) ? (
-                  <img
-                    className="tab-fav"
-                    src={dappIconOf(tab.dapp.url)}
-                    alt=""
-                  />
-                ) : (
-                  <DappAvatar
-                    name={tab.dapp.name}
-                    size={18}
-                    radius={5}
-                  />
-                )}
+                <DappIcon
+                  className="tab-fav"
+                  url={tab.dapp.url}
+                  name={tab.dapp.name}
+                  refreshAt={tab.dapp.iconRefreshAt}
+                  size={18}
+                  radius={5}
+                />
                 {!collapsed && (
                   <>
                     <span className="tab-name">{tab.dapp.name}</span>

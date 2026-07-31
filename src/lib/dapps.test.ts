@@ -24,12 +24,32 @@ const storage: Storage = {
 };
 Object.defineProperty(globalThis, "localStorage", { value: storage });
 
-const { faviconOf, refreshDappIcon } = await import("./dapps");
+const { dappIconSources, faviconOf, refreshDappIcon } = await import("./dapps");
 
 test("faviconOf requests the site's own root favicon", () => {
   expect(faviconOf("https://example.com/swap")).toBe(
     "https://example.com/favicon.ico",
   );
+});
+
+test("a bundled dApp tries its shipped icon before the site's favicon", () => {
+  expect(dappIconSources("https://app.uniswap.org")).toEqual([
+    "/logos/dapps/uniswap.png",
+    "https://app.uniswap.org/favicon.ico",
+  ]);
+});
+
+test("a hand-added dApp falls back to the site's own favicon, not the letter avatar", () => {
+  expect(dappIconSources("https://debank.com")).toEqual([
+    "https://debank.com/favicon.ico",
+  ]);
+});
+
+test("a manual refresh puts the site's favicon ahead of the bundled icon", () => {
+  expect(dappIconSources("https://app.uniswap.org", 42)).toEqual([
+    "https://app.uniswap.org/favicon.ico?autodesktop-refresh=42",
+    "/logos/dapps/uniswap.png",
+  ]);
 });
 
 test("refreshDappIcon saves a cache-busting timestamp", () => {

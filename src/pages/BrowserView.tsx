@@ -7,12 +7,13 @@ import { setActive, useAccounts, useActiveAccount } from "../lib/accounts";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
 import { useT } from "../lib/i18n";
 import { Icon } from "../lib/icons";
-import { Avatar, CopyButton, DappAvatar } from "../lib/ui";
+import { Avatar, CopyButton, DappIcon } from "../lib/ui";
 import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
 import { filterChains } from "../lib/chainSearch";
 import { useDropdown } from "../lib/transitions";
-import { dappIconOf, hostOf, type Dapp } from "../lib/dapps";
+import { hostOf, type Dapp } from "../lib/dapps";
+import { hasDappLoaded, markDappLoaded } from "../lib/dappLoadState";
 import {
   dappLabel,
   hideDapp,
@@ -21,6 +22,7 @@ import {
   rectOf,
   reloadDapp,
   setDappBounds,
+  showDapp,
 } from "../lib/platform";
 import {
   menuAnchorFor,
@@ -30,8 +32,6 @@ import {
 } from "../lib/menuOverlay";
 
 export type Tab = { id: string; dapp: Dapp };
-
-const loadedDappLabels = new Set<string>();
 
 function reportDappControlError(action: string, label: string, error: unknown) {
   console.error(`[AutoDesktop] ${action} failed for ${label}`, error);
@@ -59,12 +59,12 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   const [url, setUrl] = useState(dapp.url);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [reloading, setReloading] = useState(false);
-  const [dappLoading, setDappLoading] = useState(() => !loadedDappLabels.has(label));
+  const [dappLoading, setDappLoading] = useState(() => !hasDappLoaded(label));
 
   useEffect(() => {
     setCurrentUrl(dapp.url);
     setUrl(dapp.url);
-    setDappLoading(!loadedDappLabels.has(label));
+    setDappLoading(!hasDappLoaded(label));
   }, [dapp.url, label]);
 
   useEffect(() => {
@@ -91,7 +91,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     let unlisten: (() => void) | null = null;
     void listen<{ label: string; url: string }>("dapp-load-finished", (event) => {
       if (event.payload?.label !== label) return;
-      loadedDappLabels.add(label);
+      markDappLoaded(label);
       setCurrentUrl(event.payload.url);
       setUrl(event.payload.url);
       setDappLoading(false);
@@ -121,6 +121,9 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
           reportDappControlError("open_dapp fallback", label, e),
         );
       }
+      // The page never reported a finished load; show whatever it has rather
+      // than leave the user behind the animation forever.
+      void showDapp(label).catch((e) => reportDappControlError("show_dapp fallback", label, e));
       setDappLoading(false);
     }, 20_000);
     return () => window.clearTimeout(timer);
@@ -207,11 +210,14 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
           <span className="lock-ic">
             <Icon name="lock" size={14} />
           </span>
-          {dappIconOf(dapp.url) ? (
-            <img className="url-fav" src={dappIconOf(dapp.url)} alt="" />
-          ) : (
-            <DappAvatar name={dapp.name} size={18} radius={5} />
-          )}
+          <DappIcon
+            className="url-fav"
+            url={dapp.url}
+            name={dapp.name}
+            refreshAt={dapp.iconRefreshAt}
+            size={18}
+            radius={5}
+          />
           <input
             value={url}
             spellCheck={false}
@@ -236,7 +242,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
 
       <section className="browser-content" ref={contentRef}>
         {dappLoading && (
-          <DappLoadingOverlay name={dapp.name} host={hostOf(dapp.url)} label={t("browser.loadingDapp")} />
+          <DappLoadingOverlay dapp={dapp} label={t("browser.loadingDapp")} />
         )}
         {native ? (
           <div className="native-placeholder" />
@@ -248,7 +254,7 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
               src={dapp.url}
               title={dapp.name}
               onLoad={() => {
-                loadedDappLabels.add(label);
+                markDappLoaded(label);
                 setDappLoading(false);
                 setReloading(false);
               }}
@@ -264,28 +270,23 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
   );
 }
 
-function DappLoadingOverlay({
-  name,
-  host,
-  label,
-}: {
-  name: string;
-  host: string;
-  label: string;
-}) {
+function DappLoadingOverlay({ dapp, label }: { dapp: Dapp; label: string }) {
+  const host = hostOf(dapp.url);
   return (
     <div className="dapp-loading" role="status" aria-live="polite">
       <div className="dapp-loading-orbit">
         <span />
-        {dappIconOf(`https://${host}`) ? (
-          <img src={dappIconOf(`https://${host}`)} alt="" />
-        ) : (
-          <DappAvatar name={name} size={34} radius={10} />
-        )}
+        <DappIcon
+          url={dapp.url}
+          name={dapp.name}
+          refreshAt={dapp.iconRefreshAt}
+          size={34}
+          radius={10}
+        />
       </div>
       <div className="dapp-loading-title">{label}</div>
       <div className="dapp-loading-sub">
-        {name} · {host}
+        {dapp.name} · {host}
       </div>
       <div className="dapp-loading-bar">
         <i />

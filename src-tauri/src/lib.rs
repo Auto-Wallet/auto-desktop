@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -2770,6 +2770,8 @@ fn create_dapp_webview<R: Runtime>(
                 payload.url()
             );
             if payload.event() == PageLoadEvent::Finished {
+                // It has a page to draw now, so it may cover the shell.
+                mark_dapp_loaded(webview.label());
                 let should_show =
                     active_dapp_label().lock().unwrap().as_deref() == Some(webview.label());
                 if should_show {
@@ -2792,6 +2794,33 @@ fn create_dapp_webview<R: Runtime>(
             LogicalSize::new(w.max(1.0), h.max(1.0)),
         )
         .map_err(|e| e.to_string())
+}
+
+/// Tab webviews that have finished loading a page at least once.
+fn loaded_dapp_labels() -> &'static Mutex<HashSet<String>> {
+    static LOADED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    LOADED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn mark_dapp_loaded(label: &str) {
+    loaded_dapp_labels().lock().unwrap().insert(label.to_string());
+}
+
+/// Closing a tab destroys its webview, so the next one starts blank again.
+fn forget_dapp_loaded(label: &str) {
+    loaded_dapp_labels().lock().unwrap().remove(label);
+}
+
+/// Whether `open_dapp` may show the tab webview straight away.
+///
+/// A webview that has not painted a page yet draws a blank white rectangle, and
+/// child webviews sit ON TOP of the shell — so showing one too early covers the
+/// shell's loading animation with that blank rect, which is then all the user
+/// sees while the dApp loads. It stays hidden until `on_page_load(Finished)`
+/// shows it (or the shell's 20s timeout re-opens it). A tab that already has its
+/// page must show at once, otherwise switching tabs would flash empty.
+fn show_dapp_on_open(label: &str) -> bool {
+    loaded_dapp_labels().lock().unwrap().contains(label)
 }
 
 /// Open (create-or-show) tab webview `label` over the content rect. Navigates to
@@ -2833,7 +2862,11 @@ async fn open_dapp<R: Runtime>(
     let bounds = last_dapp_bounds(&label).unwrap_or(bounds);
     apply_dapp_bounds(&dapp, bounds)?;
     set_active_dapp_label(label.clone());
-    dapp.show().map_err(|e| e.to_string())?;
+    if show_dapp_on_open(&label) {
+        dapp.show().map_err(|e| e.to_string())?;
+    } else {
+        dapp.hide().map_err(|e| e.to_string())?;
+    }
     println!("[AutoDesktop] dapp webview ready label={label} newly_created={newly_created}");
     Ok(())
 }
@@ -3001,6 +3034,22 @@ fn reload_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), Strin
     Ok(())
 }
 
+/// Show a tab webview whose page never reported a finished load — the shell's
+/// timeout escape hatch. Without it, a page that never fires `Finished` (a dead
+/// host, a redirect loop) would sit behind the loading animation forever, since
+/// `open_dapp` keeps an unloaded webview hidden. Shell-only. Idempotent.
+#[tauri::command]
+fn show_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String> {
+    validate_dapp_label(&label)?;
+    if let Some(dapp) = app.get_webview(&label) {
+        // Whatever it has drawn is now what the user gets; stop hiding it on
+        // later tab switches too.
+        mark_dapp_loaded(&label);
+        dapp.show().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Hide a tab webview (switching to another tab or to Wallet/dApps). Idempotent.
 #[tauri::command]
 fn hide_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String> {
@@ -3020,6 +3069,7 @@ fn close_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String
         dapp.close().map_err(|e| e.to_string())?;
     }
     forget_dapp_bounds(&label);
+    forget_dapp_loaded(&label);
     clear_active_dapp_label(&label);
     Ok(())
 }
@@ -4363,6 +4413,23 @@ fn parse_zerion_positions(data: &Value, chains: &ZerionChainMap) -> (Vec<DefiPos
     (positions, total_usd)
 }
 
+/// An error plus everything that caused it, `": "`-joined.
+///
+/// A bare `{e}` on a reqwest error prints "error sending request for url (…)"
+/// and stops — the part that matters (dns error, connection refused, operation
+/// timed out, tls handshake) sits one level down in the source chain. Without
+/// this, a provider failure in the log is unactionable.
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = err.to_string();
+    let mut cause = err.source();
+    while let Some(e) = cause {
+        out.push_str(": ");
+        out.push_str(&e.to_string());
+        cause = e.source();
+    }
+    out
+}
+
 async fn fetch_zerion_defi_positions(address: &str) -> Result<(Vec<DefiPosition>, f64), String> {
     let key = zerion_api_key().ok_or_else(|| "ZERION_APIKEY is not configured".to_string())?;
     println!("[AutoDesktop] defi Zerion start address={address}");
@@ -4383,12 +4450,12 @@ async fn fetch_zerion_defi_positions(address: &str) -> Result<(Vec<DefiPosition>
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|e| format!("querying Zerion: {e}"))?
+        .map_err(|e| format!("querying Zerion: {}", error_chain(&e)))?
         .error_for_status()
-        .map_err(|e| format!("querying Zerion: {e}"))?
+        .map_err(|e| format!("querying Zerion: {}", error_chain(&e)))?
         .json()
         .await
-        .map_err(|e| format!("reading Zerion response: {e}"))?;
+        .map_err(|e| format!("reading Zerion response: {}", error_chain(&e)))?;
     if let Some(errors) = data.get("errors").and_then(Value::as_array) {
         let msg = errors
             .first()
@@ -4551,12 +4618,12 @@ async fn fetch_debank_defi_positions(address: &str) -> Result<Vec<DefiPosition>,
         .header("AccessKey", key)
         .send()
         .await
-        .map_err(|e| format!("querying DeBank: {e}"))?
+        .map_err(|e| format!("querying DeBank: {}", error_chain(&e)))?
         .error_for_status()
-        .map_err(|e| format!("querying DeBank: {e}"))?
+        .map_err(|e| format!("querying DeBank: {}", error_chain(&e)))?
         .json()
         .await
-        .map_err(|e| format!("reading DeBank response: {e}"))?;
+        .map_err(|e| format!("reading DeBank response: {}", error_chain(&e)))?;
     if let Some(msg) = value_as_string(data.get("error_msg")) {
         return Err(msg);
     }
@@ -5405,7 +5472,11 @@ async fn get_defi_positions<R: Runtime>(
                 println!(
                     "[AutoDesktop] defi fallback source=DeBank address={address} reason=zerion-error error={err}"
                 );
-                let positions = fetch_debank_defi_positions(address).await?;
+                let positions = fetch_debank_defi_positions(address)
+                    .await
+                    .inspect_err(|e| {
+                        println!("[AutoDesktop] defi DeBank failed address={address} error={e}")
+                    })?;
                 println!(
                     "[AutoDesktop] defi response source=DeBank address={address} positions={}",
                     positions.len()
@@ -5436,7 +5507,9 @@ async fn get_defi_positions<R: Runtime>(
     println!(
         "[AutoDesktop] defi fallback source=DeBank address={address} reason=zerion-empty-wallet-assets-present"
     );
-    let positions = fetch_debank_defi_positions(address).await?;
+    let positions = fetch_debank_defi_positions(address)
+        .await
+        .inspect_err(|e| println!("[AutoDesktop] defi DeBank failed address={address} error={e}"))?;
     println!(
         "[AutoDesktop] defi response source=DeBank address={address} positions={}",
         positions.len()
@@ -6544,6 +6617,7 @@ pub fn run() {
             sync_menu_overlay,
             reload_dapp,
             hide_dapp,
+            show_dapp,
             close_dapp,
             open_external_url,
             node_rpc,
@@ -6711,6 +6785,71 @@ mod tests {
         let wallet = derive_wallet(&signing_key);
         assert_eq!(wallet.address, "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
         assert_eq!(wallet.public_key.len(), 2 + 130);
+    }
+
+    /// The blank-rectangle bug: a child webview renders over the shell, so one
+    /// shown before it has painted covers the shell's loading animation with
+    /// white for the whole page load.
+    #[test]
+    fn a_dapp_webview_stays_hidden_until_its_page_has_loaded_once() {
+        let label = "dapp-show-policy-test";
+        forget_dapp_loaded(label);
+
+        // Never loaded: showing it would blank out the loading animation.
+        assert!(!show_dapp_on_open(label));
+
+        // Loaded: switching back to that tab must show its page at once.
+        mark_dapp_loaded(label);
+        assert!(show_dapp_on_open(label));
+
+        // Closing the tab destroys the webview, so the next one is blank again.
+        forget_dapp_loaded(label);
+        assert!(!show_dapp_on_open(label));
+    }
+
+    #[test]
+    fn dapp_load_state_is_per_tab() {
+        forget_dapp_loaded("dapp-per-tab-a");
+        forget_dapp_loaded("dapp-per-tab-b");
+        mark_dapp_loaded("dapp-per-tab-a");
+
+        assert!(show_dapp_on_open("dapp-per-tab-a"));
+        assert!(!show_dapp_on_open("dapp-per-tab-b"));
+    }
+
+    /// reqwest's Display stops at "error sending request for url (…)" — whether
+    /// that was DNS, a refused connection or the 12s timeout only shows up in
+    /// the source chain, so a log without it cannot say why a provider failed.
+    #[test]
+    fn error_chain_reports_the_cause_not_just_the_wrapper() {
+        #[derive(Debug)]
+        struct Cause;
+        impl std::fmt::Display for Cause {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "operation timed out")
+            }
+        }
+        impl std::error::Error for Cause {}
+
+        #[derive(Debug)]
+        struct Wrapper(Cause);
+        impl std::fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "error sending request for url (https://api.zerion.io/)")
+            }
+        }
+        impl std::error::Error for Wrapper {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        assert_eq!(
+            error_chain(&Wrapper(Cause)),
+            "error sending request for url (https://api.zerion.io/): operation timed out"
+        );
+        // An error with no cause reads exactly as before.
+        assert_eq!(error_chain(&Cause), "operation timed out");
     }
 
     #[test]
@@ -7577,6 +7716,7 @@ mod e2e {
                 sync_menu_overlay,
                 reload_dapp,
                 hide_dapp,
+                show_dapp,
                 close_dapp,
                 open_external_url,
                 node_rpc,

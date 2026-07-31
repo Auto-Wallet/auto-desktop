@@ -44,12 +44,19 @@ function load(): Dapp[] {
   return mergeAddedBuiltins(saved);
 }
 
-let state: Dapp[] = load();
+// Loaded on first use, not at import: the icon helpers below are pure, and
+// modules that only want those (lib/ui) must not drag localStorage in with them.
+let state: Dapp[] | null = null;
 const listeners = new Set<() => void>();
+
+function dapps(): Dapp[] {
+  if (state === null) state = load();
+  return state;
+}
 
 function commit(next: Dapp[]) {
   state = next;
-  localStorage.setItem(KEY, JSON.stringify(state));
+  localStorage.setItem(KEY, JSON.stringify(next));
   for (const l of listeners) l();
 }
 
@@ -105,6 +112,19 @@ export function dappIconOf(url: string): string | undefined {
   return LOCAL_ICONS[hostOf(url)];
 }
 
+/**
+ * Every icon worth trying for a dApp, best first — the bundled icon if we ship
+ * one, then the site's own favicon. A manual refresh flips the order: that
+ * button exists to pull the site's current icon over our stale copy. Callers
+ * walk the list on <img> error and land on the letter avatar when it runs out.
+ */
+export function dappIconSources(url: string, refreshAt?: number): string[] {
+  const local = dappIconOf(url);
+  const remote = faviconOf(url, refreshAt);
+  if (refreshAt !== undefined) return local ? [remote, local] : [remote];
+  return local ? [local, remote] : [remote];
+}
+
 // "app.uniswap.org" -> "Uniswap": drop common sub-parts and the TLD, capitalize.
 function deriveName(url: string): string {
   const host = hostOf(url).replace(/^www\./, "");
@@ -149,67 +169,67 @@ function normalizeUrl(input: string): string {
 export function addDapp(input: string, name?: string): Dapp {
   const url = normalizeUrl(input);
   const host = hostOf(url);
-  if (state.some((d) => hostOf(d.url) === host)) {
+  if (dapps().some((d) => hostOf(d.url) === host)) {
     throw new Error(`Already added: ${host}`);
   }
   const dapp: Dapp = {
-    id: `${host}-${state.length}`,
+    id: `${host}-${dapps().length}`,
     url,
     name: name?.trim() || deriveName(url),
     pinned: false,
   };
-  commit([...state, dapp]);
+  commit([...dapps(), dapp]);
   return dapp;
 }
 
 export function ensureDapp(input: string, name?: string): Dapp {
   const url = normalizeUrl(input);
   const host = hostOf(url);
-  const existing = state.find((d) => hostOf(d.url) === host);
+  const existing = dapps().find((d) => hostOf(d.url) === host);
   if (existing) return existing;
   const dapp: Dapp = {
-    id: `${host}-${state.length}`,
+    id: `${host}-${dapps().length}`,
     url,
     name: name?.trim() || deriveName(url),
     pinned: false,
   };
-  commit([...state, dapp]);
+  commit([...dapps(), dapp]);
   return dapp;
 }
 
 export function removeDapp(id: string) {
-  commit(state.filter((d) => d.id !== id));
+  commit(dapps().filter((d) => d.id !== id));
 }
 
 export function togglePin(id: string) {
-  commit(state.map((d) => (d.id === id ? { ...d, pinned: !d.pinned } : d)));
+  commit(dapps().map((d) => (d.id === id ? { ...d, pinned: !d.pinned } : d)));
 }
 
 export function refreshDappIcon(id: string, refreshAt: number) {
-  if (!state.some((d) => d.id === id)) {
+  if (!dapps().some((d) => d.id === id)) {
     throw new Error(`dApp not found: ${id}`);
   }
   commit(
-    state.map((d) => (d.id === id ? { ...d, iconRefreshAt: refreshAt } : d)),
+    dapps().map((d) => (d.id === id ? { ...d, iconRefreshAt: refreshAt } : d)),
   );
 }
 
 export function renameDapp(id: string, name: string) {
   const clean = name.trim();
   if (!clean) return;
-  commit(state.map((d) => (d.id === id ? { ...d, name: clean } : d)));
+  commit(dapps().map((d) => (d.id === id ? { ...d, name: clean } : d)));
 }
 
 export function updateDapp(id: string, input: string, name: string): Dapp {
   const url = normalizeUrl(input);
   const host = hostOf(url);
-  if (state.some((d) => d.id !== id && hostOf(d.url) === host)) {
+  if (dapps().some((d) => d.id !== id && hostOf(d.url) === host)) {
     throw new Error(`Already added: ${host}`);
   }
   let updated: Dapp | null = null;
   const cleanName = name.trim();
   commit(
-    state.map((d) => {
+    dapps().map((d) => {
       if (d.id !== id) return d;
       updated = { ...d, url, name: cleanName || deriveName(url) };
       return updated;
@@ -220,5 +240,5 @@ export function updateDapp(id: string, input: string, name: string): Dapp {
 }
 
 export function useDapps(): Dapp[] {
-  return useSyncExternalStore(subscribe, () => state);
+  return useSyncExternalStore(subscribe, dapps);
 }

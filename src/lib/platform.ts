@@ -71,6 +71,13 @@ export function reloadDapp(label: string): Promise<void> {
   return invoke("reload_dapp", { label });
 }
 
+/** Show a tab webview whose page never reported a finished load — the loading
+ *  timeout's escape hatch (`open_dapp` keeps an unloaded webview hidden so it
+ *  cannot cover the loading animation with a blank rectangle). */
+export function showDapp(label: string): Promise<void> {
+  return invoke("show_dapp", { label });
+}
+
 /** Hide a tab webview (switch to another tab / Wallet / dApps). */
 export function hideDapp(label: string): Promise<void> {
   return invoke("hide_dapp", { label });
