@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -1210,6 +1211,42 @@ fn handle_wallet_method(
     }
 }
 
+/// PublicNode gates its RPC endpoints behind an API key, supplied as the last
+/// path segment (`https://ethereum-rpc.publicnode.com/<key>`). The key is
+/// deliberately NOT baked into `builtin_chains()`: those URLs get persisted to
+/// chains.json and rendered in Settings, so it is appended here — at the request
+/// site — and never reaches disk or the UI. A publicnode URL that already carries
+/// a path (someone pasted their own keyed endpoint) is left alone, as is every
+/// non-publicnode node.
+fn apply_public_node_key<'a>(url: &'a str, key: &str) -> Cow<'a, str> {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return Cow::Borrowed(url);
+    };
+    // Split host off first so the suffix match can't be spoofed by a hostile
+    // path or query, e.g. `https://evil.example/publicnode.com`.
+    let (host, path) = match rest.find(['/', '?', '#']) {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    if host != "publicnode.com" && !host.ends_with(".publicnode.com") {
+        return Cow::Borrowed(url);
+    }
+    if !path.is_empty() && path != "/" {
+        return Cow::Borrowed(url);
+    }
+    Cow::Owned(format!("{}/{}", url.trim_end_matches('/'), key))
+}
+
+fn with_public_node_key(url: &str) -> Cow<'_, str> {
+    match public_node_key() {
+        Some(key) => apply_public_node_key(url, key),
+        None => Cow::Borrowed(url),
+    }
+}
+
 /// Forward a read-only method to the selected chain's node and return its result.
 /// Node-side JSON-RPC errors are propagated (not masked).
 /// Low-level JSON-RPC POST to a specific chain's configured node. Done server-side
@@ -1220,11 +1257,14 @@ async fn node_rpc_call(chain: &ChainCfg, method: &str, params: &[Value]) -> Resu
     let payload = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
 
     let resp = http()
-        .post(chain.rpc.as_str())
+        .post(with_public_node_key(&chain.rpc).as_ref())
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("RPC request to {} failed: {e}", chain.name))?;
+        // `without_url` matters now that the URL carries the API key: reqwest's
+        // Display prints the failing URL, which would spill the key into the
+        // error string the UI and the dApp both get to see.
+        .map_err(|e| format!("RPC request to {} failed: {}", chain.name, e.without_url()))?;
     let body: Value = resp
         .json()
         .await
@@ -3847,6 +3887,29 @@ fn zerion_api_key() -> Option<String> {
                 .filter(|v| !v.trim().is_empty())
                 .map(str::to_string)
         })
+}
+
+/// PublicNode RPC API key. Same resolution order as the other providers:
+/// process env (CI/release builds) → `.env.local` (dev) → compile-time
+/// `option_env!` so a packaged binary carries the key the release job built with.
+///
+/// Cached, unlike its siblings: this one is consulted on every forwarded JSON-RPC
+/// call, and `read_env_file_value` hits the disk. Changing the key needs a restart.
+fn public_node_key() -> Option<&'static str> {
+    static KEY: OnceLock<Option<String>> = OnceLock::new();
+    KEY.get_or_init(|| {
+        std::env::var("PUBLIC_NODE_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| read_env_file_value("PUBLIC_NODE_KEY"))
+            .or_else(|| {
+                option_env!("PUBLIC_NODE_KEY")
+                    .filter(|v| !v.trim().is_empty())
+                    .map(str::to_string)
+            })
+            .map(|v| v.trim().to_string())
+    })
+    .as_deref()
 }
 
 fn debank_api_key() -> Option<String> {
@@ -6690,6 +6753,71 @@ mod tests {
             assert_eq!(chains.iter().filter(|x| x.id == c.id).count(), 1);
             assert!(c.builtin);
         }
+    }
+
+    /// The API key must never be baked into the committed chain defaults — those
+    /// URLs get written to chains.json and shown in Settings.
+    #[test]
+    fn builtin_chains_carry_no_api_key() {
+        for c in builtin_chains() {
+            if !c.rpc.contains("publicnode.com") {
+                continue;
+            }
+            let after_scheme = c.rpc.trim_start_matches("https://").trim_end_matches('/');
+            assert!(
+                !after_scheme.contains('/'),
+                "{} ships a keyed publicnode URL: {}",
+                c.name,
+                c.rpc
+            );
+        }
+    }
+
+    #[test]
+    fn appends_public_node_key_to_publicnode_hosts_only() {
+        const KEY: &str = "testkey123";
+
+        // Every publicnode default gets the key as the last path segment.
+        assert_eq!(
+            apply_public_node_key("https://ethereum-rpc.publicnode.com", KEY),
+            "https://ethereum-rpc.publicnode.com/testkey123"
+        );
+        assert_eq!(
+            apply_public_node_key("https://bsc-rpc.publicnode.com/", KEY),
+            "https://bsc-rpc.publicnode.com/testkey123"
+        );
+        assert_eq!(
+            apply_public_node_key("https://publicnode.com", KEY),
+            "https://publicnode.com/testkey123"
+        );
+
+        // Other providers are untouched — the key goes nowhere near them.
+        for url in [
+            "https://rpc.soniclabs.com",
+            "https://zkevm-rpc.com",
+            "https://andromeda.metis.io/?owner=1088",
+            "https://gwan-ssl.wandevs.org:56891",
+            "https://worldchain-mainnet.g.alchemy.com/public",
+        ] {
+            assert_eq!(apply_public_node_key(url, KEY), url, "leaked key into {url}");
+        }
+
+        // A host merely *containing* the string must not match: the suffix check
+        // runs on the host, not the whole URL.
+        for url in [
+            "https://evil.example/publicnode.com",
+            "https://evil.example?x=publicnode.com",
+            "https://notpublicnode.com",
+            "https://publicnode.com.evil.example",
+        ] {
+            assert_eq!(apply_public_node_key(url, KEY), url, "leaked key into {url}");
+        }
+
+        // Already keyed / custom-path publicnode endpoints are left as configured.
+        assert_eq!(
+            apply_public_node_key("https://ethereum-rpc.publicnode.com/otherkey", KEY),
+            "https://ethereum-rpc.publicnode.com/otherkey"
+        );
     }
 
     #[test]

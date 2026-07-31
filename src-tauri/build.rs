@@ -1,4 +1,8 @@
 fn main() {
+    // `public_node_key()` falls back to `option_env!("PUBLIC_NODE_KEY")`, which is
+    // resolved at compile time — without this, a cached build would keep whatever
+    // key it was first compiled with.
+    println!("cargo:rerun-if-env-changed=PUBLIC_NODE_KEY");
     embed_test_manifest();
     tauri_build::build()
 }

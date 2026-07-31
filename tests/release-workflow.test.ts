@@ -10,11 +10,21 @@ function releaseStep(name: string): string {
   return next < 0 ? workflow.slice(start) : workflow.slice(start, next);
 }
 
-test.each([
+const BUILD_STEPS = [
   "Build signed + notarized macOS bundles",
   "Build executable + NSIS updater installer",
-])("%s receives the DeBank API key", (stepName) => {
+];
+
+test.each(BUILD_STEPS)("%s receives the DeBank API key", (stepName) => {
   expect(releaseStep(stepName)).toContain(
     "DEBANK_APIKEY: ${{ secrets.DEBANK_APIKEY }}",
+  );
+});
+
+// Without it, `option_env!("PUBLIC_NODE_KEY")` compiles to None and every shipped
+// build talks to PublicNode unauthenticated.
+test.each(BUILD_STEPS)("%s receives the PublicNode RPC key", (stepName) => {
+  expect(releaseStep(stepName)).toContain(
+    "PUBLIC_NODE_KEY: ${{ secrets.PUBLIC_NODE_KEY }}",
   );
 });

@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import pkg from "./package.json";
 
@@ -6,10 +6,18 @@ import pkg from "./package.json";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vitejs.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig(async ({ command, mode }) => ({
   plugins: [react()],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // PublicNode's RPC key, for the browser-preview fetch fallback in src/lib/rpc.ts.
+    // Dev server only: in the packaged app every read goes through the Rust
+    // `node_rpc` command (which appends the key itself), so a production bundle has
+    // no use for the key and shouldn't carry a copy of it.
+    __PUBLIC_NODE_KEY__: JSON.stringify(
+      // @ts-expect-error process is a nodejs global
+      command === "serve" ? (loadEnv(mode, process.cwd(), "").PUBLIC_NODE_KEY ?? "") : "",
+    ),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

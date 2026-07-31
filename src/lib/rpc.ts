@@ -13,6 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { findChain } from "./chains";
 import { isTauri } from "./platform";
+import { withPublicNodeKey } from "./publicNode";
 
 let nextId = 1;
 
@@ -28,7 +29,7 @@ export async function rpc<T = unknown>(
   const chain = findChain(chainId);
   if (!chain) throw new Error(`rpc: unknown chain ${chainId}`);
 
-  const res = await fetch(chain.rpc, {
+  const res = await fetch(withPublicNodeKey(chain.rpc), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: nextId++, method, params }),
