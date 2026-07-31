@@ -1531,6 +1531,41 @@
   color: var(--ink-3);
   font-size: 11.5px;
 }
+.swap-status-hash-label {
+  color: var(--ink-3);
+}
+.swap-status-hash {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand-ink);
+  /* `font: inherit` would reset the family set by the button's own .mono class
+     (WalletPage.css loads after theme.css), so name the mono family here. */
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+.swap-status-hash:hover {
+  color: var(--brand);
+  border-bottom-color: color-mix(in srgb, var(--brand) 45%, transparent);
+}
+.swap-status-hash:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.swap-status-card.done .swap-status-hash {
+  color: var(--up);
+}
+.swap-status-card.done .swap-status-hash:hover {
+  border-bottom-color: color-mix(in srgb, var(--up) 45%, transparent);
+}
 .swap-status-bar {
   position: absolute;
   left: 12px;
@@ -2600,6 +2635,10 @@
   background: var(--coral-soft);
   color: var(--coral-2);
 }
+.activity-ic.swap {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
 .activity-main {
   min-width: 0;
   flex: 1;
@@ -2664,6 +2703,24 @@
   font-size: 12px;
   font-weight: 800;
   font-family: var(--font-mono);
+}
+/* Amounts must never ellipsize: the number keeps its full width and only the
+   symbol beside it is allowed to truncate. */
+.activity-change.split {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px;
+  overflow: visible;
+}
+.activity-change-num {
+  flex: none;
+}
+.activity-change-sym {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .activity-change.in {
   color: var(--up);

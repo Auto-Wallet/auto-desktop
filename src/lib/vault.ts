@@ -12,6 +12,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
+import type { ActivitySwap } from "./activity";
 import { isTauri } from "./platform";
 
 export type VaultPhase = "loading" | "absent" | "locked" | "unlocked";
@@ -236,12 +237,13 @@ export type SendTx = {
   value?: string;
   data?: string;
   activity?: {
-    kind?: "send" | "contract" | "token_send";
+    kind?: "send" | "contract" | "token_send" | "swap";
     counterparty?: string;
     assetSymbol?: string;
     assetDecimals?: number;
     amount?: string;
     tokenAddress?: string;
+    swap?: ActivitySwap;
   };
 };
 

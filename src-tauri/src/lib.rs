@@ -613,6 +613,8 @@ struct ActivityRecord {
     amount: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    swap: Option<ActivitySwap>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     balance_changes: Vec<ActivityBalanceChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -626,6 +628,22 @@ struct ActivityBalanceChange {
     symbol: String,
     formatted_delta: String,
     direction: String,
+}
+
+/// Swap/bridge legs the wallet's own cross-chain flow attaches to the source tx,
+/// so Activity can name the provider and both amounts. Amounts are hex wei.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivitySwap {
+    provider: String,
+    from_symbol: String,
+    from_amount: String,
+    from_decimals: u32,
+    from_chain_name: String,
+    to_symbol: String,
+    to_amount: String,
+    to_decimals: u32,
+    to_chain_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3434,6 +3452,7 @@ struct ActivityMeta {
     asset_decimals: Option<u32>,
     amount: Option<String>,
     token_address: Option<String>,
+    swap: Option<ActivitySwap>,
 }
 
 fn tx_activity_meta(tx: &Value) -> ActivityMeta {
@@ -3465,6 +3484,10 @@ fn tx_activity_meta(tx: &Value) -> ActivityMeta {
             .get("tokenAddress")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        swap: meta
+            .get("swap")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<ActivitySwap>(v).ok()),
     }
 }
 
@@ -3562,6 +3585,7 @@ fn record_activity<R: Runtime>(
             }
         }),
         token_address: meta.token_address,
+        swap: meta.swap,
         balance_changes,
         status: Some("submitted".to_string()),
         timestamp: now,

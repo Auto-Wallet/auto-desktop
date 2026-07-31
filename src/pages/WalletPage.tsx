@@ -10,7 +10,7 @@ import {
   type ActivityRecord,
 } from "../lib/activity";
 import { isTauri, openExternalUrl } from "../lib/platform";
-import { txExplorerUrl } from "../lib/explorer";
+import { explorerTxUrl, txExplorerUrl } from "../lib/explorer";
 import { ChainIcon } from "../lib/ChainIcon";
 import { useDefiPositions, type DefiState } from "../lib/defi";
 import {
@@ -1085,7 +1085,18 @@ type SwapStage =
   | { kind: "loading" }
   | { kind: "approving" }
   | { kind: "swapping" }
-  | { kind: "submitted"; hash: string; providerId: ProviderId; requestId?: string }
+  | {
+      kind: "submitted";
+      hash: string;
+      providerId: ProviderId;
+      requestId?: string;
+      // Frozen at submit time: the form stays editable afterwards, and the
+      // explorer links must keep pointing at the chains this swap actually used.
+      fromChainId: string;
+      fromChainName: string;
+      toChainId: string;
+      toChainName: string;
+    }
   | { kind: "error"; message: string };
 
 type SwapPickerMode = "source" | "target";
@@ -1574,8 +1585,10 @@ function ActivityList({
         const symbol =
           record.assetSymbol ??
           (isTokenSend ? t("wallet.activityToken") : record.symbol);
-        const label =
-          record.kind === "speedup"
+        const swap = record.swap ?? null;
+        const label = swap
+          ? t("wallet.activitySwapVia", { provider: swap.provider })
+          : record.kind === "speedup"
             ? t("wallet.speedUpTx")
             : record.kind === "cancel"
               ? t("wallet.revokeTx")
@@ -1625,9 +1638,11 @@ function ActivityList({
             <span className={`activity-ic ${record.kind}`}>
               <Icon
                 name={
-                  record.kind === "contract" || record.kind === "speedup"
-                    ? "doc"
-                    : "send"
+                  record.kind === "swap"
+                    ? "swap"
+                    : record.kind === "contract" || record.kind === "speedup"
+                      ? "doc"
+                      : "send"
                 }
                 size={17}
               />
@@ -1636,11 +1651,15 @@ function ActivityList({
               <span className="activity-title">
                 {label}
                 <span className="activity-chain">
-                  {chain?.name ?? record.chainName}
+                  {swap
+                    ? `${swap.fromChainName} → ${swap.toChainName}`
+                    : (chain?.name ?? record.chainName)}
                 </span>
               </span>
               <span className="activity-sub">
-                {shortAddress(counterparty, 10, 8)} · {record.origin}
+                {swap
+                  ? `${swap.fromSymbol} → ${swap.toSymbol}`
+                  : `${shortAddress(counterparty, 10, 8)} · ${record.origin}`}
               </span>
               <span className="activity-hash">
                 {shortAddress(record.hash, 10, 8)}
@@ -1648,7 +1667,28 @@ function ActivityList({
               </span>
             </span>
             <span className="activity-right">
-              {balanceChanges.length > 0 ? (
+              {swap ? (
+                <span className="activity-changes">
+                  <span
+                    className="activity-change split out"
+                    title={`-${formatUnits(swap.fromAmount, swap.fromDecimals, swap.fromDecimals)} ${swap.fromSymbol}`}
+                  >
+                    <span className="activity-change-num">
+                      -{fmtUnitsDisplay(swap.fromAmount, swap.fromDecimals)}
+                    </span>
+                    <span className="activity-change-sym">{swap.fromSymbol}</span>
+                  </span>
+                  <span
+                    className="activity-change split in"
+                    title={`+${formatUnits(swap.toAmount, swap.toDecimals, swap.toDecimals)} ${swap.toSymbol}`}
+                  >
+                    <span className="activity-change-num">
+                      +{fmtUnitsDisplay(swap.toAmount, swap.toDecimals)}
+                    </span>
+                    <span className="activity-change-sym">{swap.toSymbol}</span>
+                  </span>
+                </span>
+              ) : balanceChanges.length > 0 ? (
                 <span className="activity-changes">
                   {balanceChanges.slice(0, 3).map((change, index) => (
                     <span
@@ -3779,15 +3819,62 @@ function QuoteChooser({
   );
 }
 
+/** One tx hash in the swap status card — a link to that chain's explorer when we
+ *  know one, plain mono text when we don't. */
+function SwapStatusHash({
+  label,
+  hash,
+  chainId,
+  chainName,
+  t,
+}: {
+  label?: string;
+  hash: string;
+  chainId: string;
+  chainName: string;
+  t: TFn;
+}) {
+  const href = explorerTxUrl(findChain(chainId), chainId, chainName, hash);
+  const text = shortAddress(hash, 10, 8);
+  return (
+    <div className="swap-status-sub">
+      {label && <span className="swap-status-hash-label">{label}: </span>}
+      {href ? (
+        <button
+          type="button"
+          className="swap-status-hash mono"
+          title={`${t("wallet.openExplorer")} · ${chainName}`}
+          onClick={() => void openExternalUrl(href)}
+        >
+          {text}
+          <Icon name="external" size={12} />
+        </button>
+      ) : (
+        <span className="mono" title={t("wallet.noExplorer")}>
+          {text}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function SwapStatusView({
   status,
   hash,
   provider,
+  fromChainId,
+  fromChainName,
+  toChainId,
+  toChainName,
   t,
 }: {
   status: NeutralStatus | null;
   hash: string;
   provider: ProviderId;
+  fromChainId: string;
+  fromChainName: string;
+  toChainId: string;
+  toChainName: string;
   t: TFn;
 }) {
   const done = status?.state === "success";
@@ -3810,13 +3897,20 @@ function SwapStatusView({
               ? status?.message || t("wallet.swapFailed")
               : t("wallet.swapTracking", { provider: providerName(provider) })}
         </div>
-        <div className="swap-status-sub mono">
-          {shortAddress(status?.sourceHash ?? hash, 10, 8)}
-        </div>
+        <SwapStatusHash
+          hash={status?.sourceHash ?? hash}
+          chainId={fromChainId}
+          chainName={fromChainName}
+          t={t}
+        />
         {status?.destHash && (
-          <div className="swap-status-sub mono">
-            {t("wallet.received")}: {shortAddress(status.destHash, 10, 8)}
-          </div>
+          <SwapStatusHash
+            label={t("wallet.received")}
+            hash={status.destHash}
+            chainId={toChainId}
+            chainName={toChainName}
+            t={t}
+          />
         )}
       </div>
       {pending && <div className="swap-status-bar" aria-hidden="true" />}
@@ -4298,19 +4392,45 @@ function CrossChainModal({
     try {
       const provider = getProvider(selectedProvider);
       const prepared = await provider.prepareSwap(params, selectedQuote);
-      const hash = await walletSend(numberToChainId(prepared.swapTx.chainId), {
+      const fromChainId = numberToChainId(prepared.swapTx.chainId);
+      const fromChainName =
+        findChain(fromChainId)?.name ?? asset.chainName ?? fromChainId;
+      const toChainId = numberToChainId(targetChainId);
+      const toChainName =
+        targetChain?.name ?? findChain(toChainId)?.name ?? toChainId;
+      const hash = await walletSend(fromChainId, {
         to: prepared.swapTx.to,
         data: prepared.swapTx.data || "0x",
         value: normalizeTxValue(prepared.swapTx.value),
         activity: {
-          kind: "contract",
+          kind: "swap",
           counterparty: prepared.swapTx.to,
           assetSymbol: `${sourceToken.symbol}->${targetToken.symbol}`,
           assetDecimals: sourceToken.decimals,
           amount: toHexQuantity(amountRaw),
+          swap: {
+            provider: providerName(selectedProvider),
+            fromSymbol: sourceToken.symbol,
+            fromAmount: toHexQuantity(amountRaw),
+            fromDecimals: sourceToken.decimals,
+            fromChainName,
+            toSymbol: targetToken.symbol,
+            toAmount: toHexQuantity(BigInt(selectedQuote.amountOutRaw)),
+            toDecimals: targetToken.decimals,
+            toChainName,
+          },
         },
       });
-      setStage({ kind: "submitted", hash, providerId: selectedProvider, requestId: prepared.requestId });
+      setStage({
+        kind: "submitted",
+        hash,
+        providerId: selectedProvider,
+        requestId: prepared.requestId,
+        fromChainId,
+        fromChainName,
+        toChainId,
+        toChainName,
+      });
       void pollSwapStatus(params, hash, selectedProvider, prepared.requestId, setSwapStatus);
     } catch (e) {
       setStage({ kind: "error", message: errText(e) });
@@ -4438,7 +4558,16 @@ function CrossChainModal({
           </div>
 
           {stage.kind === "submitted" && (
-            <SwapStatusView status={swapStatus} hash={stage.hash} provider={stage.providerId} t={t} />
+            <SwapStatusView
+              status={swapStatus}
+              hash={stage.hash}
+              provider={stage.providerId}
+              fromChainId={stage.fromChainId}
+              fromChainName={stage.fromChainName}
+              toChainId={stage.toChainId}
+              toChainName={stage.toChainName}
+              t={t}
+            />
           )}
           {stage.kind === "error" && (
             <div className="lock-err">

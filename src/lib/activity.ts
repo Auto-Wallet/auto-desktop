@@ -3,6 +3,21 @@ import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 import { isTauri } from "./platform";
 
+/** Swap/bridge details the wallet's own cross-chain flow attaches to the source
+ *  transaction, so Activity can say "Swap via Relay" with both legs' amounts
+ *  instead of a bare "Contract interaction". */
+export type ActivitySwap = {
+  provider: string;
+  fromSymbol: string;
+  fromAmount: string;
+  fromDecimals: number;
+  fromChainName: string;
+  toSymbol: string;
+  toAmount: string;
+  toDecimals: number;
+  toChainName: string;
+};
+
 export type ActivityRecord = {
   id: string;
   hash: string;
@@ -18,8 +33,9 @@ export type ActivityRecord = {
   maxPriorityFeePerGas?: string;
   maxFeePerGas?: string;
   origin: string;
-  kind: "send" | "contract" | "token_send" | "speedup" | "cancel";
+  kind: "send" | "contract" | "token_send" | "speedup" | "cancel" | "swap";
   counterparty?: string | null;
+  swap?: ActivitySwap | null;
   assetSymbol?: string | null;
   assetDecimals?: number | null;
   amount?: string | null;

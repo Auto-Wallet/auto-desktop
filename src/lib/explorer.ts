@@ -17,10 +17,22 @@ export function txExplorerUrl(
   chain: ExplorerChain | undefined,
   record: ActivityRecord,
 ): string | null {
-  if (chain?.explorerUrl) return txUrlFromBase(chain.explorerUrl, record.hash);
+  return explorerTxUrl(chain, record.chainId, record.chainName, record.hash);
+}
 
-  const id = record.chainId.toLowerCase();
-  const name = (chain?.name ?? record.chainName).toLowerCase();
+/** Explorer link for a bare hash — the swap flow has no ActivityRecord for the
+ *  destination-chain transaction, only the hash the provider reports. */
+export function explorerTxUrl(
+  chain: ExplorerChain | undefined,
+  chainId: string,
+  chainName: string,
+  hash: string,
+): string | null {
+  if (!hash) return null;
+  if (chain?.explorerUrl) return txUrlFromBase(chain.explorerUrl, hash);
+
+  const id = chainId.toLowerCase();
+  const name = (chain?.name ?? chainName).toLowerCase();
   const bases: Record<string, string> = {
     "0x1": "https://etherscan.io/tx/",
     "0x2105": "https://basescan.org/tx/",
@@ -43,5 +55,5 @@ export function txExplorerUrl(
   };
   const base =
     bases[id] ?? (name.includes("0g") ? "https://chainscan.0g.ai/tx/" : null);
-  return base ? `${base}${record.hash}` : null;
+  return base ? `${base}${hash}` : null;
 }
