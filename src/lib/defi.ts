@@ -98,6 +98,9 @@ export function useDefiPositions(
 type DefiRefreshRequest = {
   address: string;
   hasWalletAssetsOverOneUsd: boolean;
+  // A manual refresh, which the backend honours by re-buying the paid
+  // Uniswap v4 probes instead of serving its short-lived cache.
+  force: boolean;
 };
 
 type DefiRefreshInput = {
@@ -182,7 +185,7 @@ export function createDefiRefreshController({
       try {
         const result = await getDefiPositionsWithSingleFlight({
           requestKey,
-          request: { address, hasWalletAssetsOverOneUsd },
+          request: { address, hasWalletAssetsOverOneUsd, force },
           invokeDefiPositions,
           timeoutMs,
           force,

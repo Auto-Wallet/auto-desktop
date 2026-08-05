@@ -4544,6 +4544,32 @@ fn debank_token_from_value(value: &Value) -> Option<DefiPositionToken> {
     })
 }
 
+fn is_debank_token_list_key(key: &str) -> bool {
+    key.ends_with("token_list") || key.ends_with("tokens") || key == "token"
+}
+
+/// What a position is beats what it earned. Left to serde_json's alphabetical key
+/// order an LP would lead with `reward_token_list`, and since the card shows only
+/// the first few tokens the fees would push the liquidity itself out of sight.
+fn debank_token_list_rank(key: &str) -> u8 {
+    match key {
+        "supply_token_list" => 0,
+        "borrow_token_list" => 1,
+        "reward_token_list" => 3,
+        _ => 2,
+    }
+}
+
+/// True when this object holds at least one non-empty DeBank token list.
+fn has_debank_token_list(value: &Value) -> bool {
+    value.as_object().is_some_and(|map| {
+        map.iter().any(|(key, child)| {
+            is_debank_token_list_key(key)
+                && child.as_array().is_some_and(|items| !items.is_empty())
+        })
+    })
+}
+
 fn collect_debank_tokens(value: &Value, out: &mut Vec<DefiPositionToken>) {
     match value {
         Value::Array(items) => {
@@ -4555,10 +4581,19 @@ fn collect_debank_tokens(value: &Value, out: &mut Vec<DefiPositionToken>) {
             }
         }
         Value::Object(map) => {
-            for (key, child) in map {
-                if key.ends_with("token_list") || key.ends_with("tokens") || key == "token" {
-                    collect_debank_tokens(child, out);
-                }
+            // A position states its tokens twice: `asset_token_list` is the flat
+            // holding, `detail` splits the same liquidity into supply and rewards.
+            // `detail` is the richer answer — an LP's uncollected fees only show
+            // up there — so when it carries token lists it wins outright, rather
+            // than adding a second near-identical row per token.
+            if let Some(detail) = map.get("detail").filter(|d| has_debank_token_list(d)) {
+                collect_debank_tokens(detail, out);
+                return;
+            }
+            let mut keys: Vec<&String> = map.keys().filter(|k| is_debank_token_list_key(k)).collect();
+            keys.sort_by_key(|k| (debank_token_list_rank(k), (*k).clone()));
+            for key in keys {
+                collect_debank_tokens(&map[key], out);
             }
         }
         _ => {}
@@ -4635,34 +4670,561 @@ fn parse_debank_positions(data: &Value) -> Result<Vec<DefiPosition>, String> {
     Ok(positions)
 }
 
-async fn fetch_debank_defi_positions(address: &str) -> Result<Vec<DefiPosition>, String> {
-    let key = debank_api_key().ok_or_else(|| "DEBANK_APIKEY is not configured".to_string())?;
-    println!("[AutoDesktop] defi DeBank start address={address}");
-    let url =
-        format!("https://pro-openapi.debank.com/v1/user/all_complex_protocol_list?id={address}");
-    let data: Value = reqwest::Client::builder()
+/// GET a DeBank Pro endpoint and hand back its JSON.
+///
+/// DeBank answers a rejected request with a 400 and a body that names the reason
+/// ("Protocol not found"), so the body is read before the status is judged —
+/// `error_for_status()` alone throws that sentence away and leaves an unactionable
+/// "HTTP status client error" in the log.
+async fn debank_get(key: &str, url: String) -> Result<Value, String> {
+    let response = reqwest::Client::builder()
         .timeout(DEFI_PROVIDER_TIMEOUT)
         .build()
         .map_err(|e| format!("building DeBank client: {e}"))?
-        .get(url)
+        .get(&url)
         .header(reqwest::header::ACCEPT, "application/json")
         .header("AccessKey", key)
         .send()
         .await
-        .map_err(|e| format!("querying DeBank: {}", error_chain(&e)))?
-        .error_for_status()
-        .map_err(|e| format!("querying DeBank: {}", error_chain(&e)))?
+        .map_err(|e| format!("querying DeBank: {}", error_chain(&e)))?;
+    let status = response.status();
+    let data: Value = response
         .json()
         .await
         .map_err(|e| format!("reading DeBank response: {}", error_chain(&e)))?;
-    if let Some(msg) = value_as_string(data.get("error_msg")) {
-        return Err(msg);
+    let message = value_as_string(data.get("message"))
+        .or_else(|| value_as_string(data.get("error_msg")));
+    if !status.is_success() {
+        return Err(message.unwrap_or_else(|| format!("DeBank returned HTTP {status}")));
     }
+    match message {
+        Some(msg) => Err(msg),
+        None => Ok(data),
+    }
+}
+
+async fn fetch_debank_defi_positions(address: &str) -> Result<Vec<DefiPosition>, String> {
+    let key = debank_api_key().ok_or_else(|| "DEBANK_APIKEY is not configured".to_string())?;
+    println!("[AutoDesktop] defi DeBank start address={address}");
+    let data = debank_get(
+        &key,
+        format!("https://pro-openapi.debank.com/v1/user/all_complex_protocol_list?id={address}"),
+    )
+    .await?;
     let positions = parse_debank_positions(&data)?;
     println!(
         "[AutoDesktop] defi DeBank done address={address} positions={}",
         positions.len()
     );
+    Ok(positions)
+}
+
+// ---------------------------------------------------------------------------
+// Uniswap v4 supplement — buying only the part of DeBank that Zerion can't answer
+//
+// Zerion is the free primary source but reports no Uniswap v4 liquidity. DeBank
+// does, and the sweep we fall back to today is what costs: measured against the
+// live API, `all_complex_protocol_list` (every chain, every protocol) bills ~300
+// units, `/v1/user/protocol` (one protocol, one chain) bills 4, and the two id
+// lookups bill 1 each.
+//
+// So the supplement pays per position instead of per wallet. Zerion's free
+// portfolio call says which chains the wallet holds anything on; DeBank's
+// protocol list says which of those run Uniswap v4; only that intersection gets
+// probed. Both id lookups barely move, so they persist to disk for a month, and
+// probe results are held for a few minutes so remounting the wallet page or
+// flipping between accounts doesn't re-bill.
+// ---------------------------------------------------------------------------
+
+const DEBANK_REGISTRY_FILE: &str = "debank-registry.json";
+/// DeBank's chain list and per-chain protocol list are near-static. A month
+/// between lookups keeps them current without spending a unit on every refresh.
+const DEBANK_REGISTRY_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+/// How long a set of probe results stands in for a fresh set. The manual refresh
+/// button bypasses this; only incidental re-renders are served from it.
+const UNISWAP_V4_CACHE_TTL_MS: u64 = 3 * 60 * 1000;
+/// Cost ceiling per address, in chains probed. Uniswap v4 runs on ~13 chains
+/// today, so this bites only a wallet spread wider than the protocol itself.
+const UNISWAP_V4_MAX_PROBES: usize = 16;
+/// Time ceiling for the whole supplement, well inside the 30s the caller allows
+/// the DeFi request. A cold registry costs a round of list lookups on top of the
+/// probes; overrunning that budget must lose the supplement, never the portfolio.
+const UNISWAP_V4_TIMEOUT: Duration = Duration::from_secs(18);
+/// How DeBank names the protocol in `/v1/protocol/list`.
+const UNISWAP_V4_PROTOCOL_NAME: &str = "Uniswap V4";
+
+/// The DeBank id lookups, persisted so a restart doesn't re-buy them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DebankRegistryCache {
+    /// EVM chain id in decimal (`"1"`) -> DeBank chain id (`"eth"`).
+    #[serde(default)]
+    chains: HashMap<String, String>,
+    #[serde(default)]
+    chains_updated_at_ms: u64,
+    /// DeBank chain id -> what `/v1/protocol/list` said about Uniswap v4 there.
+    #[serde(default)]
+    uniswap_v4: HashMap<String, DebankProtocolLookup>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DebankProtocolLookup {
+    /// `None` records "asked, DeBank has no Uniswap v4 on this chain". That is an
+    /// answer worth keeping — re-asking every refresh is how a cheap lookup turns
+    /// back into a recurring bill.
+    protocol_id: Option<String>,
+    updated_at_ms: u64,
+}
+
+#[derive(Clone)]
+struct DebankRegistry {
+    path: Option<PathBuf>,
+}
+
+/// Serializes registry updates so two concurrent refreshes can't both pay for the
+/// same lookup, and can't interleave writes to the cache file.
+fn debank_registry_lock() -> &'static tokio::sync::Mutex<()> {
+    static L: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    L.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+type UniswapV4Cache = HashMap<String, (u64, Vec<DefiPosition>)>;
+
+fn uniswap_v4_cache() -> &'static Mutex<UniswapV4Cache> {
+    static C: OnceLock<Mutex<UniswapV4Cache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(UniswapV4Cache::new()))
+}
+
+impl DebankRegistry {
+    fn from_app<R: Runtime>(app: &AppHandle<R>) -> Self {
+        Self {
+            path: app
+                .path()
+                .app_data_dir()
+                .ok()
+                .map(|base| base.join(DEBANK_REGISTRY_FILE)),
+        }
+    }
+
+    #[cfg(test)]
+    fn at(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn load(&self) -> DebankRegistryCache {
+        let Some(path) = &self.path else {
+            return DebankRegistryCache::default();
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            return DebankRegistryCache::default();
+        };
+        match serde_json::from_slice(&bytes) {
+            Ok(cache) => cache,
+            Err(err) => {
+                println!("[AutoDesktop] defi DeBank registry parse failed error={err}");
+                DebankRegistryCache::default()
+            }
+        }
+    }
+
+    fn save(&self, cache: &DebankRegistryCache) {
+        let Some(path) = &self.path else { return };
+        if let Some(parent) = path.parent() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                println!("[AutoDesktop] defi DeBank registry mkdir failed error={err}");
+                return;
+            }
+        }
+        match serde_json::to_vec_pretty(cache) {
+            Ok(json) => {
+                if let Err(err) = std::fs::write(path, json) {
+                    println!("[AutoDesktop] defi DeBank registry write failed error={err}");
+                }
+            }
+            Err(err) => println!("[AutoDesktop] defi DeBank registry serialize failed error={err}"),
+        }
+    }
+
+    /// Resolve EVM chain ids to the DeBank Uniswap v4 protocol ids worth probing,
+    /// buying whichever lookups the cache can't answer. Chains DeBank doesn't
+    /// carry, and chains without Uniswap v4, drop out here rather than costing a
+    /// probe.
+    async fn uniswap_v4_targets(&self, key: &str, evm_chain_ids: &[u64]) -> Vec<(u64, String)> {
+        let _guard = debank_registry_lock().lock().await;
+        let mut cache = self.load();
+        let now = unix_time_ms();
+        let mut dirty = false;
+
+        if cache.chains.is_empty()
+            || now.saturating_sub(cache.chains_updated_at_ms) > DEBANK_REGISTRY_TTL_MS
+        {
+            match debank_get(key, "https://pro-openapi.debank.com/v1/chain/list".to_string()).await
+            {
+                Ok(data) => {
+                    let chains = parse_debank_chain_ids(&data);
+                    if chains.is_empty() {
+                        println!("[AutoDesktop] defi DeBank chain list returned no chains");
+                    } else {
+                        println!(
+                            "[AutoDesktop] defi DeBank chain list refreshed chains={}",
+                            chains.len()
+                        );
+                        cache.chains = chains;
+                        cache.chains_updated_at_ms = now;
+                        dirty = true;
+                    }
+                }
+                Err(err) => println!("[AutoDesktop] defi DeBank chain list failed error={err}"),
+            }
+        }
+
+        let mut targets = Vec::new();
+        let mut pending = Vec::new();
+        for evm_chain_id in evm_chain_ids {
+            let Some(debank_chain) = cache.chains.get(&evm_chain_id.to_string()).cloned() else {
+                continue;
+            };
+            match cache
+                .uniswap_v4
+                .get(&debank_chain)
+                .filter(|entry| now.saturating_sub(entry.updated_at_ms) <= DEBANK_REGISTRY_TTL_MS)
+            {
+                Some(entry) => {
+                    if let Some(protocol_id) = &entry.protocol_id {
+                        targets.push((*evm_chain_id, protocol_id.clone()));
+                    }
+                }
+                None => pending.push((*evm_chain_id, debank_chain)),
+            }
+        }
+
+        // A cold cache owes one lookup per active chain. Run them together: served
+        // one at a time they take longer than the whole DeFi request is allowed.
+        let lookups: Vec<_> = pending
+            .into_iter()
+            .map(|(evm_chain_id, debank_chain)| {
+                let key = key.to_string();
+                tauri::async_runtime::spawn(async move {
+                    let url = format!(
+                        "https://pro-openapi.debank.com/v1/protocol/list?chain_id={debank_chain}"
+                    );
+                    let found = debank_get(&key, url)
+                        .await
+                        .map(|data| find_uniswap_v4_protocol_id(&data));
+                    (evm_chain_id, debank_chain, found)
+                })
+            })
+            .collect();
+        for lookup in lookups {
+            let Ok((evm_chain_id, debank_chain, found)) = lookup.await else {
+                println!("[AutoDesktop] defi DeBank protocol list task failed");
+                continue;
+            };
+            match found {
+                Ok(protocol_id) => {
+                    println!(
+                        "[AutoDesktop] defi DeBank protocol list chain={debank_chain} uniswapV4={}",
+                        protocol_id.as_deref().unwrap_or("none")
+                    );
+                    if let Some(id) = &protocol_id {
+                        targets.push((evm_chain_id, id.clone()));
+                    }
+                    cache.uniswap_v4.insert(
+                        debank_chain,
+                        DebankProtocolLookup {
+                            protocol_id,
+                            updated_at_ms: now,
+                        },
+                    );
+                    dirty = true;
+                }
+                Err(err) => println!(
+                    "[AutoDesktop] defi DeBank protocol list failed chain={debank_chain} error={err}"
+                ),
+            }
+        }
+
+        // Back into the caller's order — richest chain first — so that if the
+        // probe ceiling clips the tail it clips the least valuable chains.
+        let rank: HashMap<u64, usize> = evm_chain_ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (*id, index))
+            .collect();
+        targets.sort_by_key(|(id, _)| rank.get(id).copied().unwrap_or(usize::MAX));
+
+        if dirty {
+            self.save(&cache);
+        }
+        targets
+    }
+}
+
+/// `/v1/chain/list` -> decimal EVM chain id -> DeBank chain id.
+fn parse_debank_chain_ids(data: &Value) -> HashMap<String, String> {
+    let Some(items) = data.as_array() else {
+        return HashMap::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let debank_id = value_as_string(item.get("id"))?;
+            let community_id = value_as_f64(item.get("community_id"))?;
+            Some((format!("{}", community_id as u64), debank_id))
+        })
+        .collect()
+}
+
+/// `/v1/protocol/list` -> the chain's Uniswap v4 protocol id, when it has one.
+///
+/// Matched on both the name and the id shape (`uniswap4` on Ethereum,
+/// `{chain}_uniswap4` elsewhere) so a restyled label or a renamed id on its own
+/// doesn't silently drop a chain. `has_supported_portfolio: false` means DeBank
+/// can't answer a position query there, so that chain is not worth probing.
+fn find_uniswap_v4_protocol_id(data: &Value) -> Option<String> {
+    let items = data.as_array()?;
+    items.iter().find_map(|item| {
+        let id = value_as_string(item.get("id"))?;
+        let named = value_as_string(item.get("name"))
+            .is_some_and(|name| name.eq_ignore_ascii_case(UNISWAP_V4_PROTOCOL_NAME));
+        let shaped = id == "uniswap4" || id.ends_with("_uniswap4");
+        let supported = item
+            .get("has_supported_portfolio")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        ((named || shaped) && supported).then_some(id)
+    })
+}
+
+/// Zerion's free portfolio call -> the chain slugs the wallet holds value on,
+/// richest first. A chain the wallet has nothing on can't hold an LP either, so
+/// leaving it out of the probe set costs no coverage.
+fn parse_zerion_active_chain_slugs(data: &Value) -> Vec<String> {
+    let Some(map) = data
+        .pointer("/data/attributes/positions_distribution_by_chain")
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let mut chains: Vec<(String, f64)> = map
+        .iter()
+        .filter_map(|(slug, value)| {
+            let usd = value_as_f64(Some(value))?;
+            (usd > 0.0).then(|| (slug.clone(), usd))
+        })
+        .collect();
+    chains.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    chains.into_iter().map(|(slug, _)| slug).collect()
+}
+
+async fn fetch_zerion_active_chain_slugs(key: &str, address: &str) -> Result<Vec<String>, String> {
+    let data: Value = reqwest::Client::builder()
+        .timeout(DEFI_PROVIDER_TIMEOUT)
+        .build()
+        .map_err(|e| format!("building Zerion client: {e}"))?
+        .get(format!(
+            "https://api.zerion.io/v1/wallets/{address}/portfolio"
+        ))
+        // Without `no_filter` Zerion answers with simple positions only, and a
+        // wallet whose whole balance on a chain sits inside a protocol would look
+        // inactive there.
+        .query(&[("currency", "usd"), ("filter[positions]", "no_filter")])
+        .basic_auth(key, Some(""))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("querying Zerion portfolio: {}", error_chain(&e)))?
+        .error_for_status()
+        .map_err(|e| format!("querying Zerion portfolio: {}", error_chain(&e)))?
+        .json()
+        .await
+        .map_err(|e| format!("reading Zerion portfolio response: {}", error_chain(&e)))?;
+    Ok(parse_zerion_active_chain_slugs(&data))
+}
+
+/// `/v1/user/protocol` answers with one protocol object; `parse_debank_positions`
+/// speaks the array shape the `*_protocol_list` endpoints return.
+fn parse_debank_protocol_positions(data: &Value) -> Result<Vec<DefiPosition>, String> {
+    if data.get("portfolio_item_list").is_none() {
+        return Err("DeBank returned an unexpected protocol response".to_string());
+    }
+    parse_debank_positions(&Value::Array(vec![data.clone()]))
+}
+
+/// Restate a supplemented position in the primary source's chain vocabulary, so
+/// "eth" doesn't sit next to "0x1" in one list.
+fn relabel_position_chain(
+    mut position: DefiPosition,
+    chain_id: &str,
+    network_name: &str,
+) -> DefiPosition {
+    position.chain_id = chain_id.to_string();
+    position.network_name = network_name.to_string();
+    position
+}
+
+/// Fold the supplement into the primary set, dropping anything the primary source
+/// already reports for the same app on the same chain. Zerion has no Uniswap v4
+/// coverage today; the guard is what keeps the day it gains some from double-
+/// counting the same liquidity. Returns how many positions were added.
+fn merge_uniswap_v4_positions(
+    primary: &mut Vec<DefiPosition>,
+    supplement: Vec<DefiPosition>,
+) -> usize {
+    let existing: Vec<(String, String)> = primary
+        .iter()
+        .map(|p| (p.chain_id.to_lowercase(), p.app_name.to_lowercase()))
+        .collect();
+    let added: Vec<DefiPosition> = supplement
+        .into_iter()
+        .filter(|p| {
+            let key = (p.chain_id.to_lowercase(), p.app_name.to_lowercase());
+            !existing.contains(&key)
+        })
+        .collect();
+    let count = added.len();
+    if count > 0 {
+        primary.extend(added);
+        primary.sort_by(|a, b| {
+            b.balance_usd
+                .partial_cmp(&a.balance_usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    count
+}
+
+fn cached_uniswap_v4_positions(address: &str) -> Option<Vec<DefiPosition>> {
+    let cache = uniswap_v4_cache().lock().unwrap();
+    let (stored_at, positions) = cache.get(&address.to_lowercase())?;
+    (unix_time_ms().saturating_sub(*stored_at) <= UNISWAP_V4_CACHE_TTL_MS)
+        .then(|| positions.clone())
+}
+
+fn store_uniswap_v4_positions(address: &str, positions: &[DefiPosition]) {
+    let now = unix_time_ms();
+    let mut cache = uniswap_v4_cache().lock().unwrap();
+    // Browsing watch-only addresses would otherwise pile up entries nothing ever
+    // reads again; an expired one has no value to anyone.
+    cache.retain(|_, (stored_at, _)| now.saturating_sub(*stored_at) <= UNISWAP_V4_CACHE_TTL_MS);
+    cache.insert(address.to_lowercase(), (now, positions.to_vec()));
+}
+
+/// The Uniswap v4 positions Zerion left out, for the chains the wallet is active
+/// on. Errors are returned, not swallowed: the caller logs them and still serves
+/// the Zerion set, because a supplement that fails must not cost the user their
+/// primary portfolio.
+async fn fetch_uniswap_v4_positions(
+    registry: &DebankRegistry,
+    zerion_key: &str,
+    debank_key: &str,
+    address: &str,
+    force: bool,
+) -> Result<Vec<DefiPosition>, String> {
+    if !force {
+        if let Some(cached) = cached_uniswap_v4_positions(address) {
+            println!(
+                "[AutoDesktop] defi Uniswap v4 source=cache address={address} positions={}",
+                cached.len()
+            );
+            return Ok(cached);
+        }
+    }
+
+    let slugs = fetch_zerion_active_chain_slugs(zerion_key, address).await?;
+    let zerion_chains = zerion_chain_map(zerion_key).await;
+    // Zerion names chains by slug and DeBank by its own id; the EVM chain id is
+    // what both agree on, so it is the hinge between the two vocabularies.
+    let mut by_evm_chain_id: HashMap<u64, (String, String)> = HashMap::new();
+    let mut evm_chain_ids = Vec::new();
+    for slug in &slugs {
+        let Some((network_name, external_id)) = zerion_chains.get(slug) else {
+            continue;
+        };
+        let Ok(evm_chain_id) = u64::from_str_radix(external_id.trim_start_matches("0x"), 16) else {
+            continue;
+        };
+        if by_evm_chain_id
+            .insert(evm_chain_id, (external_id.clone(), network_name.clone()))
+            .is_none()
+        {
+            evm_chain_ids.push(evm_chain_id);
+        }
+    }
+
+    let mut targets = registry.uniswap_v4_targets(debank_key, &evm_chain_ids).await;
+    if targets.len() > UNISWAP_V4_MAX_PROBES {
+        println!(
+            "[AutoDesktop] defi Uniswap v4 probe limit address={address} candidates={} probing={UNISWAP_V4_MAX_PROBES}",
+            targets.len()
+        );
+        targets.truncate(UNISWAP_V4_MAX_PROBES);
+    }
+    println!(
+        "[AutoDesktop] defi Uniswap v4 start address={address} activeChains={} probes={} estimatedUnits={}",
+        slugs.len(),
+        targets.len(),
+        targets.len() * 4
+    );
+    if targets.is_empty() {
+        store_uniswap_v4_positions(address, &[]);
+        return Ok(Vec::new());
+    }
+
+    let probes: Vec<_> = targets
+        .into_iter()
+        .map(|(evm_chain_id, protocol_id)| {
+            let key = debank_key.to_string();
+            let address = address.to_string();
+            tauri::async_runtime::spawn(async move {
+                let url = format!(
+                    "https://pro-openapi.debank.com/v1/user/protocol?id={address}&protocol_id={protocol_id}"
+                );
+                let result = debank_get(&key, url)
+                    .await
+                    .and_then(|data| parse_debank_protocol_positions(&data));
+                (evm_chain_id, protocol_id, result)
+            })
+        })
+        .collect();
+
+    let mut positions = Vec::new();
+    for probe in probes {
+        let Ok((evm_chain_id, protocol_id, result)) = probe.await else {
+            println!("[AutoDesktop] defi Uniswap v4 probe task failed address={address}");
+            continue;
+        };
+        match result {
+            Ok(found) => {
+                let Some((chain_id, network_name)) = by_evm_chain_id.get(&evm_chain_id) else {
+                    continue;
+                };
+                positions.extend(
+                    found
+                        .into_iter()
+                        .map(|p| relabel_position_chain(p, chain_id, network_name)),
+                );
+            }
+            Err(err) => println!(
+                "[AutoDesktop] defi Uniswap v4 probe failed address={address} protocol={protocol_id} error={err}"
+            ),
+        }
+    }
+    positions.sort_by(|a, b| {
+        b.balance_usd
+            .partial_cmp(&a.balance_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    println!(
+        "[AutoDesktop] defi Uniswap v4 done address={address} positions={}",
+        positions.len()
+    );
+    store_uniswap_v4_positions(address, &positions);
     Ok(positions)
 }
 
@@ -5479,10 +6041,12 @@ async fn get_defi_positions<R: Runtime>(
     app: AppHandle<R>,
     address: String,
     has_wallet_assets_over_one_usd: Option<bool>,
+    force: Option<bool>,
 ) -> Result<DefiPositionsResponse, String> {
     let address = address.trim();
+    let force = force.unwrap_or(false);
     println!(
-        "[AutoDesktop] defi request address={address} hasWalletAssetsOverOneUsd={}",
+        "[AutoDesktop] defi request address={address} hasWalletAssetsOverOneUsd={} force={force}",
         has_wallet_assets_over_one_usd.unwrap_or(false)
     );
     if !(address.len() == 42
@@ -5529,11 +6093,42 @@ async fn get_defi_positions<R: Runtime>(
         || !has_wallet_assets
         || !debank_available
     {
+        // Zerion answered, so it stays the primary source and DeBank is charged
+        // only for the one protocol Zerion cannot see. The branch below — where
+        // Zerion found nothing at all — falls back to the full DeBank sweep, which
+        // already covers Uniswap v4, so no supplement is bought there.
+        let mut zerion_positions = zerion_positions;
+        let mut source = "Zerion".to_string();
+        if let (Some(zerion_key), Some(debank_key)) = (zerion_api_key(), debank_api_key()) {
+            let registry = DebankRegistry::from_app(&app);
+            let supplement = tokio::time::timeout(
+                UNISWAP_V4_TIMEOUT,
+                fetch_uniswap_v4_positions(&registry, &zerion_key, &debank_key, address, force),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(format!(
+                    "timed out after {}s",
+                    UNISWAP_V4_TIMEOUT.as_secs()
+                ))
+            });
+            match supplement {
+                Ok(positions) => {
+                    let added = merge_uniswap_v4_positions(&mut zerion_positions, positions);
+                    if added > 0 {
+                        source = format!("Zerion + {UNISWAP_V4_PROTOCOL_NAME}");
+                    }
+                }
+                Err(err) => println!(
+                    "[AutoDesktop] defi Uniswap v4 supplement failed address={address} error={err}"
+                ),
+            }
+        }
         println!(
-            "[AutoDesktop] defi response source=Zerion address={address} positions={}",
+            "[AutoDesktop] defi response source={source} address={address} positions={}",
             zerion_positions.len()
         );
-        return Ok(merge_defi_positions("Zerion", zerion_positions, custom));
+        return Ok(merge_defi_positions(&source, zerion_positions, custom));
     }
     println!(
         "[AutoDesktop] defi fallback source=DeBank address={address} reason=zerion-empty-wallet-assets-present"
@@ -7345,6 +7940,249 @@ mod tests {
         assert_eq!(positions[0].symbols, vec!["GMX"]);
     }
 
+    /// A position states its tokens twice. `detail` is the one that carries the
+    /// uncollected fees, so it must win outright — not add a second row per token.
+    #[test]
+    fn debank_position_detail_supersedes_the_flat_asset_list() {
+        let data = json!([
+            {
+                "id": "uniswap4",
+                "chain": "eth",
+                "name": "Uniswap V4",
+                "portfolio_item_list": [
+                    {
+                        "name": "Liquidity Pool",
+                        "stats": { "net_usd_value": 9412.74 },
+                        "base": { "chain": "eth" },
+                        "asset_token_list": [
+                            { "optimized_symbol": "USDC", "amount": 173.594132, "usd_value": 173.73 },
+                            { "optimized_symbol": "WETH", "amount": 4.907786, "usd_value": 9239.01 }
+                        ],
+                        "detail": {
+                            "supply_token_list": [
+                                { "optimized_symbol": "USDC", "amount": 180.640972, "usd_value": 180.78 },
+                                { "optimized_symbol": "WETH", "amount": 4.903537, "usd_value": 9231.02 }
+                            ],
+                            "reward_token_list": [
+                                { "optimized_symbol": "USDC", "amount": 0.506408, "usd_value": 0.51 }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]);
+
+        let positions = parse_debank_positions(&data).unwrap();
+
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].symbols, vec!["USDC", "WETH"]);
+        // Two supply rows plus one reward row — the asset_token_list amounts
+        // (173.594132 / 4.907786) must not appear alongside them.
+        let amounts: Vec<&str> = positions[0]
+            .tokens
+            .iter()
+            .map(|t| t.balance.as_deref().unwrap_or(""))
+            .collect();
+        assert_eq!(amounts, vec!["180.640972", "4.903537", "0.506408"]);
+    }
+
+    /// An empty `detail` must not shadow the flat list — that would leave a
+    /// position with no token breakdown at all.
+    #[test]
+    fn debank_empty_detail_falls_back_to_the_flat_asset_list() {
+        let data = json!([
+            {
+                "id": "arb_gmx",
+                "chain": "arb",
+                "name": "GMX",
+                "portfolio_item_list": [
+                    {
+                        "name": "Staked",
+                        "stats": { "net_usd_value": 5.5 },
+                        "base": { "chain": "arb" },
+                        "detail": { "supply_token_list": [], "description": "#1" },
+                        "asset_token_list": [
+                            { "optimized_symbol": "GMX", "amount": 1.25, "usd_value": 5.5 }
+                        ]
+                    }
+                ]
+            }
+        ]);
+
+        let positions = parse_debank_positions(&data).unwrap();
+
+        assert_eq!(positions[0].symbols, vec!["GMX"]);
+        assert_eq!(positions[0].tokens[0].balance.as_deref(), Some("1.25"));
+    }
+
+    #[test]
+    fn parses_debank_single_protocol_response() {
+        let data = json!({
+            "id": "base_uniswap4",
+            "chain": "base",
+            "name": "Uniswap V4",
+            "site_url": "https://app.uniswap.org",
+            "logo_url": "https://static.debank.com/uniswap4.png",
+            "has_supported_portfolio": true,
+            "portfolio_item_list": [
+                {
+                    "name": "Liquidity Pool",
+                    "stats": { "net_usd_value": 812.5 },
+                    "base": { "chain": "base" },
+                    "detail": {
+                        "supply_token_list": [
+                            { "optimized_symbol": "USDC", "amount": 400.0, "usd_value": 400.0 },
+                            { "optimized_symbol": "ETH", "amount": 0.22, "usd_value": 412.5 }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let positions = parse_debank_protocol_positions(&data).unwrap();
+
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].app_name, "Uniswap V4");
+        assert_eq!(positions[0].label, "Liquidity Pool");
+        assert_eq!(positions[0].balance_usd, 812.5);
+        assert_eq!(positions[0].symbols, vec!["USDC", "ETH"]);
+        assert_eq!(
+            positions[0].app_url.as_deref(),
+            Some("https://app.uniswap.org")
+        );
+
+        // A wallet with nothing in the protocol is a valid answer, not an error.
+        let empty = json!({ "id": "zora_uniswap4", "chain": "zora", "portfolio_item_list": [] });
+        assert!(parse_debank_protocol_positions(&empty).unwrap().is_empty());
+
+        // DeBank's 400 body has no portfolio list at all — that is a failure.
+        let rejected = json!({ "message": "Protocol not found" });
+        assert!(parse_debank_protocol_positions(&rejected).is_err());
+    }
+
+    #[test]
+    fn finds_the_uniswap_v4_protocol_id() {
+        let base = json!([
+            { "id": "base_uniswap3", "name": "Uniswap V3", "has_supported_portfolio": true },
+            { "id": "base_uniswap4", "name": "Uniswap V4", "has_supported_portfolio": true },
+            { "id": "base_aave3", "name": "Aave V3", "has_supported_portfolio": true }
+        ]);
+        assert_eq!(
+            find_uniswap_v4_protocol_id(&base).as_deref(),
+            Some("base_uniswap4")
+        );
+
+        // Ethereum carries the unprefixed id.
+        let eth = json!([{ "id": "uniswap4", "name": "Uniswap V4", "has_supported_portfolio": true }]);
+        assert_eq!(find_uniswap_v4_protocol_id(&eth).as_deref(), Some("uniswap4"));
+
+        // A chain without v4 must resolve to nothing rather than to a near miss.
+        let without = json!([
+            { "id": "op_uniswap3", "name": "Uniswap V3", "has_supported_portfolio": true },
+            { "id": "op_uniswap_permit2", "name": "Uniswap Permit2", "has_supported_portfolio": false }
+        ]);
+        assert_eq!(find_uniswap_v4_protocol_id(&without), None);
+
+        // Listed but unqueryable is not worth a probe.
+        let unsupported =
+            json!([{ "id": "ink_uniswap4", "name": "Uniswap V4", "has_supported_portfolio": false }]);
+        assert_eq!(find_uniswap_v4_protocol_id(&unsupported), None);
+    }
+
+    #[test]
+    fn parses_debank_chain_ids() {
+        let data = json!([
+            { "id": "eth", "community_id": 1, "name": "Ethereum" },
+            { "id": "base", "community_id": 8453, "name": "Base" },
+            { "id": "uni", "community_id": 130, "name": "Unichain" },
+            { "id": "btc", "name": "Bitcoin" }
+        ]);
+
+        let chains = parse_debank_chain_ids(&data);
+
+        assert_eq!(chains.get("1").map(String::as_str), Some("eth"));
+        assert_eq!(chains.get("8453").map(String::as_str), Some("base"));
+        assert_eq!(chains.get("130").map(String::as_str), Some("uni"));
+        // No EVM chain id means nothing to key a Zerion chain against.
+        assert_eq!(chains.len(), 3);
+    }
+
+    #[test]
+    fn picks_zerion_active_chains_richest_first() {
+        let data = json!({
+            "data": {
+                "attributes": {
+                    "positions_distribution_by_chain": {
+                        "ethereum": 414.15,
+                        "base": 34.68,
+                        "binance-smart-chain": 653.95,
+                        "scroll": 0,
+                        "xdai": 0.0
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            parse_zerion_active_chain_slugs(&data),
+            vec!["binance-smart-chain", "ethereum", "base"]
+        );
+        // No distribution at all means no chain is worth probing.
+        assert!(parse_zerion_active_chain_slugs(&json!({ "data": {} })).is_empty());
+    }
+
+    #[test]
+    fn merges_uniswap_v4_supplement_into_the_zerion_set() {
+        let mut primary = vec![
+            defi_position("zerion:aave", "Aave", "0x1", 7.0),
+            defi_position("zerion:univ4-base", "Uniswap V4", "0x2105", 50.0),
+        ];
+        let supplement = vec![
+            // Below the Aave position, above nothing — sorting must interleave.
+            defi_position("debank:uniswap4:eth", "Uniswap V4", "0x1", 9412.74),
+            // Zerion already reports this one; taking it again would double-count.
+            defi_position("debank:base_uniswap4:base", "Uniswap V4", "0x2105", 50.0),
+        ];
+
+        let added = merge_uniswap_v4_positions(&mut primary, supplement);
+
+        assert_eq!(added, 1);
+        assert_eq!(primary.len(), 3);
+        assert_eq!(primary[0].id, "debank:uniswap4:eth");
+        assert_eq!(primary[0].balance_usd, 9412.74);
+        assert_eq!(primary[1].id, "zerion:univ4-base");
+        assert_eq!(primary[2].id, "zerion:aave");
+    }
+
+    #[test]
+    fn relabels_a_supplemented_position_in_the_primary_chain_vocabulary() {
+        let position = relabel_position_chain(
+            defi_position("debank:uniswap4:eth", "Uniswap V4", "eth", 12.0),
+            "0x1",
+            "Ethereum",
+        );
+
+        assert_eq!(position.chain_id, "0x1");
+        assert_eq!(position.network_name, "Ethereum");
+        assert_eq!(position.balance_usd, 12.0);
+    }
+
+    fn defi_position(id: &str, app_name: &str, chain_id: &str, balance_usd: f64) -> DefiPosition {
+        DefiPosition {
+            id: id.to_string(),
+            app_name: app_name.to_string(),
+            app_image_url: None,
+            app_url: None,
+            network_name: "Network".to_string(),
+            chain_id: chain_id.to_string(),
+            label: "Liquidity Pool".to_string(),
+            group_label: None,
+            balance_usd,
+            symbols: Vec::new(),
+            tokens: Vec::new(),
+        }
+    }
+
     #[test]
     fn parses_zerion_positions() {
         let data = json!({
@@ -7579,6 +8417,91 @@ mod tests {
             .balance
             .as_deref()
             .is_some_and(|balance| balance != "0")));
+    }
+
+    /// Drives the whole supplement against the live APIs: Zerion says which chains
+    /// the address is active on, DeBank's lists resolve the Uniswap v4 protocol
+    /// ids, and `/v1/user/protocol` returns the liquidity Zerion's own positions
+    /// endpoint never reports. Also checks the two things that keep it cheap —
+    /// the id lookups landing on disk, and the probe cache answering the next
+    /// call. Spends DeBank units, so it stays out of the default run.
+    #[test]
+    #[ignore = "hits the live Zerion and DeBank APIs and spends DeBank units"]
+    fn uniswap_v4_live_supplements_a_known_address() {
+        let zerion_key = zerion_api_key().expect("ZERION_APIKEY must be configured");
+        let debank_key = debank_api_key().expect("DEBANK_APIKEY must be configured");
+        let address = "0x7521eda00e2ce05ac4a9d8353d096ccb970d5188";
+        let path = std::env::temp_dir().join(format!("autodesktop-debank-{}.json", unix_time_ms()));
+        let registry = DebankRegistry::at(path.clone());
+
+        let started = std::time::Instant::now();
+        let positions = tauri::async_runtime::block_on(fetch_uniswap_v4_positions(
+            &registry,
+            &zerion_key,
+            &debank_key,
+            address,
+            true,
+        ))
+        .unwrap();
+        let cold = started.elapsed();
+
+        println!("cold={cold:?} positions={positions:#?}");
+        assert!(
+            !positions.is_empty(),
+            "expected Uniswap v4 liquidity for the known address"
+        );
+        assert!(positions
+            .iter()
+            .all(|p| p.app_name == UNISWAP_V4_PROTOCOL_NAME));
+        assert!(positions.iter().all(|p| p.balance_usd > 0.0));
+        // Relabelled into the Zerion vocabulary: hex chain id, display name.
+        assert!(positions.iter().all(|p| p.chain_id.starts_with("0x")));
+        assert!(positions.iter().any(|p| p.network_name == "Ethereum"));
+        assert!(positions.iter().any(|p| !p.tokens.is_empty()));
+        assert!(
+            cold < UNISWAP_V4_TIMEOUT,
+            "a cold run must finish inside its own budget, took {cold:?}"
+        );
+
+        // The id lookups reached disk, so a restart doesn't re-buy them.
+        let saved: DebankRegistryCache =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.chains.get("1").map(String::as_str), Some("eth"));
+        assert_eq!(
+            saved.uniswap_v4["eth"].protocol_id.as_deref(),
+            Some("uniswap4")
+        );
+        assert!(saved.chains_updated_at_ms > 0);
+
+        // And an unforced repeat is answered from the probe cache, not re-bought.
+        let started = std::time::Instant::now();
+        let again = tauri::async_runtime::block_on(fetch_uniswap_v4_positions(
+            &registry,
+            &zerion_key,
+            &debank_key,
+            address,
+            false,
+        ))
+        .unwrap();
+        let cached = started.elapsed();
+        println!("cached={cached:?}");
+        assert_eq!(again.len(), positions.len());
+        assert_eq!(again[0].balance_usd, positions[0].balance_usd);
+        assert!(
+            cached < Duration::from_secs(1),
+            "a cached repeat must not touch the network, took {cached:?}"
+        );
+        std::fs::remove_file(&path).ok();
+
+        // And Zerion alone genuinely misses it — the premise of the whole thing.
+        let (zerion_positions, _) =
+            tauri::async_runtime::block_on(fetch_zerion_defi_positions(address)).unwrap();
+        assert!(
+            !zerion_positions
+                .iter()
+                .any(|p| p.app_name.eq_ignore_ascii_case(UNISWAP_V4_PROTOCOL_NAME)),
+            "Zerion now reports Uniswap v4 itself — the supplement's dedupe is what keeps this from double-counting"
+        );
     }
 
     #[test]

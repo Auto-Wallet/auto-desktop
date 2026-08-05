@@ -123,6 +123,16 @@ Non-obvious ACL facts (verified): app commands work from local webviews with no 
 ### Wallet core relationship
 `src/wallet-core` is first-party AutoDesktop source. It is consumed by the injected IIFE through `bun build`, and its adapter boundaries (`ProviderTransport`, `StorageAdapter`, `ConfirmAdapter`, `HidTransport`) keep browser-page provider logic separate from Tauri-specific glue.
 
+### DeFi position sources (why the provider mix looks odd)
+`get_defi_positions` prefers **Zerion** because it is free, and reaches for **DeBank** only where Zerion can't answer. DeBank bills in units, and the endpoints differ by two orders of magnitude — measured against the live API: `all_complex_protocol_list` ~300, `/v1/user/protocol` 4, `/v1/chain/list` and `/v1/protocol/list` 1 each.
+
+- **Zerion fails, or returns nothing for a wallet that holds assets** → fall back to the full DeBank sweep. Expensive, but it is the only thing that answers "what does this wallet hold everywhere".
+- **Zerion answers** → it stays primary, and DeBank is charged only for **Uniswap v4**, which Zerion does not report at all. Zerion's free portfolio call (`filter[positions]=no_filter`) names the chains the wallet is active on; `/v1/protocol/list` says which of those run v4; only that intersection gets a `/v1/user/protocol` probe. Typically ~10 chains ≈ 40 units instead of ~300.
+
+Three things keep that cheap, and breaking any one turns a one-off lookup back into a per-refresh bill: the id lookups persist to `debank-registry.json` in the app data dir for 30 days (including "this chain has no v4", which is an answer worth caching); probe results are held in memory for 3 minutes, bypassed only by the UI's manual refresh (`force`); and `UNISWAP_V4_MAX_PROBES` caps the chains one address can cost. The supplement also runs under its own `UNISWAP_V4_TIMEOUT`, well inside the frontend's 30s — a supplement that overruns must lose itself, never the portfolio.
+
+Verify against the real APIs with `cargo test --lib uniswap_v4_live -- --ignored` (spends units; needs `ZERION_API_KEY` + `DEBANK_APIKEY` in `.env.local`).
+
 ## Platform constraints (macOS / WKWebView)
 - **No WebHID/WebUSB** in WKWebView → Ledger/hardware support must go through a Rust `hidapi` transport behind `HidTransport`, not `@ledgerhq/hw-transport-webhid`.
 - **Custom URI schemes are one-way from remote pages**: a remote https page can hit a registered scheme via subresource load (`new Image().src=...`) but `fetch()` to it is blocked by WebKit. The wallet bridge therefore uses `invoke`, not the `adipc://` scheme (which remains only as a diagnostic beacon endpoint in `lib.rs`).
