@@ -840,7 +840,7 @@ fn builtin_chains() -> Vec<ChainCfg> {
             "0x38",
             "BNB Chain",
             "BNB",
-            "https://bsc-rpc.publicnode.com",
+            "https://bsc-dataseed.bnbchain.org",
             "#F3BA2F",
         ),
         c(
@@ -930,10 +930,11 @@ fn builtin_chains() -> Vec<ChainCfg> {
 /// added in a later release are missing from it; adopting it verbatim would
 /// freeze the registry at that old version forever (networks "lost" after
 /// upgrading). Persisted entries win for ids they contain — user RPC/name edits
-/// survive — and a persisted entry whose id has since become a built-in is
-/// promoted (non-removable, sorted with the built-ins). Built-ins the file
-/// doesn't know about are backfilled with current defaults, in built-in order;
-/// custom chains keep their relative order at the end.
+/// survive, apart from exact retired defaults that need a one-time migration —
+/// and a persisted entry whose id has since become a built-in is promoted
+/// (non-removable, sorted with the built-ins). Built-ins the file doesn't know
+/// about are backfilled with current defaults, in built-in order; custom chains
+/// keep their relative order at the end.
 fn merge_persisted_chains(mut persisted: Vec<ChainCfg>) -> Vec<ChainCfg> {
     for chain in &mut persisted {
         hydrate_chain_defaults(chain);
@@ -946,6 +947,12 @@ fn merge_persisted_chains(mut persisted: Vec<ChainCfg>) -> Vec<ChainCfg> {
         {
             Some(saved) => {
                 let mut saved = saved.clone();
+                // Retire the former BNB default without overwriting a user-picked RPC.
+                if saved.id.eq_ignore_ascii_case("0x38")
+                    && saved.rpc == "https://bsc-rpc.publicnode.com"
+                {
+                    saved.rpc = builtin.rpc.clone();
+                }
                 saved.builtin = true;
                 merged.push(saved);
             }
@@ -7116,9 +7123,37 @@ mod tests {
         // Backfilled built-ins carry current defaults (e.g. BNB Chain).
         let bnb = merged.iter().find(|c| c.id == "0x38").unwrap();
         assert_eq!(bnb.name, "BNB Chain");
+        assert_eq!(bnb.rpc, "https://bsc-dataseed.bnbchain.org");
         // The custom chain stays, after the built-ins.
         assert_eq!(merged.last().unwrap().id, "0x40d9");
         assert!(!merged.last().unwrap().builtin);
+    }
+
+    #[test]
+    fn merge_persisted_chains_migrates_only_the_old_bnb_default_rpc() {
+        let mut old_default = builtin_chains()
+            .into_iter()
+            .find(|c| c.id == "0x38")
+            .unwrap();
+        old_default.rpc = "https://bsc-rpc.publicnode.com".to_string();
+
+        let migrated = merge_persisted_chains(vec![old_default]);
+        assert_eq!(
+            migrated.iter().find(|c| c.id == "0x38").unwrap().rpc,
+            "https://bsc-dataseed.bnbchain.org"
+        );
+
+        let mut custom = builtin_chains()
+            .into_iter()
+            .find(|c| c.id == "0x38")
+            .unwrap();
+        custom.rpc = "https://my-bnb-node.example".to_string();
+
+        let preserved = merge_persisted_chains(vec![custom]);
+        assert_eq!(
+            preserved.iter().find(|c| c.id == "0x38").unwrap().rpc,
+            "https://my-bnb-node.example"
+        );
     }
 
     /// A chain the user added manually before it became a built-in is promoted:

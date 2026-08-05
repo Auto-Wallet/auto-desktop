@@ -35,7 +35,7 @@ export const BUILTIN_CHAINS: Chain[] = [
   { id: "0xa",     name: "OP Mainnet",    symbol: "ETH",   rpc: "https://optimism-rpc.publicnode.com",            decimals: 18, color: "#FF0420", builtin: true },
   { id: "0xa4b1",  name: "Arbitrum One",  symbol: "ETH",   rpc: "https://arbitrum-one-rpc.publicnode.com",        decimals: 18, color: "#28A0F0", builtin: true },
   { id: "0x89",    name: "Polygon",       symbol: "POL",   rpc: "https://polygon-bor-rpc.publicnode.com",         decimals: 18, color: "#8247E5", builtin: true },
-  { id: "0x38",    name: "BNB Chain",     symbol: "BNB",   rpc: "https://bsc-rpc.publicnode.com",                 decimals: 18, color: "#F3BA2F", builtin: true },
+  { id: "0x38",    name: "BNB Chain",     symbol: "BNB",   rpc: "https://bsc-dataseed.bnbchain.org",              decimals: 18, color: "#F3BA2F", builtin: true },
   { id: "0xa86a",  name: "Avalanche",     symbol: "AVAX",  rpc: "https://avalanche-c-chain-rpc.publicnode.com",   decimals: 18, color: "#E84142", builtin: true },
   { id: "0xe708",  name: "Linea",         symbol: "ETH",   rpc: "https://linea-rpc.publicnode.com",               decimals: 18, color: "#61DFFF", builtin: true },
   { id: "0x13e31", name: "Blast",         symbol: "ETH",   rpc: "https://blast-rpc.publicnode.com",               decimals: 18, color: "#FCD000", builtin: true },

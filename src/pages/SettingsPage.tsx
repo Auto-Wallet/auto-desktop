@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./SettingsPage.css";
 import logoMark from "../assets/auto-desktop-mark.png";
 import {
@@ -27,12 +27,13 @@ import {
 } from "../lib/updater";
 import { updateBarState } from "../lib/updateBar";
 import { openExternalUrl } from "../lib/platform";
-import { useSegPill, useToggleInit } from "../lib/transitions";
+import { useModalExit, useSegPill, useToggleInit } from "../lib/transitions";
 import { Icon, type IconName } from "../lib/icons";
 import { CopyButton } from "../lib/ui";
 import { askConfirm } from "../lib/confirm";
 import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
+import { filterSettingsChains } from "./networkSettings";
 
 const APP_VERSION = __APP_VERSION__;
 
@@ -69,6 +70,11 @@ export default function SettingsPage() {
     null,
   );
   const [editing, setEditing] = useState<Chain | "new" | null>(null);
+  const [networkQuery, setNetworkQuery] = useState("");
+  const visibleChains = useMemo(
+    () => filterSettingsChains(chains, networkQuery),
+    [chains, networkQuery],
+  );
 
   const themeOpts: [ThemePref, IconName, string][] = [
     ["system", "monitor", t("settings.system")],
@@ -172,6 +178,14 @@ export default function SettingsPage() {
         />
       )}
 
+      {editing && (
+        <NetworkForm
+          t={t}
+          initial={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
       <div className="page scroll">
         <div className="settings-pad">
           {/* Networks */}
@@ -182,13 +196,35 @@ export default function SettingsPage() {
               </h2>
               <p>{t("settings.networkHint")}</p>
             </div>
-            <div className="set-card">
-              {chains.map((c) => {
+            <div className="network-tools">
+              <label className="network-search">
+                <Icon name="search" size={16} />
+                <input
+                  className="input"
+                  type="search"
+                  value={networkQuery}
+                  onChange={(event) => setNetworkQuery(event.target.value)}
+                  placeholder={t("settings.searchNetworks")}
+                  aria-label={t("settings.searchNetworks")}
+                />
+              </label>
+              <button
+                className="add-net"
+                type="button"
+                onClick={() => setEditing("new")}
+              >
+                <Icon name="plus" size={16} /> {t("settings.addNetwork")}
+              </button>
+            </div>
+            <div className="set-card network-list scroll">
+              {visibleChains.map((c) => {
                 const on = c.id.toLowerCase() === activeChain.toLowerCase();
                 return (
                   <div key={c.id} className={`chain-row${on ? " on" : ""}`}>
                     <button
                       className="chain-pick"
+                      type="button"
+                      aria-pressed={on}
                       onClick={() => void setActiveChain(c.id)}
                     >
                       <span className="chain-radio" />
@@ -211,6 +247,7 @@ export default function SettingsPage() {
                     <div className="chain-acts">
                       <button
                         className="icon-btn bare"
+                        type="button"
                         title={t("settings.edit")}
                         onClick={() => setEditing(c)}
                       >
@@ -219,6 +256,7 @@ export default function SettingsPage() {
                       {!c.builtin && (
                         <button
                           className="icon-btn bare"
+                          type="button"
                           title={t("settings.remove")}
                           onClick={async () => {
                             if (
@@ -240,18 +278,13 @@ export default function SettingsPage() {
                   </div>
                 );
               })}
+              {visibleChains.length === 0 && (
+                <div className="network-empty">
+                  <Icon name="search" size={18} />
+                  {t("settings.noNetworkMatches")}
+                </div>
+              )}
             </div>
-            {editing ? (
-              <NetworkForm
-                t={t}
-                initial={editing === "new" ? null : editing}
-                onClose={() => setEditing(null)}
-              />
-            ) : (
-              <button className="add-net" onClick={() => setEditing("new")}>
-                <Icon name="plus" size={16} /> {t("settings.addNetwork")}
-              </button>
-            )}
           </div>
 
           {/* Appearance */}
@@ -652,8 +685,18 @@ function NetworkForm({
   const [color, setColor] = useState(initial?.color ?? "#5b4bf0");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { cls, close } = useModalExit(onClose);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) close();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, close]);
 
   async function submit() {
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -668,7 +711,7 @@ function NetworkForm({
       };
       if (editing) await updateChain({ ...base, builtin: initial.builtin });
       else await addChain(base);
-      onClose();
+      close();
     } catch (e) {
       setError(errText(e));
       setBusy(false);
@@ -676,90 +719,119 @@ function NetworkForm({
   }
 
   return (
-    <div className="net-form">
-      <div className="net-form-title">
-        {editing ? t("settings.editNetwork") : t("settings.addNetwork")}
-      </div>
-      <div className="net-grid">
-        <div className="field net-wide">
-          <label className="field-label">{t("settings.netName")}</label>
-          <div className="net-name-row">
-            <input
-              type="color"
-              className="net-color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-            />
-            <input
-              className="input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="My Network"
-            />
+    <div className={`scrim t-scrim ${cls}`} onClick={() => !busy && close()}>
+      <form
+        className={`modal network-modal t-modal ${cls}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="network-modal-title"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <div className="modal-head">
+          <div className="modal-title" id="network-modal-title">
+            {editing ? t("settings.editNetwork") : t("settings.addNetwork")}
+          </div>
+          <button
+            className="icon-btn bare"
+            type="button"
+            aria-label={t("settings.cancel")}
+            disabled={busy}
+            onClick={close}
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+        <div className="modal-body scroll">
+          <div className="net-grid">
+            <div className="field net-wide">
+              <label className="field-label">{t("settings.netName")}</label>
+              <div className="net-name-row">
+                <input
+                  type="color"
+                  className="net-color"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                />
+                <input
+                  className="input"
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="My Network"
+                />
+              </div>
+            </div>
+            <div className="field">
+              <label className="field-label">{t("settings.netChainId")}</label>
+              <input
+                className="input mono"
+                value={id}
+                onChange={(e) => setId(e.target.value)}
+                placeholder="0x… or 1234"
+                disabled={editing}
+              />
+            </div>
+            <div className="field">
+              <label className="field-label">{t("settings.netSymbol")}</label>
+              <input
+                className="input"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+                placeholder="ETH"
+              />
+            </div>
+            <div className="field net-wide">
+              <label className="field-label">{t("settings.netRpc")}</label>
+              <input
+                className="input mono"
+                value={rpc}
+                onChange={(e) => setRpc(e.target.value)}
+                placeholder="https://…"
+              />
+            </div>
+            <div className="field net-wide">
+              <label className="field-label">{t("settings.netExplorer")}</label>
+              <input
+                className="input mono"
+                value={explorerUrl}
+                onChange={(e) => setExplorerUrl(e.target.value)}
+                placeholder="https://etherscan.io/tx/"
+              />
+            </div>
+            <div className="field">
+              <label className="field-label">{t("settings.netDecimals")}</label>
+              <input
+                className="input mono"
+                value={decimals}
+                onChange={(e) => setDecimals(e.target.value)}
+                placeholder="18"
+              />
+            </div>
+          </div>
+          {error && <div className="net-error">{error}</div>}
+          <div className="net-acts">
+            <button
+              className="btn btn-ghost btn-sm"
+              type="button"
+              disabled={busy}
+              onClick={close}
+            >
+              {t("settings.cancel")}
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
+              type="submit"
+              disabled={busy || !name || !id}
+            >
+              {busy ? "…" : t("settings.save")}
+            </button>
           </div>
         </div>
-        <div className="field">
-          <label className="field-label">{t("settings.netChainId")}</label>
-          <input
-            className="input mono"
-            value={id}
-            onChange={(e) => setId(e.target.value)}
-            placeholder="0x… or 1234"
-            disabled={editing}
-          />
-        </div>
-        <div className="field">
-          <label className="field-label">{t("settings.netSymbol")}</label>
-          <input
-            className="input"
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            placeholder="ETH"
-          />
-        </div>
-        <div className="field net-wide">
-          <label className="field-label">{t("settings.netRpc")}</label>
-          <input
-            className="input mono"
-            value={rpc}
-            onChange={(e) => setRpc(e.target.value)}
-            placeholder="https://…"
-            onKeyDown={(e) => e.key === "Enter" && submit()}
-          />
-        </div>
-        <div className="field net-wide">
-          <label className="field-label">{t("settings.netExplorer")}</label>
-          <input
-            className="input mono"
-            value={explorerUrl}
-            onChange={(e) => setExplorerUrl(e.target.value)}
-            placeholder="https://etherscan.io/tx/"
-            onKeyDown={(e) => e.key === "Enter" && submit()}
-          />
-        </div>
-        <div className="field">
-          <label className="field-label">{t("settings.netDecimals")}</label>
-          <input
-            className="input mono"
-            value={decimals}
-            onChange={(e) => setDecimals(e.target.value)}
-            placeholder="18"
-          />
-        </div>
-      </div>
-      {error && <div className="net-error">{error}</div>}
-      <div className="net-acts">
-        <button className="btn btn-ghost btn-sm" onClick={onClose}>
-          {t("settings.cancel")}
-        </button>
-        <button
-          className="btn btn-primary btn-sm"
-          disabled={busy || !name || !id}
-          onClick={submit}
-        >
-          {busy ? "…" : t("settings.save")}
-        </button>
-      </div>
+      </form>
     </div>
   );
 }
