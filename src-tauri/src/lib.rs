@@ -1071,10 +1071,10 @@ fn ensure_signing_webview_is_active(label: &str) -> Result<(), String> {
     }
 }
 
-/// How long a single JSON-RPC read may take before the call fails. Every step the
-/// user waits through between clicking Send and seeing the approval window is one
-/// of these, so it has to be short enough that four of them still fit inside
-/// `TX_PREPARE_TIMEOUT`.
+/// How long a single JSON-RPC read may take before the call fails. `prepare_tx`
+/// makes up to four of these in sequence and is capped as a whole by
+/// `TX_PREPARE_TIMEOUT`, so this bound is what stops ONE stalled call from eating
+/// the entire budget — it is deliberately smaller than the cap, not a quarter of it.
 const RPC_TIMEOUT: Duration = Duration::from_secs(6);
 /// Broadcasting gets longer than a read: a timeout here leaves the transaction in
 /// an unknown state (signed, possibly accepted), which is worse than waiting.
@@ -1991,8 +1991,7 @@ async fn wait_for_approval_ui(baseline: u64, budget: Duration) -> Result<(), Str
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(format!(
-                "the approval window did not open within {}s",
-                budget.as_secs()
+                "the approval window did not open within {budget:?}"
             ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2040,8 +2039,7 @@ async fn request_approval<R: Runtime>(
             );
             close_approval_window_if_idle(app);
             return Err(format!(
-                "the approval window did not open within {}s — nothing was signed",
-                APPROVAL_WINDOW_TIMEOUT.as_secs()
+                "the approval window did not open within {APPROVAL_WINDOW_TIMEOUT:?} — nothing was signed"
             ));
         }
     }
@@ -2071,6 +2069,10 @@ fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_always_on_top(true);
+        // Re-centre on the way back up: the shell may have moved to another
+        // monitor since this window was built, and a prompt left behind on the
+        // old display is the same invisible-window bug by a slower route.
+        place_over_shell(app, &win);
         let _ = win.set_focus();
         return Ok(());
     }
@@ -2432,9 +2434,8 @@ async fn prepare_tx_within(
         .await
         .unwrap_or_else(|_| {
             Err(format!(
-                "{} did not answer within {}s — the transaction was not prepared",
-                chain.name,
-                budget.as_secs()
+                "{} did not answer within {budget:?} — the transaction was not prepared",
+                chain.name
             ))
         })
 }
@@ -2498,6 +2499,26 @@ async fn prepare_tx_on(chain: &ChainCfg, tx: &Value) -> Result<PreparedTx, Strin
         max_priority_fee_per_gas: priority,
         max_fee_per_gas: max_fee,
     })
+}
+
+/// Mark the transaction a speed-up/cancel replaces as retired, and say whether
+/// anything changed.
+///
+/// ONLY a broadcast the node acknowledged retires the original. On an unconfirmed
+/// broadcast we do not know the replacement was accepted, and the two carry the
+/// same nonce — so the original stays pending and whichever mines settles it.
+/// Retiring it early hides a transaction that is still live.
+fn retire_original(records: &mut [ActivityRecord], id: &str, sent: &Broadcast) -> bool {
+    if sent.broadcast_error.is_some() {
+        return false;
+    }
+    match records.iter_mut().find(|r| r.id == id) {
+        Some(old) => {
+            old.status = Some("replaced".to_string());
+            true
+        }
+        None => false,
+    }
 }
 
 /// The outcome of signing + broadcasting. `hash` is what the caller reports and
@@ -4081,16 +4102,15 @@ async fn replace_activity_transaction<R: Runtime>(
     record_activity(&app, &p, "AutoDesktop Wallet", &sent.hash, &tx, Vec::new());
 
     let mut records = load_activity_records(&app);
-    if let Some(old) = records.iter_mut().find(|r| r.id == activity_id) {
-        old.status = Some("replaced".to_string());
+    if retire_original(&mut records, &activity_id, &sent) {
+        save_activity_records(&app, &records)?;
     }
-    save_activity_records(&app, &records)?;
     let _ = app.emit("activity-changed", ());
 
     match sent.broadcast_error {
         None => Ok(json!(sent.hash)),
         Some(e) => Err(format!(
-            "the replacement was signed and sent but {} did not confirm it ({e}). It is in Activity as {} — check there before trying again.",
+            "the replacement was signed and sent but {} did not confirm it ({e}). It is in Activity as {}, and the original is still shown as pending until one of them mines.",
             p.chain_name, sent.hash
         )),
     }
@@ -7706,7 +7726,7 @@ mod tests {
     /// A node that accepts the connection and then says nothing — the exact shape
     /// of the stall that left Send spinning with no window and no error. Returns
     /// the chain pointed at it; the listener thread holds the socket open.
-    fn stalled_node_chain() -> ChainCfg {
+    pub(super) fn stalled_node_chain() -> ChainCfg {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         std::thread::spawn(move || {
@@ -7739,25 +7759,6 @@ mod tests {
             Duration::from_millis(300),
         ));
         assert!(out.is_err(), "a silent node must produce an error");
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "gave up only after {:?}",
-            started.elapsed()
-        );
-    }
-
-    /// Same guarantee one level up: the whole pre-approval preparation is bounded,
-    /// so the Send button can never sit on "confirm in window" with no window.
-    #[test]
-    fn preparing_a_transaction_gives_up_on_a_silent_node() {
-        let chain = stalled_node_chain();
-        let started = std::time::Instant::now();
-        let out = tauri::async_runtime::block_on(prepare_tx_within(
-            &chain,
-            &json!({ "from": SPIKE_ACCOUNT, "to": SPIKE_ACCOUNT, "value": "0x1" }),
-            Duration::from_millis(400),
-        ));
-        assert!(out.is_err(), "preparation against a silent node must fail");
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "gave up only after {:?}",
@@ -7803,6 +7804,60 @@ mod tests {
             out.is_ok(),
             "a live approval UI must clear the wait: {out:?}"
         );
+    }
+
+    /// A speed-up whose broadcast was never acknowledged must NOT retire the
+    /// transaction it replaces: same nonce, unknown outcome, so the original is
+    /// still the one that might mine. Showing it as "replaced" hides a live
+    /// transaction from the person who just tried to cancel it.
+    #[test]
+    fn only_a_confirmed_replacement_retires_the_original() {
+        let original = ActivityRecord {
+            id: "0x1:0xabc".into(),
+            hash: "0xabc".into(),
+            chain_id: "0x1".into(),
+            chain_name: "Ethereum".into(),
+            symbol: "ETH".into(),
+            from: SPIKE_ACCOUNT.into(),
+            to: SPIKE_ACCOUNT.into(),
+            value: "0x1".into(),
+            data: "0x".into(),
+            gas: "0x5208".into(),
+            nonce: "0x1".into(),
+            max_priority_fee_per_gas: "0x1".into(),
+            max_fee_per_gas: "0x2".into(),
+            origin: "AutoDesktop Wallet".into(),
+            kind: "send".into(),
+            counterparty: None,
+            asset_symbol: None,
+            asset_decimals: None,
+            amount: None,
+            token_address: None,
+            swap: None,
+            balance_changes: Vec::new(),
+            status: Some("submitted".to_string()),
+            timestamp: 0,
+        };
+
+        let unconfirmed = Broadcast {
+            hash: "0xdef".into(),
+            broadcast_error: Some("node never answered".into()),
+        };
+        let mut records = vec![original.clone()];
+        assert!(!retire_original(&mut records, "0x1:0xabc", &unconfirmed));
+        assert_eq!(
+            records[0].status.as_deref(),
+            Some("submitted"),
+            "an unconfirmed replacement must leave the original pending"
+        );
+
+        let confirmed = Broadcast {
+            hash: "0xdef".into(),
+            broadcast_error: None,
+        };
+        let mut records = vec![original];
+        assert!(retire_original(&mut records, "0x1:0xabc", &confirmed));
+        assert_eq!(records[0].status.as_deref(), Some("replaced"));
     }
 
     /// Broadcasting is the one call where "no answer" and "no thanks" must not be
@@ -9348,6 +9403,42 @@ mod e2e {
         let recid = k256::ecdsa::RecoveryId::from_byte(sig65[64] - 27).expect("valid recid");
         let vk = VerifyingKey::recover_from_prehash(&digest, &signature, recid).expect("recover");
         address_from_verifying_key(&vk)
+    }
+
+    /// The whole pre-approval preparation is bounded, so the Send button can never
+    /// sit on "confirm in window" with no window. This lives in `e2e` because it
+    /// needs an UNLOCKED vault: with a locked one `prepare_tx` returns "wallet is
+    /// locked" in microseconds and never reaches the node, which is how the first
+    /// version of this test passed without exercising a single timeout.
+    #[test]
+    fn preparing_a_transaction_gives_up_on_a_silent_node() {
+        let _guard = wallet_guard(); // serialises + unlocks the shared vault
+        let chain = super::tests::stalled_node_chain();
+        let started = std::time::Instant::now();
+        let out = tauri::async_runtime::block_on(prepare_tx_within(
+            &chain,
+            &json!({ "from": SPIKE_ACCOUNT, "to": SPIKE_ACCOUNT, "value": "0x1" }),
+            Duration::from_millis(600),
+        ));
+        let err = out
+            .err()
+            .expect("preparation against a silent node must fail");
+        // Naming the reason is the point: any other error means the call never got
+        // as far as the node and the timeout was never tested.
+        assert!(
+            err.contains("did not answer within"),
+            "must fail on the prepare timeout, got: {err}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(600),
+            "returned in {:?} — it cannot have waited on the node",
+            started.elapsed()
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "gave up only after {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

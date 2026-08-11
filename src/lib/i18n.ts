@@ -773,6 +773,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.phase.awaiting-window": "正在打开确认窗口…",
     "wallet.phase.awaiting-approval": "请在窗口中确认…",
     "wallet.phase.broadcasting": "正在广播…",
+
     "wallet.sendApprovalHint": "你将在单独的窗口中查看网络费用并确认。",
     "wallet.swapSoon": "兑换即将推出 —— 请从「探索」打开 DEX。",
     "wallet.bridge": "跨链",
@@ -989,6 +990,13 @@ export type TFn = (
   key: string,
   vars?: Record<string, string | number>,
 ) => string;
+
+/** Every key a locale defines. A key present in one dictionary only is invisible
+ *  at runtime — `translate` quietly serves the English string — so the test suite
+ *  compares the two sets instead of waiting for someone to notice. */
+export function translationKeys(l: Lang): string[] {
+  return Object.keys(DICT[l]);
+}
 
 /** The non-hook form of `t`. Unknown keys fall back to English, then to the key
  *  itself — so a key that exists nowhere renders as raw dotted text. */

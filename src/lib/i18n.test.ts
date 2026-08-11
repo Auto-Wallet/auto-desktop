@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, "localStorage", {
   } satisfies Storage,
 });
 
-const { translate } = await import("./i18n");
+const { translate, translationKeys } = await import("./i18n");
 
 // The Send button reads its label straight off the backend's phase name. A phase
 // with no string renders as raw "wallet.phase.awaiting-window" text, because
@@ -39,7 +39,10 @@ for (const lang of ["en", "zh"] as const) {
 }
 
 test("zh and en carry the same set of keys", () => {
-  // A key added to one dictionary only silently serves English to zh users.
-  const sample = "wallet.phase.awaiting-window";
-  expect(translate("zh", sample)).not.toBe(translate("en", sample));
+  // A key added to one dictionary only is invisible at runtime: translate()
+  // falls back to English, so zh users silently get an English string.
+  const en = new Set(translationKeys("en"));
+  const zh = new Set(translationKeys("zh"));
+  expect([...en].filter((k) => !zh.has(k))).toEqual([]);
+  expect([...zh].filter((k) => !en.has(k))).toEqual([]);
 });
