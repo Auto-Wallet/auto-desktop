@@ -11,6 +11,7 @@
 // onboarding + wallet-management UI is browseable for screenshot testing.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 import type { ActivitySwap } from "./activity";
 import { isTauri } from "./platform";
@@ -246,6 +247,32 @@ export type SendTx = {
     swap?: ActivitySwap;
   };
 };
+
+/**
+ * How far a signing request has got. The backend reports each step so the UI can
+ * name what it is actually waiting for — telling the user to "confirm in window"
+ * while no window exists yet is how a stalled send looked like a frozen app.
+ */
+export type RequestPhase =
+  | "preparing"
+  | "awaiting-window"
+  | "awaiting-approval"
+  | "broadcasting";
+
+/**
+ * Subscribe to request-phase updates; returns an unsubscribe function. The stream
+ * covers every signing request, dApp ones included — a caller that only has its
+ * own send on screen (the Send modal) can take them all, since nothing else is
+ * showing a phase at the same time.
+ */
+export function onRequestPhase(cb: (phase: RequestPhase) => void): () => void {
+  if (!isTauri()) return () => {};
+  const stop = listen<{ id: string | null; phase: RequestPhase }>(
+    "wallet-request-phase",
+    (e) => cb(e.payload.phase),
+  );
+  return () => void stop.then((un) => un());
+}
 
 /**
  * Wallet-initiated send. Runs through the SAME approval window + signing path as a

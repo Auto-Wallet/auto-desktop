@@ -115,6 +115,28 @@ Non-obvious ACL facts (verified): app commands work from local webviews with no 
 
 **Signing/approval flow:** a Signing method suspends in `request_approval` (a per-request `tokio::oneshot` + a 300s timeout) and opens a **separate top-level approval window** (`index.html?view=approval` → `ApprovalView.tsx`) — separate because the dapp webview renders on top of the shell, so an in-shell modal can't cover it. The window's `approve_request`/`reject_request` resolve the channel; approve → the backend signs (Rust-side key, never in any webview), reject → EIP-1193 `4001`. ⚠️ The active key is currently the **publicly-known Anvil #0 dev key** (`DEV_PRIVKEY_HEX`, labeled in `lib.rs`) — the encrypted password-unlocked vault is the next slice. Only `personal_sign` is wired so far; other signing methods reject up-front.
 
+**Nothing on the signing path may wait without a bound** (fixed once, after a Send
+sat on "confirm in window" forever with no window and no error, leaving no trace):
+- `WebviewWindowBuilder::build()` **only posts a `CreateWindow` message to the event
+  loop and returns Ok** (`tauri-runtime-wry`, `Context::create_window`) — its `Ok` is
+  *not* proof a window exists. `request_approval` therefore waits for the approval
+  UI itself to call in (`APPROVAL_UI_BEAT`, bumped by the three commands only that
+  window may call) and fails inside `APPROVAL_WINDOW_TIMEOUT`. The `DECISION_TIMEOUT`
+  starts only after that, so it can never again hide a window that never appeared.
+- A freshly built approval window must be **positioned and focused explicitly**
+  (`place_over_shell` + `set_focus`). Left to macOS, a 420x640 prompt lands wherever
+  the OS likes — on a multi-monitor desk, a display the user isn't looking at.
+  `always_on_top` does not move a window onto the screen you are using.
+- `http()` carries `connect_timeout`/`timeout`/`pool_idle_timeout`/`tcp_keepalive`.
+  A bare `reqwest::Client::new()` has none, so a keep-alive socket the peer had
+  quietly dropped swallowed a request and never answered.
+- Broadcasting distinguishes `RpcFailure::Rejected` (node said no — nothing in
+  flight) from `Unreachable` (no answer — the signed tx *may* be in flight, so it is
+  recorded under its locally computed hash and left to the receipt poller).
+- The send path logs to `autodesktop.log` via `log_diagnostic`. `println!` goes to
+  stdout, which macOS discards for a double-clicked `.app` — that is why the original
+  failure left nothing to read.
+
 ### Injection pipeline (how the provider gets into dApp pages)
 `src/injected/inpage.tauri.ts` (defines the Tauri `invoke`-based `ProviderTransport`, calls `src/wallet-core`'s `installProvider`) → bundled to a self-contained IIFE by `scripts/build-injected.ts` (`Bun.build`, `format: iife`) → written to `src-tauri/injected/inpage.js` → embedded in Rust via `include_str!` → set as the dapp webview's `initialization_script`.
 

@@ -291,7 +291,13 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.txConfirmed": "Transaction confirmed: {hash}",
     "wallet.txFailed": "Transaction failed: {hash}",
     "wallet.noSendable": "No tokens with a balance to send.",
-    "wallet.sending": "Confirm in window…",
+    // Each step the backend reports between the click and the approval window, so
+    // a slow step names itself instead of the button lying about a window that
+    // does not exist yet.
+    "wallet.phase.preparing": "Fetching fee & nonce…",
+    "wallet.phase.awaiting-window": "Opening confirm window…",
+    "wallet.phase.awaiting-approval": "Confirm in window…",
+    "wallet.phase.broadcasting": "Broadcasting…",
     "wallet.sendApprovalHint":
       "You'll review the network fee and confirm in a separate window.",
     "wallet.swapSoon": "Swap is coming soon — open a DEX from Explore.",
@@ -763,7 +769,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.txConfirmed": "交易已确认：{hash}",
     "wallet.txFailed": "交易失败：{hash}",
     "wallet.noSendable": "没有可发送的余额。",
-    "wallet.sending": "请在窗口中确认…",
+    "wallet.phase.preparing": "正在获取手续费与 nonce…",
+    "wallet.phase.awaiting-window": "正在打开确认窗口…",
+    "wallet.phase.awaiting-approval": "请在窗口中确认…",
+    "wallet.phase.broadcasting": "正在广播…",
     "wallet.sendApprovalHint": "你将在单独的窗口中查看网络费用并确认。",
     "wallet.swapSoon": "兑换即将推出 —— 请从「探索」打开 DEX。",
     "wallet.bridge": "跨链",
@@ -981,7 +990,9 @@ export type TFn = (
   vars?: Record<string, string | number>,
 ) => string;
 
-function translate(
+/** The non-hook form of `t`. Unknown keys fall back to English, then to the key
+ *  itself — so a key that exists nowhere renders as raw dotted text. */
+export function translate(
   l: Lang,
   key: string,
   vars?: Record<string, string | number>,
