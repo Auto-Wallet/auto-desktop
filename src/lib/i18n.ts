@@ -288,6 +288,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.insufficient": "Insufficient balance.",
     "wallet.sent": "Transaction submitted",
     "wallet.txSubmitted": "Transaction submitted: {hash}",
+    "wallet.txUnconfirmed":
+      "Sent, but the network did not confirm receipt: {hash}. It is being tracked — check Activity before sending again.",
     "wallet.txConfirmed": "Transaction confirmed: {hash}",
     "wallet.txFailed": "Transaction failed: {hash}",
     "wallet.noSendable": "No tokens with a balance to send.",
@@ -766,6 +768,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.insufficient": "余额不足。",
     "wallet.sent": "交易已提交",
     "wallet.txSubmitted": "交易已提交：{hash}",
+    "wallet.txUnconfirmed":
+      "已发出,但网络没有确认收到：{hash}。已在追踪 —— 重新发送前请先看活动记录。",
     "wallet.txConfirmed": "交易已确认：{hash}",
     "wallet.txFailed": "交易失败：{hash}",
     "wallet.noSendable": "没有可发送的余额。",

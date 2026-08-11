@@ -2534,6 +2534,10 @@ struct Broadcast {
 /// Sign (Rust-side software key, or on the Ledger) and broadcast a fully-prepared
 /// EIP-1559 transaction.
 async fn finalize_tx(p: &PreparedTx) -> Result<Broadcast, String> {
+    finalize_tx_within(p, BROADCAST_TIMEOUT).await
+}
+
+async fn finalize_tx_within(p: &PreparedTx, budget: Duration) -> Result<Broadcast, String> {
     use eth_tx::{parse_address, parse_data, parse_quantity, Eip1559Tx};
 
     let chain = find_chain(&p.chain_id)
@@ -2559,14 +2563,7 @@ async fn finalize_tx(p: &PreparedTx) -> Result<Broadcast, String> {
         }
     };
     // Broadcast; the node echoes the canonical transaction hash.
-    match node_rpc_try(
-        &chain,
-        "eth_sendRawTransaction",
-        &[json!(raw_tx)],
-        BROADCAST_TIMEOUT,
-    )
-    .await
-    {
+    match node_rpc_try(&chain, "eth_sendRawTransaction", &[json!(raw_tx)], budget).await {
         Ok(v) => Ok(Broadcast {
             hash: v
                 .as_str()
@@ -2638,7 +2635,7 @@ async fn approve_and_send<R: Runtime>(
     }
     emit_request_phase(app, None, "broadcasting");
     let sent = finalize_tx(&p).await?;
-    record_activity(app, &p, origin, &sent.hash, tx, decision.balance_changes);
+    record_activity(app, &p, origin, &sent, tx, decision.balance_changes);
     log_diagnostic(
         app,
         format!(
@@ -2649,15 +2646,13 @@ async fn approve_and_send<R: Runtime>(
             sent.broadcast_error.as_deref().unwrap_or("none")
         ),
     );
-    match sent.broadcast_error {
-        None => Ok(json!(sent.hash)),
-        // Signed and handed over, but the node never acknowledged. Say so plainly
-        // and name the hash — it is already in Activity, being polled.
-        Some(e) => Err(format!(
-            "the transaction was signed and sent but {} did not confirm it ({e}). It is in Activity as {} — check there before sending again.",
-            p.chain_name, sent.hash
-        )),
-    }
+    // The hash goes back either way. A signed transaction we could not get
+    // acknowledged is NOT a failed request: EIP-1193 says eth_sendTransaction
+    // returns the hash once the wallet has one, and answering a dApp with an error
+    // invites it to offer Retry — which, if the first broadcast did land, sends the
+    // money twice. The ambiguity travels as `activity-unconfirmed` instead, which
+    // the shell shows as a warning while the receipt poller settles it.
+    Ok(json!(sent.hash))
 }
 
 /// Wallet-initiated send (shell-only): same approval + sign + broadcast path as a
@@ -3832,10 +3827,11 @@ fn record_activity<R: Runtime>(
     app: &AppHandle<R>,
     prepared: &PreparedTx,
     origin: &str,
-    hash: &str,
+    sent: &Broadcast,
     tx: &Value,
     balance_changes: Vec<ActivityBalanceChange>,
 ) {
+    let hash = sent.hash.as_str();
     let has_data = prepared.data.trim() != "0x" && !prepared.data.trim().is_empty();
     let mut meta = tx_activity_meta(tx);
     let parsed_transfer = parse_erc20_transfer(&prepared.data);
@@ -3920,7 +3916,13 @@ fn record_activity<R: Runtime>(
     } else {
         let _ = app.emit("activity-changed", ());
     }
-    let _ = app.emit("activity-recorded", &records[0]);
+    let event = match sent.broadcast_error {
+        None => "activity-recorded",
+        // Recorded and polled like any other submission, but the node never said
+        // it took it — the shell warns instead of announcing a clean submit.
+        Some(_) => "activity-unconfirmed",
+    };
+    let _ = app.emit(event, &records[0]);
 }
 
 #[tauri::command]
@@ -4099,7 +4101,7 @@ async fn replace_activity_transaction<R: Runtime>(
             "tokenAddress": original.token_address
         }
     });
-    record_activity(&app, &p, "AutoDesktop Wallet", &sent.hash, &tx, Vec::new());
+    record_activity(&app, &p, "AutoDesktop Wallet", &sent, &tx, Vec::new());
 
     let mut records = load_activity_records(&app);
     if retire_original(&mut records, &activity_id, &sent) {
@@ -4107,13 +4109,9 @@ async fn replace_activity_transaction<R: Runtime>(
     }
     let _ = app.emit("activity-changed", ());
 
-    match sent.broadcast_error {
-        None => Ok(json!(sent.hash)),
-        Some(e) => Err(format!(
-            "the replacement was signed and sent but {} did not confirm it ({e}). It is in Activity as {}, and the original is still shown as pending until one of them mines.",
-            p.chain_name, sent.hash
-        )),
-    }
+    // As in approve_and_send: the hash goes back either way, and an unacknowledged
+    // broadcast surfaces as a warning rather than an error that invites a retry.
+    Ok(json!(sent.hash))
 }
 
 #[tauri::command]
@@ -9403,6 +9401,53 @@ mod e2e {
         let recid = k256::ecdsa::RecoveryId::from_byte(sig65[64] - 27).expect("valid recid");
         let vk = VerifyingKey::recover_from_prehash(&digest, &signature, recid).expect("recover");
         address_from_verifying_key(&vk)
+    }
+
+    /// A broadcast the node never acknowledged still yields a hash, and it is the
+    /// one computed from the signed bytes. Answering with an error instead would
+    /// tell a dApp the request failed, and a dApp that offers Retry on a
+    /// transaction that actually landed sends the money a second time.
+    #[test]
+    fn an_unacknowledged_broadcast_still_yields_the_signed_hash() {
+        let _guard = wallet_guard();
+        let chain = super::tests::stalled_node_chain();
+        let chain_id = chain.id.clone();
+        // finalize_tx resolves the chain from the registry, so register the silent
+        // one for the length of the test and put the list back afterwards.
+        let restore = chains_state().lock().unwrap().clone();
+        chains_state().lock().unwrap().push(chain);
+
+        let prepared = PreparedTx {
+            chain_id: chain_id.clone(),
+            chain_name: "Stalled".into(),
+            symbol: "ETH".into(),
+            from: SPIKE_ACCOUNT.into(),
+            to: SPIKE_ACCOUNT.into(),
+            value: "0x1".into(),
+            data: "0x".into(),
+            gas: "0x5208".into(),
+            nonce: "0x0".into(),
+            max_priority_fee_per_gas: "0x1".into(),
+            max_fee_per_gas: "0x3b9aca00".into(),
+        };
+        let sent = tauri::async_runtime::block_on(finalize_tx_within(
+            &prepared,
+            Duration::from_millis(300),
+        ));
+        *chains_state().lock().unwrap() = restore;
+
+        let sent = sent.expect("an unreachable node must not fail the call outright");
+        assert!(
+            sent.broadcast_error.is_some(),
+            "a silent node leaves the broadcast unconfirmed"
+        );
+        // The locally computed hash is the canonical one: keccak of the signed
+        // bytes is what the node would have echoed had it answered.
+        assert!(
+            sent.hash.starts_with("0x") && sent.hash.len() == 66,
+            "must report a real tx hash, got {}",
+            sent.hash
+        );
     }
 
     /// The whole pre-approval preparation is bounded, so the Send button can never
