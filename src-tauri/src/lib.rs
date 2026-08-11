@@ -7721,6 +7721,10 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    /// Chain id for the loopback stubs below. Must not collide with anything in
+    /// the real registry — see `stalled_node_chain`.
+    pub(super) const TEST_CHAIN_ID: &str = "0xdeadbeef";
+
     /// A node that accepts the connection and then says nothing — the exact shape
     /// of the stall that left Send spinning with no window and no error. Returns
     /// the chain pointed at it; the listener thread holds the socket open.
@@ -7732,7 +7736,10 @@ mod tests {
             std::thread::sleep(Duration::from_secs(30));
         });
         ChainCfg {
-            id: "0x1".into(),
+            // Deliberately not a real chain id. find_chain returns the FIRST
+            // match, so "0x1" here resolved to the builtin Ethereum and sent a
+            // signed transaction to the live network.
+            id: TEST_CHAIN_ID.into(),
             name: "Stalled".into(),
             symbol: "ETH".into(),
             rpc: format!("http://{addr}"),
@@ -7915,7 +7922,7 @@ mod tests {
             }
         });
         ChainCfg {
-            id: "0x1".into(),
+            id: TEST_CHAIN_ID.into(),
             name: "Refusing".into(),
             symbol: "ETH".into(),
             rpc: format!("http://{addr}"),
@@ -9416,6 +9423,14 @@ mod e2e {
         // one for the length of the test and put the list back afterwards.
         let restore = chains_state().lock().unwrap().clone();
         chains_state().lock().unwrap().push(chain);
+        // finalize_tx signs and broadcasts for real. Prove the registry lookup
+        // lands on the loopback stub BEFORE letting it near a node — a colliding
+        // id once sent a signed transaction to live Ethereum from CI.
+        let resolved = find_chain(&chain_id).map(|c| c.rpc);
+        if resolved.as_deref().map(|rpc| rpc.contains("127.0.0.1")) != Some(true) {
+            *chains_state().lock().unwrap() = restore;
+            panic!("test chain must resolve to the loopback stub, got {resolved:?}");
+        }
 
         let prepared = PreparedTx {
             chain_id: chain_id.clone(),
