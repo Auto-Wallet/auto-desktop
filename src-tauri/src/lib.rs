@@ -1071,10 +1071,42 @@ fn ensure_signing_webview_is_active(label: &str) -> Result<(), String> {
     }
 }
 
+/// How long a single JSON-RPC read may take before the call fails. `prepare_tx`
+/// makes up to four of these in sequence and is capped as a whole by
+/// `TX_PREPARE_TIMEOUT`, so this bound is what stops ONE stalled call from eating
+/// the entire budget — it is deliberately smaller than the cap, not a quarter of it.
+const RPC_TIMEOUT: Duration = Duration::from_secs(6);
+/// Broadcasting gets longer than a read: a timeout here leaves the transaction in
+/// an unknown state (signed, possibly accepted), which is worse than waiting.
+const BROADCAST_TIMEOUT: Duration = Duration::from_secs(15);
+/// The whole pre-approval preparation (nonce + gas + fees).
+const TX_PREPARE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the approval window gets to actually come up and report in.
+const APPROVAL_WINDOW_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the user then gets to read the request and decide. This one is long on
+/// purpose — a Ledger confirmation is slow — and it starts only once the window is
+/// up, so it can no longer hide a window that never appeared.
+const DECISION_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// A pooled HTTP client (keeps connections warm across RPC calls).
+///
+/// The timeouts are not optional garnish. With a bare `reqwest::Client::new()`
+/// there is no request timeout, no connect timeout and no pool hygiene, so a
+/// keep-alive connection the peer had silently dropped would swallow a request
+/// and never answer — the future parked forever and the UI sat on "confirm in
+/// window" with no window and no error. `pool_idle_timeout` + `tcp_keepalive`
+/// retire those sockets before they can be reused; `timeout` bounds what is left.
 fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(BROADCAST_TIMEOUT) // per-call `.timeout()` tightens this
+            .pool_idle_timeout(Duration::from_secs(15))
+            .tcp_keepalive(Duration::from_secs(30))
+            .build()
+            .expect("build the shared HTTP client")
+    })
 }
 
 #[derive(Debug, PartialEq)]
@@ -1279,21 +1311,68 @@ fn with_public_node_key(url: &str) -> Cow<'_, str> {
 /// send no CORS headers, which would break a browser `fetch`. Shared by dApp
 /// forwarding and the shell's read command.
 async fn node_rpc_call(chain: &ChainCfg, method: &str, params: &[Value]) -> Result<Value, String> {
+    node_rpc_call_within(chain, method, params, RPC_TIMEOUT).await
+}
+
+/// Why a call failed. The difference matters exactly once — when broadcasting a
+/// signed transaction. `Rejected` means the node read it and said no, so nothing
+/// is in flight. `Unreachable` means we never got an answer, so it might be.
+enum RpcFailure {
+    Rejected(String),
+    Unreachable(String),
+}
+
+impl RpcFailure {
+    fn message(self) -> String {
+        match self {
+            RpcFailure::Rejected(m) | RpcFailure::Unreachable(m) => m,
+        }
+    }
+}
+
+/// `node_rpc_call` with an explicit budget. Reads take `RPC_TIMEOUT`; broadcasting
+/// takes `BROADCAST_TIMEOUT`. No call is ever unbounded.
+async fn node_rpc_call_within(
+    chain: &ChainCfg,
+    method: &str,
+    params: &[Value],
+    budget: Duration,
+) -> Result<Value, String> {
+    node_rpc_try(chain, method, params, budget)
+        .await
+        .map_err(RpcFailure::message)
+}
+
+async fn node_rpc_try(
+    chain: &ChainCfg,
+    method: &str,
+    params: &[Value],
+    budget: Duration,
+) -> Result<Value, RpcFailure> {
     let payload = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
 
     let resp = http()
         .post(with_public_node_key(&chain.rpc).as_ref())
+        .timeout(budget)
         .json(&payload)
         .send()
         .await
         // `without_url` matters now that the URL carries the API key: reqwest's
         // Display prints the failing URL, which would spill the key into the
         // error string the UI and the dApp both get to see.
-        .map_err(|e| format!("RPC request to {} failed: {}", chain.name, e.without_url()))?;
-    let body: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("RPC response from {} was not JSON: {e}", chain.name))?;
+        .map_err(|e| {
+            RpcFailure::Unreachable(format!(
+                "RPC request to {} failed: {}",
+                chain.name,
+                e.without_url()
+            ))
+        })?;
+    let body: Value = resp.json().await.map_err(|e| {
+        RpcFailure::Unreachable(format!(
+            "RPC response from {} was not JSON: {e}",
+            chain.name
+        ))
+    })?;
 
     if let Some(err) = body.get("error") {
         let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
@@ -1301,11 +1380,12 @@ async fn node_rpc_call(chain: &ChainCfg, method: &str, params: &[Value]) -> Resu
             .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("unknown RPC error");
-        return Err(format!("{msg} (code {code})"));
+        // The node answered, in full sentences: this is a verdict, not a gap.
+        return Err(RpcFailure::Rejected(format!("{msg} (code {code})")));
     }
-    body.get("result")
-        .cloned()
-        .ok_or_else(|| format!("RPC response from {} had no result", chain.name))
+    body.get("result").cloned().ok_or_else(|| {
+        RpcFailure::Unreachable(format!("RPC response from {} had no result", chain.name))
+    })
 }
 
 async fn forward_to_node(method: &str, params: &[Value]) -> Result<Value, String> {
@@ -1731,7 +1811,7 @@ async fn safe_confirm_transaction<R: Runtime>(
         tx: None,
         typed_data: Some(typed.clone()),
     };
-    if !request_approval(&app, req).await.approved {
+    if !request_approval(&app, req).await?.approved {
         return Err("User rejected the Safe confirmation (4001)".to_string());
     }
 
@@ -1886,27 +1966,97 @@ fn preview_message(bytes: &[u8]) -> String {
     }
 }
 
+/// Proof-of-life from the approval window, bumped by every command only that
+/// window may call (see capabilities/approval.json). `build()` returning Ok says
+/// nothing about whether a window exists — this does.
+static APPROVAL_UI_BEAT: AtomicU64 = AtomicU64::new(0);
+
+fn approval_ui_beat() -> u64 {
+    APPROVAL_UI_BEAT.load(Ordering::Relaxed)
+}
+
+fn note_approval_ui_alive() -> u64 {
+    APPROVAL_UI_BEAT.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Wait for the approval window's UI to call in, having already registered the
+/// request so it has something to show. Fails inside `budget` rather than falling
+/// through to the decision timer — a user who sees nothing happen must be told
+/// within seconds, not left to guess for five minutes.
+async fn wait_for_approval_ui(baseline: u64, budget: Duration) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        if approval_ui_beat() > baseline {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "the approval window did not open within {budget:?}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// Register a pending request, surface the approval window, and await the user's
-/// decision (with a safety timeout). Returns the decision (rejected on timeout).
-async fn request_approval<R: Runtime>(app: &AppHandle<R>, req: PendingRequest) -> ApprovalDecision {
+/// decision. Errors when the window never comes up; otherwise returns the decision
+/// (rejected on the decision timeout).
+async fn request_approval<R: Runtime>(
+    app: &AppHandle<R>,
+    req: PendingRequest,
+) -> Result<ApprovalDecision, String> {
     let id = req.id.clone();
+    let method = req.method.clone();
     let (tx, rx) = tokio::sync::oneshot::channel::<ApprovalDecision>();
+    // Snapshot before registering, so a beat from a window already showing an
+    // EARLIER request cannot be mistaken for one that has picked this one up.
+    let baseline = approval_ui_beat();
     pending()
         .lock()
         .unwrap()
         .insert(id.clone(), PendingEntry { req, responder: tx });
 
-    // Best-effort: bring up the approval window. If it can't open we still wait —
-    // an already-open window (or, in tests, a direct approve_request) resolves it.
+    emit_request_phase(app, Some(&id), "awaiting-window");
     if let Err(e) = open_approval_window(app) {
-        println!("[AutoDesktop] warn: could not open approval window: {e}");
+        pending().lock().unwrap().remove(&id);
+        log_diagnostic(app, format!("approval window build failed id={id} err={e}"));
+        return Err(format!("could not open the approval window: {e}"));
     }
 
-    let decided = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
+    // `WebviewWindowBuilder::build()` only posts a CreateWindow message to the
+    // event loop and returns Ok, so it reports success for a window that never
+    // appears. Wait for the window's own UI to prove otherwise.
+    if wait_for_approval_ui(baseline, APPROVAL_WINDOW_TIMEOUT)
+        .await
+        .is_err()
+    {
+        // …unless it was decided inside that window anyway, which leaves nothing
+        // registered under this id and a decision already sitting in the channel.
+        if pending().lock().unwrap().remove(&id).is_some() {
+            log_diagnostic(
+                app,
+                format!("approval window never reported in id={id} method={method}"),
+            );
+            close_approval_window_if_idle(app);
+            return Err(format!(
+                "the approval window did not open within {APPROVAL_WINDOW_TIMEOUT:?} — nothing was signed"
+            ));
+        }
+    }
+
+    log_diagnostic(app, format!("approval window up id={id} method={method}"));
+    emit_request_phase(app, Some(&id), "awaiting-approval");
+    let decided = tokio::time::timeout(DECISION_TIMEOUT, rx).await;
     pending().lock().unwrap().remove(&id); // no-op if already resolved; cleans up on timeout
     match decided {
-        Ok(Ok(decision)) => decision,
-        _ => ApprovalDecision::default(), // timeout / channel drop = rejected
+        Ok(Ok(decision)) => Ok(decision),
+        _ => {
+            // Timed out waiting for the user: the window is still sitting there
+            // showing a request nobody will answer, so take it down.
+            log_diagnostic(app, format!("approval timed out id={id} method={method}"));
+            close_approval_window_if_idle(app);
+            Ok(ApprovalDecision::default()) // = rejected
+        }
     }
 }
 
@@ -1919,10 +2069,19 @@ fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_always_on_top(true);
+        // Re-centre on the way back up: the shell may have moved to another
+        // monitor since this window was built, and a prompt left behind on the
+        // old display is the same invisible-window bug by a slower route.
+        place_over_shell(app, &win);
         let _ = win.set_focus();
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(
+    // Placement and focus are NOT the platform's business here. Left to macOS the
+    // window is put wherever the OS likes, which on a multi-monitor desk means a
+    // 420x640 prompt can land on a display the user is not looking at — they see
+    // nothing, and `always_on_top` only keeps it above its own screen's windows.
+    // The reuse branch above always focuses; a freshly built one must too.
+    let win = tauri::WebviewWindowBuilder::new(
         app,
         "approval",
         WebviewUrl::App("index.html?view=approval".into()),
@@ -1931,8 +2090,50 @@ fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .inner_size(420.0, 640.0)
     .resizable(false)
     .always_on_top(true)
+    .focused(true)
+    .center()
     .build()?;
+    place_over_shell(app, &win);
+    let _ = win.set_focus();
     Ok(())
+}
+
+/// Centre the approval window on whatever monitor the main window is on. `.center()`
+/// alone centres on the *current* monitor as the OS sees it, which is not
+/// necessarily the one the user is working on.
+fn place_over_shell<R: Runtime>(app: &AppHandle<R>, win: &tauri::WebviewWindow<R>) {
+    let Some(main) = app.get_window("main") else {
+        return;
+    };
+    let (Ok(Some(monitor)), Ok(size)) = (main.current_monitor(), win.outer_size()) else {
+        return;
+    };
+    let (x, y) = centered_on_monitor(
+        (monitor.position().x, monitor.position().y),
+        (monitor.size().width, monitor.size().height),
+        (size.width, size.height),
+    );
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// Top-left for a window of `size` centred on the monitor at `origin`. Monitor
+/// origins are global desktop coordinates and are negative for displays left of
+/// or above the primary, so the offset must be added, never assumed to be zero.
+fn centered_on_monitor(origin: (i32, i32), monitor: (u32, u32), size: (u32, u32)) -> (i32, i32) {
+    let dx = ((monitor.0 as i64 - size.0 as i64) / 2).max(0) as i32;
+    let dy = ((monitor.1 as i64 - size.1 as i64) / 2).max(0) as i32;
+    (origin.0 + dx, origin.1 + dy)
+}
+
+/// Close the approval window once nothing is waiting on it. A window left showing
+/// a request that has already been abandoned is worse than no window.
+fn close_approval_window_if_idle<R: Runtime>(app: &AppHandle<R>) {
+    if !pending().lock().unwrap().is_empty() {
+        return;
+    }
+    if let Some(win) = app.get_webview_window("approval") {
+        let _ = win.close();
+    }
 }
 
 /// Resolve a pending request and close the approval window once nothing is left.
@@ -1947,12 +2148,16 @@ fn resolve_request<R: Runtime>(
         .remove(id)
         .ok_or_else(|| format!("no pending request {id}"))?;
     let _ = entry.responder.send(decision); // receiver may have timed out; ignore
-    if pending().lock().unwrap().is_empty() {
-        if let Some(win) = app.get_webview_window("approval") {
-            let _ = win.close();
-        }
-    }
+    close_approval_window_if_idle(app);
     Ok(())
+}
+
+/// Tell the shell how far a request has got, so the UI can say what it is waiting
+/// for instead of claiming "confirm in window" before any window exists.
+fn emit_request_phase<R: Runtime>(app: &AppHandle<R>, id: Option<&str>, phase: &str) {
+    // `id` is genuinely absent before a request is registered and after it is
+    // resolved, so it is null there rather than an empty string standing in.
+    let _ = app.emit("wallet-request-phase", json!({ "id": id, "phase": phase }));
 }
 
 /// Drive a signing method through the approval flow. `personal_sign` and
@@ -2000,7 +2205,7 @@ async fn handle_signing<R: Runtime>(
                 tx: None,
                 typed_data: None,
             };
-            if request_approval(app, req).await.approved {
+            if request_approval(app, req).await?.approved {
                 personal_sign(&message)
             } else {
                 Err("User rejected the request (4001)".to_string())
@@ -2041,7 +2246,7 @@ async fn handle_signing<R: Runtime>(
                 tx: None,
                 typed_data: Some(typed.clone()),
             };
-            if request_approval(app, req).await.approved {
+            if request_approval(app, req).await?.approved {
                 sign_typed_data(&typed)
             } else {
                 Err("User rejected the request (4001)".to_string())
@@ -2210,9 +2415,33 @@ async fn resolve_fees_on(chain: &ChainCfg, tx: &Value) -> Result<(String, String
 /// Resolve a transaction on `chain_id`: validate `from`, then fill any missing
 /// nonce / gas / fees from the node. Pure preparation — no signing, no broadcast —
 /// so the approval window can show the user exactly what they're about to sign.
+///
+/// Bounded by `TX_PREPARE_TIMEOUT`: this runs BEFORE the approval window, so every
+/// second spent here is a second the user stares at a Send button that has not yet
+/// produced a window.
 async fn prepare_tx(chain_id: &str, tx: &Value) -> Result<PreparedTx, String> {
     let chain =
         find_chain(chain_id).ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
+    prepare_tx_within(&chain, tx, TX_PREPARE_TIMEOUT).await
+}
+
+async fn prepare_tx_within(
+    chain: &ChainCfg,
+    tx: &Value,
+    budget: Duration,
+) -> Result<PreparedTx, String> {
+    tokio::time::timeout(budget, prepare_tx_on(chain, tx))
+        .await
+        .unwrap_or_else(|_| {
+            Err(format!(
+                "{} did not answer within {budget:?} — the transaction was not prepared",
+                chain.name
+            ))
+        })
+}
+
+async fn prepare_tx_on(chain: &ChainCfg, tx: &Value) -> Result<PreparedTx, String> {
+    let chain = chain.clone();
     let from = active_account_address().ok_or("wallet is locked")?;
     if let Some(req_from) = tx_field(tx, "from") {
         if !req_from.eq_ignore_ascii_case(&from) {
@@ -2272,9 +2501,43 @@ async fn prepare_tx(chain_id: &str, tx: &Value) -> Result<PreparedTx, String> {
     })
 }
 
+/// Mark the transaction a speed-up/cancel replaces as retired, and say whether
+/// anything changed.
+///
+/// ONLY a broadcast the node acknowledged retires the original. On an unconfirmed
+/// broadcast we do not know the replacement was accepted, and the two carry the
+/// same nonce — so the original stays pending and whichever mines settles it.
+/// Retiring it early hides a transaction that is still live.
+fn retire_original(records: &mut [ActivityRecord], id: &str, sent: &Broadcast) -> bool {
+    if sent.broadcast_error.is_some() {
+        return false;
+    }
+    match records.iter_mut().find(|r| r.id == id) {
+        Some(old) => {
+            old.status = Some("replaced".to_string());
+            true
+        }
+        None => false,
+    }
+}
+
+/// The outcome of signing + broadcasting. `hash` is what the caller reports and
+/// records; `broadcast_error` is set when the node never confirmed the broadcast,
+/// in which case the hash is the one computed locally from the signed bytes —
+/// the transaction is signed and may well be in flight, so it still gets recorded
+/// and polled for a receipt rather than vanishing.
+struct Broadcast {
+    hash: String,
+    broadcast_error: Option<String>,
+}
+
 /// Sign (Rust-side software key, or on the Ledger) and broadcast a fully-prepared
-/// EIP-1559 transaction. Returns the broadcast tx hash.
-async fn finalize_tx(p: &PreparedTx) -> Result<Value, String> {
+/// EIP-1559 transaction.
+async fn finalize_tx(p: &PreparedTx) -> Result<Broadcast, String> {
+    finalize_tx_within(p, BROADCAST_TIMEOUT).await
+}
+
+async fn finalize_tx_within(p: &PreparedTx, budget: Duration) -> Result<Broadcast, String> {
     use eth_tx::{parse_address, parse_data, parse_quantity, Eip1559Tx};
 
     let chain = find_chain(&p.chain_id)
@@ -2292,7 +2555,7 @@ async fn finalize_tx(p: &PreparedTx) -> Result<Value, String> {
     };
 
     // Sign Rust-side (software) or on the device (Ledger) — never in a webview.
-    let (raw_tx, _local_hash) = match active_signer_kind()? {
+    let (raw_tx, local_hash) = match active_signer_kind()? {
         ActiveKind::Local => with_active_key(|k| tx1559.sign(k))??,
         ActiveKind::Ledger(path) => {
             let (r, s, y_parity) = ledger::sign_transaction(&path, &tx1559.unsigned_payload())?;
@@ -2300,7 +2563,26 @@ async fn finalize_tx(p: &PreparedTx) -> Result<Value, String> {
         }
     };
     // Broadcast; the node echoes the canonical transaction hash.
-    node_rpc_call(&chain, "eth_sendRawTransaction", &[json!(raw_tx)]).await
+    match node_rpc_try(&chain, "eth_sendRawTransaction", &[json!(raw_tx)], budget).await {
+        Ok(v) => Ok(Broadcast {
+            hash: v
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| local_hash.clone()),
+            broadcast_error: None,
+        }),
+        // The node read the transaction and refused it (bad nonce, underpriced,
+        // insufficient funds). Nothing is in flight, so this is a plain failure —
+        // recording it as a pending transfer would invent one.
+        Err(RpcFailure::Rejected(msg)) => Err(msg),
+        // No answer AFTER we handed over signed bytes. The node may well have
+        // taken it — that is how a mined transfer once went unrecorded — so report
+        // the locally computed hash and let the receipt poller settle it.
+        Err(RpcFailure::Unreachable(msg)) => Ok(Broadcast {
+            hash: local_hash,
+            broadcast_error: Some(msg),
+        }),
+    }
 }
 
 /// The shared eth_sendTransaction path: resolve the tx, ask the user (showing full
@@ -2313,7 +2595,10 @@ async fn approve_and_send<R: Runtime>(
     tx: &Value,
 ) -> Result<Value, String> {
     ensure_tx_chain_id_matches(tx, chain_id)?;
-    let prepared = prepare_tx(chain_id, tx).await?;
+    emit_request_phase(app, None, "preparing");
+    let prepared = prepare_tx(chain_id, tx).await.inspect_err(|e| {
+        log_diagnostic(app, format!("send prepare failed chain={chain_id} err={e}"));
+    })?;
     let req = PendingRequest {
         id: next_request_id(),
         method: "eth_sendTransaction".to_string(),
@@ -2327,7 +2612,7 @@ async fn approve_and_send<R: Runtime>(
         typed_data: None,
     };
 
-    let decision = request_approval(app, req).await;
+    let decision = request_approval(app, req).await?;
     if !decision.approved {
         return Err("User rejected the request (4001)".to_string());
     }
@@ -2348,11 +2633,26 @@ async fn approve_and_send<R: Runtime>(
     {
         p.max_priority_fee_per_gas = p.max_fee_per_gas.clone();
     }
-    let hash = finalize_tx(&p).await?;
-    if let Some(hash_str) = hash.as_str() {
-        record_activity(app, &p, origin, hash_str, tx, decision.balance_changes);
-    }
-    Ok(hash)
+    emit_request_phase(app, None, "broadcasting");
+    let sent = finalize_tx(&p).await?;
+    record_activity(app, &p, origin, &sent, tx, decision.balance_changes);
+    log_diagnostic(
+        app,
+        format!(
+            "send broadcast chain={} nonce={} hash={} error={}",
+            p.chain_id,
+            p.nonce,
+            sent.hash,
+            sent.broadcast_error.as_deref().unwrap_or("none")
+        ),
+    );
+    // The hash goes back either way. A signed transaction we could not get
+    // acknowledged is NOT a failed request: EIP-1193 says eth_sendTransaction
+    // returns the hash once the wallet has one, and answering a dApp with an error
+    // invites it to offer Retry — which, if the first broadcast did land, sends the
+    // money twice. The ambiguity travels as `activity-unconfirmed` instead, which
+    // the shell shows as a warning while the receipt poller settles it.
+    Ok(json!(sent.hash))
 }
 
 /// Wallet-initiated send (shell-only): same approval + sign + broadcast path as a
@@ -2414,7 +2714,7 @@ async fn handle_rpc<R: Runtime>(
                         tx: None,
                         typed_data: None,
                     };
-                    if !request_approval(app, req).await.approved {
+                    if !request_approval(app, req).await?.approved {
                         return Err("User rejected adding the network (code 4001)".to_string());
                     }
                     {
@@ -2451,6 +2751,7 @@ fn approve_request<R: Runtime>(
     tx_data: Option<String>,
     balance_changes: Option<Vec<ActivityBalanceChange>>,
 ) -> Result<(), String> {
+    note_approval_ui_alive(); // proof the window is up, same as get_pending_requests
     resolve_request(
         &app,
         &id,
@@ -2467,6 +2768,7 @@ fn approve_request<R: Runtime>(
 /// Reject a pending request. Scoped to the "approval" webview (ACL).
 #[tauri::command]
 fn reject_request<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
+    note_approval_ui_alive();
     resolve_request(
         &app,
         &id,
@@ -2480,6 +2782,7 @@ fn reject_request<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), Strin
 /// List requests awaiting approval, for the approval window to render.
 #[tauri::command]
 fn get_pending_requests() -> Vec<PendingRequest> {
+    note_approval_ui_alive(); // only the approval window may call this (ACL)
     pending()
         .lock()
         .unwrap()
@@ -2828,7 +3131,10 @@ fn loaded_dapp_labels() -> &'static Mutex<HashSet<String>> {
 }
 
 fn mark_dapp_loaded(label: &str) {
-    loaded_dapp_labels().lock().unwrap().insert(label.to_string());
+    loaded_dapp_labels()
+        .lock()
+        .unwrap()
+        .insert(label.to_string());
 }
 
 /// Closing a tab destroys its webview, so the next one starts blank again.
@@ -3521,10 +3827,11 @@ fn record_activity<R: Runtime>(
     app: &AppHandle<R>,
     prepared: &PreparedTx,
     origin: &str,
-    hash: &str,
+    sent: &Broadcast,
     tx: &Value,
     balance_changes: Vec<ActivityBalanceChange>,
 ) {
+    let hash = sent.hash.as_str();
     let has_data = prepared.data.trim() != "0x" && !prepared.data.trim().is_empty();
     let mut meta = tx_activity_meta(tx);
     let parsed_transfer = parse_erc20_transfer(&prepared.data);
@@ -3609,7 +3916,13 @@ fn record_activity<R: Runtime>(
     } else {
         let _ = app.emit("activity-changed", ());
     }
-    let _ = app.emit("activity-recorded", &records[0]);
+    let event = match sent.broadcast_error {
+        None => "activity-recorded",
+        // Recorded and polled like any other submission, but the node never said
+        // it took it — the shell warns instead of announcing a clean submit.
+        Some(_) => "activity-unconfirmed",
+    };
+    let _ = app.emit(event, &records[0]);
 }
 
 #[tauri::command]
@@ -3757,7 +4070,7 @@ async fn replace_activity_transaction<R: Runtime>(
         tx: Some(prepared.clone()),
         typed_data: None,
     };
-    let decision = request_approval(&app, req).await;
+    let decision = request_approval(&app, req).await?;
     if !decision.approved {
         return Err("User rejected the request (4001)".to_string());
     }
@@ -3774,31 +4087,31 @@ async fn replace_activity_transaction<R: Runtime>(
         p.max_priority_fee_per_gas = p.max_fee_per_gas.clone();
     }
 
-    let hash = finalize_tx(&p).await?;
-    if let Some(hash_str) = hash.as_str() {
-        let tx = json!({
-            "to": p.to,
-            "value": p.value,
-            "data": p.data,
-            "activity": {
-                "kind": if is_cancel { "cancel" } else { "speedup" },
-                "counterparty": original.counterparty,
-                "assetSymbol": original.asset_symbol,
-                "assetDecimals": original.asset_decimals,
-                "amount": original.amount,
-                "tokenAddress": original.token_address
-            }
-        });
-        record_activity(&app, &p, "AutoDesktop Wallet", hash_str, &tx, Vec::new());
-
-        let mut records = load_activity_records(&app);
-        if let Some(old) = records.iter_mut().find(|r| r.id == activity_id) {
-            old.status = Some("replaced".to_string());
+    let sent = finalize_tx(&p).await?;
+    let tx = json!({
+        "to": p.to,
+        "value": p.value,
+        "data": p.data,
+        "activity": {
+            "kind": if is_cancel { "cancel" } else { "speedup" },
+            "counterparty": original.counterparty,
+            "assetSymbol": original.asset_symbol,
+            "assetDecimals": original.asset_decimals,
+            "amount": original.amount,
+            "tokenAddress": original.token_address
         }
+    });
+    record_activity(&app, &p, "AutoDesktop Wallet", &sent, &tx, Vec::new());
+
+    let mut records = load_activity_records(&app);
+    if retire_original(&mut records, &activity_id, &sent) {
         save_activity_records(&app, &records)?;
-        let _ = app.emit("activity-changed", ());
     }
-    Ok(hash)
+    let _ = app.emit("activity-changed", ());
+
+    // As in approve_and_send: the hash goes back either way, and an unacknowledged
+    // broadcast surfaces as a warning rather than an error that invites a retry.
+    Ok(json!(sent.hash))
 }
 
 #[tauri::command]
@@ -4357,7 +4670,11 @@ async fn zerion_chain_map(key: &str) -> ZerionChainMap {
     match fetched {
         Ok(data) => {
             let mut map = ZerionChainMap::new();
-            for item in data.get("data").and_then(Value::as_array).unwrap_or(&Vec::new()) {
+            for item in data
+                .get("data")
+                .and_then(Value::as_array)
+                .unwrap_or(&Vec::new())
+            {
                 let Some(id) = value_as_string(item.get("id")) else {
                     continue;
                 };
@@ -4564,8 +4881,7 @@ fn debank_token_list_rank(key: &str) -> u8 {
 fn has_debank_token_list(value: &Value) -> bool {
     value.as_object().is_some_and(|map| {
         map.iter().any(|(key, child)| {
-            is_debank_token_list_key(key)
-                && child.as_array().is_some_and(|items| !items.is_empty())
+            is_debank_token_list_key(key) && child.as_array().is_some_and(|items| !items.is_empty())
         })
     })
 }
@@ -4590,7 +4906,8 @@ fn collect_debank_tokens(value: &Value, out: &mut Vec<DefiPositionToken>) {
                 collect_debank_tokens(detail, out);
                 return;
             }
-            let mut keys: Vec<&String> = map.keys().filter(|k| is_debank_token_list_key(k)).collect();
+            let mut keys: Vec<&String> =
+                map.keys().filter(|k| is_debank_token_list_key(k)).collect();
             keys.sort_by_key(|k| (debank_token_list_rank(k), (*k).clone()));
             for key in keys {
                 collect_debank_tokens(&map[key], out);
@@ -4692,8 +5009,8 @@ async fn debank_get(key: &str, url: String) -> Result<Value, String> {
         .json()
         .await
         .map_err(|e| format!("reading DeBank response: {}", error_chain(&e)))?;
-    let message = value_as_string(data.get("message"))
-        .or_else(|| value_as_string(data.get("error_msg")));
+    let message =
+        value_as_string(data.get("message")).or_else(|| value_as_string(data.get("error_msg")));
     if !status.is_success() {
         return Err(message.unwrap_or_else(|| format!("DeBank returned HTTP {status}")));
     }
@@ -4859,7 +5176,11 @@ impl DebankRegistry {
         if cache.chains.is_empty()
             || now.saturating_sub(cache.chains_updated_at_ms) > DEBANK_REGISTRY_TTL_MS
         {
-            match debank_get(key, "https://pro-openapi.debank.com/v1/chain/list".to_string()).await
+            match debank_get(
+                key,
+                "https://pro-openapi.debank.com/v1/chain/list".to_string(),
+            )
+            .await
             {
                 Ok(data) => {
                     let chains = parse_debank_chain_ids(&data);
@@ -5157,7 +5478,9 @@ async fn fetch_uniswap_v4_positions(
         }
     }
 
-    let mut targets = registry.uniswap_v4_targets(debank_key, &evm_chain_ids).await;
+    let mut targets = registry
+        .uniswap_v4_targets(debank_key, &evm_chain_ids)
+        .await;
     if targets.len() > UNISWAP_V4_MAX_PROBES {
         println!(
             "[AutoDesktop] defi Uniswap v4 probe limit address={address} candidates={} probing={UNISWAP_V4_MAX_PROBES}",
@@ -6106,12 +6429,7 @@ async fn get_defi_positions<R: Runtime>(
                 fetch_uniswap_v4_positions(&registry, &zerion_key, &debank_key, address, force),
             )
             .await
-            .unwrap_or_else(|_| {
-                Err(format!(
-                    "timed out after {}s",
-                    UNISWAP_V4_TIMEOUT.as_secs()
-                ))
-            });
+            .unwrap_or_else(|_| Err(format!("timed out after {}s", UNISWAP_V4_TIMEOUT.as_secs())));
             match supplement {
                 Ok(positions) => {
                     let added = merge_uniswap_v4_positions(&mut zerion_positions, positions);
@@ -6135,7 +6453,9 @@ async fn get_defi_positions<R: Runtime>(
     );
     let positions = fetch_debank_defi_positions(address)
         .await
-        .inspect_err(|e| println!("[AutoDesktop] defi DeBank failed address={address} error={e}"))?;
+        .inspect_err(|e| {
+            println!("[AutoDesktop] defi DeBank failed address={address} error={e}")
+        })?;
     println!(
         "[AutoDesktop] defi response source=DeBank address={address} positions={}",
         positions.len()
@@ -7401,6 +7721,251 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    /// Chain id for the loopback stubs below. Must not collide with anything in
+    /// the real registry — see `stalled_node_chain`.
+    pub(super) const TEST_CHAIN_ID: &str = "0xdeadbeef";
+
+    /// A node that accepts the connection and then says nothing — the exact shape
+    /// of the stall that left Send spinning with no window and no error. Returns
+    /// the chain pointed at it; the listener thread holds the socket open.
+    pub(super) fn stalled_node_chain() -> ChainCfg {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            let _held = listener.accept(); // keep the connection open, never reply
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        ChainCfg {
+            // Deliberately not a real chain id. find_chain returns the FIRST
+            // match, so "0x1" here resolved to the builtin Ethereum and sent a
+            // signed transaction to the live network.
+            id: TEST_CHAIN_ID.into(),
+            name: "Stalled".into(),
+            symbol: "ETH".into(),
+            rpc: format!("http://{addr}"),
+            decimals: 18,
+            color: "#000".into(),
+            explorer_url: None,
+            builtin: false,
+        }
+    }
+
+    /// A node that never answers must fail the call, not hang it. Before this,
+    /// `http()` was a bare `reqwest::Client::new()` with no timeout of any kind,
+    /// so one stalled socket parked the whole Send behind it forever.
+    #[test]
+    fn an_rpc_call_gives_up_when_the_node_never_answers() {
+        let chain = stalled_node_chain();
+        let started = std::time::Instant::now();
+        let out = tauri::async_runtime::block_on(node_rpc_call_within(
+            &chain,
+            "eth_chainId",
+            &[],
+            Duration::from_millis(300),
+        ));
+        assert!(out.is_err(), "a silent node must produce an error");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "gave up only after {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// `WebviewWindowBuilder::build()` only posts a CreateWindow message to the
+    /// event loop and returns Ok, so its Ok is not proof the window exists. The
+    /// approval UI reporting in is. With no such report the wait must fail inside
+    /// its budget — never fall through to the 300s decision timer.
+    #[test]
+    fn waiting_for_the_approval_window_fails_when_it_never_comes_up() {
+        let started = std::time::Instant::now();
+        // u64::MAX as the baseline can never be exceeded, so a real approval
+        // window polling in a parallel test cannot make this pass by accident.
+        let out = tauri::async_runtime::block_on(wait_for_approval_ui(
+            u64::MAX,
+            Duration::from_millis(300),
+        ));
+        assert!(
+            out.is_err(),
+            "a window that never appears must fail the wait"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "waited {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// …and clears as soon as the approval window's UI calls into the backend.
+    #[test]
+    fn waiting_for_the_approval_window_clears_once_its_ui_calls_in() {
+        let baseline = approval_ui_beat();
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(50));
+            note_approval_ui_alive();
+        });
+        let out =
+            tauri::async_runtime::block_on(wait_for_approval_ui(baseline, Duration::from_secs(5)));
+        assert!(
+            out.is_ok(),
+            "a live approval UI must clear the wait: {out:?}"
+        );
+    }
+
+    /// A speed-up whose broadcast was never acknowledged must NOT retire the
+    /// transaction it replaces: same nonce, unknown outcome, so the original is
+    /// still the one that might mine. Showing it as "replaced" hides a live
+    /// transaction from the person who just tried to cancel it.
+    #[test]
+    fn only_a_confirmed_replacement_retires_the_original() {
+        let original = ActivityRecord {
+            id: "0x1:0xabc".into(),
+            hash: "0xabc".into(),
+            chain_id: "0x1".into(),
+            chain_name: "Ethereum".into(),
+            symbol: "ETH".into(),
+            from: SPIKE_ACCOUNT.into(),
+            to: SPIKE_ACCOUNT.into(),
+            value: "0x1".into(),
+            data: "0x".into(),
+            gas: "0x5208".into(),
+            nonce: "0x1".into(),
+            max_priority_fee_per_gas: "0x1".into(),
+            max_fee_per_gas: "0x2".into(),
+            origin: "AutoDesktop Wallet".into(),
+            kind: "send".into(),
+            counterparty: None,
+            asset_symbol: None,
+            asset_decimals: None,
+            amount: None,
+            token_address: None,
+            swap: None,
+            balance_changes: Vec::new(),
+            status: Some("submitted".to_string()),
+            timestamp: 0,
+        };
+
+        let unconfirmed = Broadcast {
+            hash: "0xdef".into(),
+            broadcast_error: Some("node never answered".into()),
+        };
+        let mut records = vec![original.clone()];
+        assert!(!retire_original(&mut records, "0x1:0xabc", &unconfirmed));
+        assert_eq!(
+            records[0].status.as_deref(),
+            Some("submitted"),
+            "an unconfirmed replacement must leave the original pending"
+        );
+
+        let confirmed = Broadcast {
+            hash: "0xdef".into(),
+            broadcast_error: None,
+        };
+        let mut records = vec![original];
+        assert!(retire_original(&mut records, "0x1:0xabc", &confirmed));
+        assert_eq!(records[0].status.as_deref(), Some("replaced"));
+    }
+
+    /// Broadcasting is the one call where "no answer" and "no thanks" must not be
+    /// treated alike: a refusal means nothing is in flight, while silence means the
+    /// signed transaction might be. Getting this backwards either invents a pending
+    /// transfer or hides a real one.
+    #[test]
+    fn a_silent_node_and_a_refusing_node_fail_differently() {
+        let silent = stalled_node_chain();
+        let out = tauri::async_runtime::block_on(node_rpc_try(
+            &silent,
+            "eth_sendRawTransaction",
+            &[json!("0x02f8")],
+            Duration::from_millis(300),
+        ));
+        assert!(
+            matches!(out, Err(RpcFailure::Unreachable(_))),
+            "a node that never answers is Unreachable"
+        );
+
+        let refusing = refusing_node_chain("nonce too low", -32000);
+        let out = tauri::async_runtime::block_on(node_rpc_try(
+            &refusing,
+            "eth_sendRawTransaction",
+            &[json!("0x02f8")],
+            Duration::from_secs(5),
+        ));
+        match out {
+            Err(RpcFailure::Rejected(msg)) => assert!(
+                msg.contains("nonce too low") && msg.contains("-32000"),
+                "the node's own words survive: {msg}"
+            ),
+            other => panic!("a JSON-RPC error must be Rejected, got {:?}", other.is_ok()),
+        }
+    }
+
+    /// A node that answers every call with one JSON-RPC error.
+    fn refusing_node_chain(message: &str, code: i64) -> ChainCfg {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":{code},"message":"{message}"}}}}"#
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(4) {
+                let Ok(mut stream) = stream else { continue };
+                use std::io::{Read, Write};
+                let mut scratch = [0u8; 2048];
+                let _ = stream.read(&mut scratch); // drain the request line + body
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        ChainCfg {
+            id: TEST_CHAIN_ID.into(),
+            name: "Refusing".into(),
+            symbol: "ETH".into(),
+            rpc: format!("http://{addr}"),
+            decimals: 18,
+            color: "#000".into(),
+            explorer_url: None,
+            builtin: false,
+        }
+    }
+
+    /// A prompt centred at (0,0) lands on the primary display no matter which
+    /// monitor the wallet is on — the multi-monitor version of "no window
+    /// appeared". It has to follow the shell's monitor, including monitors whose
+    /// global origin is negative (left of / above the primary).
+    #[test]
+    fn the_approval_window_centres_on_the_shell_s_own_monitor() {
+        // A 5120x2880 display sitting to the right of a 3024x1964 primary.
+        assert_eq!(
+            centered_on_monitor((3024, 0), (5120, 2880), (420, 640)),
+            (3024 + 2350, 1120)
+        );
+        // …and one placed to the LEFT, where the origin is negative.
+        assert_eq!(
+            centered_on_monitor((-2880, -300), (2880, 5120), (420, 640)),
+            (-2880 + 1230, -300 + 2240)
+        );
+        // A window larger than the screen pins to the origin instead of going off it.
+        assert_eq!(
+            centered_on_monitor((100, 50), (400, 400), (900, 900)),
+            (100, 50)
+        );
+    }
+
+    /// The budget the user actually feels: click Send → window. Ten seconds is the
+    /// ceiling; the 300s timer is only for reading and deciding, once the window
+    /// is up and visible.
+    #[test]
+    fn the_pre_approval_budget_stays_within_ten_seconds() {
+        assert!(TX_PREPARE_TIMEOUT <= Duration::from_secs(10));
+        assert!(APPROVAL_WINDOW_TIMEOUT <= Duration::from_secs(10));
+        assert!(RPC_TIMEOUT <= TX_PREPARE_TIMEOUT);
+    }
+
     /// Known test vector — the canonical Hardhat/Anvil account #0.
     #[test]
     fn derives_known_evm_address() {
@@ -7564,7 +8129,11 @@ mod tests {
             "https://gwan-ssl.wandevs.org:56891",
             "https://worldchain-mainnet.g.alchemy.com/public",
         ] {
-            assert_eq!(apply_public_node_key(url, KEY), url, "leaked key into {url}");
+            assert_eq!(
+                apply_public_node_key(url, KEY),
+                url,
+                "leaked key into {url}"
+            );
         }
 
         // A host merely *containing* the string must not match: the suffix check
@@ -7575,7 +8144,11 @@ mod tests {
             "https://notpublicnode.com",
             "https://publicnode.com.evil.example",
         ] {
-            assert_eq!(apply_public_node_key(url, KEY), url, "leaked key into {url}");
+            assert_eq!(
+                apply_public_node_key(url, KEY),
+                url,
+                "leaked key into {url}"
+            );
         }
 
         // Already keyed / custom-path publicnode endpoints are left as configured.
@@ -8073,8 +8646,12 @@ mod tests {
         );
 
         // Ethereum carries the unprefixed id.
-        let eth = json!([{ "id": "uniswap4", "name": "Uniswap V4", "has_supported_portfolio": true }]);
-        assert_eq!(find_uniswap_v4_protocol_id(&eth).as_deref(), Some("uniswap4"));
+        let eth =
+            json!([{ "id": "uniswap4", "name": "Uniswap V4", "has_supported_portfolio": true }]);
+        assert_eq!(
+            find_uniswap_v4_protocol_id(&eth).as_deref(),
+            Some("uniswap4")
+        );
 
         // A chain without v4 must resolve to nothing rather than to a near miss.
         let without = json!([
@@ -8084,8 +8661,7 @@ mod tests {
         assert_eq!(find_uniswap_v4_protocol_id(&without), None);
 
         // Listed but unqueryable is not worth a probe.
-        let unsupported =
-            json!([{ "id": "ink_uniswap4", "name": "Uniswap V4", "has_supported_portfolio": false }]);
+        let unsupported = json!([{ "id": "ink_uniswap4", "name": "Uniswap V4", "has_supported_portfolio": false }]);
         assert_eq!(find_uniswap_v4_protocol_id(&unsupported), None);
     }
 
@@ -8263,7 +8839,10 @@ mod tests {
             positions[1].app_image_url.as_deref(),
             Some("https://icon.example/aave.png")
         );
-        assert_eq!(positions[1].app_url.as_deref(), Some("https://app.aave.com/"));
+        assert_eq!(
+            positions[1].app_url.as_deref(),
+            Some("https://app.aave.com/")
+        );
         assert_eq!(positions[1].network_name, "Ethereum");
         assert_eq!(positions[1].chain_id, "0x1");
         // The generic "Asset" name gives way to the position type.
@@ -8829,6 +9408,97 @@ mod e2e {
         let recid = k256::ecdsa::RecoveryId::from_byte(sig65[64] - 27).expect("valid recid");
         let vk = VerifyingKey::recover_from_prehash(&digest, &signature, recid).expect("recover");
         address_from_verifying_key(&vk)
+    }
+
+    /// A broadcast the node never acknowledged still yields a hash, and it is the
+    /// one computed from the signed bytes. Answering with an error instead would
+    /// tell a dApp the request failed, and a dApp that offers Retry on a
+    /// transaction that actually landed sends the money a second time.
+    #[test]
+    fn an_unacknowledged_broadcast_still_yields_the_signed_hash() {
+        let _guard = wallet_guard();
+        let chain = super::tests::stalled_node_chain();
+        let chain_id = chain.id.clone();
+        // finalize_tx resolves the chain from the registry, so register the silent
+        // one for the length of the test and put the list back afterwards.
+        let restore = chains_state().lock().unwrap().clone();
+        chains_state().lock().unwrap().push(chain);
+        // finalize_tx signs and broadcasts for real. Prove the registry lookup
+        // lands on the loopback stub BEFORE letting it near a node — a colliding
+        // id once sent a signed transaction to live Ethereum from CI.
+        let resolved = find_chain(&chain_id).map(|c| c.rpc);
+        if resolved.as_deref().map(|rpc| rpc.contains("127.0.0.1")) != Some(true) {
+            *chains_state().lock().unwrap() = restore;
+            panic!("test chain must resolve to the loopback stub, got {resolved:?}");
+        }
+
+        let prepared = PreparedTx {
+            chain_id: chain_id.clone(),
+            chain_name: "Stalled".into(),
+            symbol: "ETH".into(),
+            from: SPIKE_ACCOUNT.into(),
+            to: SPIKE_ACCOUNT.into(),
+            value: "0x1".into(),
+            data: "0x".into(),
+            gas: "0x5208".into(),
+            nonce: "0x0".into(),
+            max_priority_fee_per_gas: "0x1".into(),
+            max_fee_per_gas: "0x3b9aca00".into(),
+        };
+        let sent = tauri::async_runtime::block_on(finalize_tx_within(
+            &prepared,
+            Duration::from_millis(300),
+        ));
+        *chains_state().lock().unwrap() = restore;
+
+        let sent = sent.expect("an unreachable node must not fail the call outright");
+        assert!(
+            sent.broadcast_error.is_some(),
+            "a silent node leaves the broadcast unconfirmed"
+        );
+        // The locally computed hash is the canonical one: keccak of the signed
+        // bytes is what the node would have echoed had it answered.
+        assert!(
+            sent.hash.starts_with("0x") && sent.hash.len() == 66,
+            "must report a real tx hash, got {}",
+            sent.hash
+        );
+    }
+
+    /// The whole pre-approval preparation is bounded, so the Send button can never
+    /// sit on "confirm in window" with no window. This lives in `e2e` because it
+    /// needs an UNLOCKED vault: with a locked one `prepare_tx` returns "wallet is
+    /// locked" in microseconds and never reaches the node, which is how the first
+    /// version of this test passed without exercising a single timeout.
+    #[test]
+    fn preparing_a_transaction_gives_up_on_a_silent_node() {
+        let _guard = wallet_guard(); // serialises + unlocks the shared vault
+        let chain = super::tests::stalled_node_chain();
+        let started = std::time::Instant::now();
+        let out = tauri::async_runtime::block_on(prepare_tx_within(
+            &chain,
+            &json!({ "from": SPIKE_ACCOUNT, "to": SPIKE_ACCOUNT, "value": "0x1" }),
+            Duration::from_millis(600),
+        ));
+        let err = out
+            .err()
+            .expect("preparation against a silent node must fail");
+        // Naming the reason is the point: any other error means the call never got
+        // as far as the node and the timeout was never tested.
+        assert!(
+            err.contains("did not answer within"),
+            "must fail on the prepare timeout, got: {err}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(600),
+            "returned in {:?} — it cannot have waited on the node",
+            started.elapsed()
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "gave up only after {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

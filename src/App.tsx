@@ -64,6 +64,7 @@ function App() {
       record: ActivityRecord | undefined,
       messageKey:
         | "wallet.txSubmitted"
+        | "wallet.txUnconfirmed"
         | "wallet.txConfirmed"
         | "wallet.txFailed",
       kind: "ok" | "info" | "warn" = "ok",
@@ -123,6 +124,15 @@ function App() {
     const unlisteners: (() => void)[] = [];
     void listen<ActivityRecord>("activity-recorded", (event) => {
       showTxToast(event.payload, "wallet.txSubmitted", "info", "submitted");
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisteners.push(fn);
+    });
+    // Signed and handed to the node, which then went quiet. The transaction is
+    // recorded and polled like any other, so this warns rather than reporting a
+    // failure — resending is the one thing that could actually cost money here.
+    void listen<ActivityRecord>("activity-unconfirmed", (event) => {
+      showTxToast(event.payload, "wallet.txUnconfirmed", "warn", "submitted");
     }).then((fn) => {
       if (disposed) fn();
       else unlisteners.push(fn);

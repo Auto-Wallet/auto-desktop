@@ -31,9 +31,11 @@ import {
   deleteWallet,
   importPrivateKey,
   importVault,
+  onRequestPhase,
   renameWallet,
   useVault,
   walletSend,
+  type RequestPhase,
   type WalletInfo,
 } from "../lib/vault";
 import { LedgerList, useLedgerScan } from "../lib/LedgerPicker";
@@ -4641,7 +4643,15 @@ function SendModal({
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<RequestPhase>("preparing");
   const [error, setError] = useState<string | null>(null);
+
+  // Follow the backend's own progress instead of claiming "confirm in window"
+  // from the first click: the window only exists once the phase says so.
+  useEffect(() => {
+    if (!busy) return;
+    return onRequestPhase(setPhase);
+  }, [busy]);
 
   const asset = assets.find((a) => a.key === sel);
   const recipientQuery = recipient.trim().toLowerCase();
@@ -4710,6 +4720,7 @@ function SendModal({
           };
 
     setBusy(true);
+    setPhase("preparing");
     setError(null);
     try {
       await walletSend(asset.chainId, tx);
@@ -4825,7 +4836,7 @@ function SendModal({
                   disabled={busy || !asset || !resolvedRecipient || !amount}
                   onClick={() => void submit()}
                 >
-                  {busy ? t("wallet.sending") : t("wallet.send")}
+                  {busy ? t(`wallet.phase.${phase}`) : t("wallet.send")}
                 </button>
               </div>
             </div>
