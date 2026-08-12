@@ -413,6 +413,17 @@ export default function WalletPage() {
     });
   }
 
+  // Deleting a reading is the outermost layer of this action, so it is where a
+  // failure gets reported — the history is on disk and the write can fail.
+  async function removeTrendPoint(timestamp: number) {
+    try {
+      await trend.remove(timestamp);
+      toast(t("wallet.trendPointRemoved"));
+    } catch (e) {
+      toast(errText(e), "warn");
+    }
+  }
+
   useEffect(() => {
     void trend.recordNow();
   }, [active.address, portfolio.total, totalPending]);
@@ -460,7 +471,10 @@ export default function WalletPage() {
                 positioned and .hero-row is `position: relative`, so nesting it
                 there caps its height at the balance block (~100px) instead of
                 the card. That is what collapsed it to nothing in v0.2.39. */}
-            <PortfolioSparkline trend={trend} />
+            <PortfolioSparkline
+              trend={trend}
+              onRemove={(timestamp) => void removeTrendPoint(timestamp)}
+            />
             <div className="hero-row">
               <div className="hero-main">
                 <div className="hero-label">
@@ -1357,10 +1371,18 @@ function HeroAmount({ n }: { n: number }) {
   );
 }
 
-function PortfolioSparkline({ trend }: { trend: PortfolioTrend }) {
+function PortfolioSparkline({
+  trend,
+  onRemove,
+}: {
+  trend: PortfolioTrend;
+  onRemove: (timestamp: number) => void;
+}) {
   return (
-    <div className="hero-chart" aria-hidden="true">
-      <svg viewBox="0 0 320 118" preserveAspectRatio="none">
+    <div className="hero-chart">
+      {/* The curve carries no information the labels don't; the delete buttons
+          on those labels do, so the container itself can't be aria-hidden. */}
+      <svg viewBox="0 0 320 118" preserveAspectRatio="none" aria-hidden="true">
         <defs>
           <linearGradient id="portfolioLineFade" x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="currentColor" stopOpacity="0" />
@@ -1384,8 +1406,10 @@ function PortfolioSparkline({ trend }: { trend: PortfolioTrend }) {
           vectorEffect="non-scaling-stroke"
         />
       </svg>
-      {trend.high && <TrendMark mark={trend.high} kind="high" />}
-      {trend.low && <TrendMark mark={trend.low} kind="low" />}
+      {trend.high && (
+        <TrendMark mark={trend.high} kind="high" onRemove={onRemove} />
+      )}
+      {trend.low && <TrendMark mark={trend.low} kind="low" onRemove={onRemove} />}
     </div>
   );
 }
@@ -1393,11 +1417,13 @@ function PortfolioSparkline({ trend }: { trend: PortfolioTrend }) {
 function TrendMark({
   mark,
   kind,
+  onRemove,
 }: {
   mark: TrendExtreme;
   kind: "high" | "low";
+  onRemove: (timestamp: number) => void;
 }) {
-  const { lang } = useT();
+  const { t, lang } = useT();
   // Both sit on the true point. Near an edge the label flips from centred to
   // left/right aligned rather than being nudged inward — a peak at either end
   // would otherwise print its label floating away from its own dot.
@@ -1411,11 +1437,27 @@ function TrendMark({
         style={{ left: `${x}%`, top: `${y}%` }}
       />
       <span
-        className={`hero-chart-tag is-${kind} at-${align}`}
+        className={`hero-chart-tag is-${kind} at-${align}${mark.deletable ? " is-deletable" : ""}`}
         style={{ left: `${x}%`, top: `${y}%` }}
       >
         <b className="tnum">{fmtUsd(mark.totalUsd, { dp: mark.totalUsd >= 1000 ? 0 : 2 })}</b>
         <i>{formatTrendDate(mark.timestamp, lang)}</i>
+        {/* A reading taken while a source was still loading sits in the history
+            as a peak or a trough that never happened — which is exactly where
+            this label is. Hover it to throw that reading away. */}
+        {mark.deletable && (
+          <button
+            type="button"
+            className="hero-chart-del"
+            title={t("wallet.trendPointRemove")}
+            aria-label={t("wallet.trendPointRemove")}
+            onClick={() => onRemove(mark.timestamp)}
+          >
+            {/* At 9px the 1.7 grid stroke scales to 0.6px and goes grey — a
+                thicker one keeps the cross a hairline instead of a smudge. */}
+            <Icon name="close" size={9} sw={2.6} />
+          </button>
+        )}
       </span>
     </>
   );

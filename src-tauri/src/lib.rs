@@ -3717,6 +3717,41 @@ fn get_portfolio_history<R: Runtime>(
     Ok(snapshots)
 }
 
+/// Drops the reading one address recorded at `timestamp`. Returns the survivors
+/// and how many rows went, so a delete that matched nothing can be refused
+/// rather than reported as a success the history never saw.
+fn without_snapshot(
+    snapshots: Vec<PortfolioSnapshot>,
+    address: &str,
+    timestamp: u64,
+) -> (Vec<PortfolioSnapshot>, usize) {
+    let before = snapshots.len();
+    let kept: Vec<PortfolioSnapshot> = snapshots
+        .into_iter()
+        .filter(|s| !(s.timestamp == timestamp && s.address.eq_ignore_ascii_case(address)))
+        .collect();
+    let removed = before - kept.len();
+    (kept, removed)
+}
+
+/// Forget one recorded reading. A total captured while a source was still in
+/// flight is not a smaller portfolio, and it stays in the chart as a crash that
+/// never happened — this is how the user takes it back out.
+#[tauri::command]
+fn delete_portfolio_snapshot<R: Runtime>(
+    app: AppHandle<R>,
+    address: String,
+    timestamp: u64,
+) -> Result<Vec<PortfolioSnapshot>, String> {
+    let address = normalized_address(&address)?;
+    let (kept, removed) = without_snapshot(load_portfolio_snapshots(&app), &address, timestamp);
+    if removed == 0 {
+        return Err(format!("no snapshot recorded at {timestamp}"));
+    }
+    save_portfolio_snapshots(&app, &kept)?;
+    get_portfolio_history(app, address)
+}
+
 #[tauri::command]
 fn record_portfolio_snapshot<R: Runtime>(
     app: AppHandle<R>,
@@ -7582,6 +7617,7 @@ pub fn run() {
             replace_activity_transaction,
             get_portfolio_history,
             record_portfolio_snapshot,
+            delete_portfolio_snapshot,
             get_diagnostic_log_path,
             write_diagnostic_log,
             get_price_oracle_prices,
@@ -7769,6 +7805,46 @@ mod tests {
             "gave up only after {:?}",
             started.elapsed()
         );
+    }
+
+    /// One bad reading draws a crash the wallet never had, so it has to be
+    /// removable — and by the exact row, not by value: two accounts can record
+    /// the same total, and one account can revisit a total it already had.
+    #[test]
+    fn deleting_a_reading_drops_that_row_alone() {
+        let snap = |addr: &str, usd: f64, ts: u64| PortfolioSnapshot {
+            address: addr.into(),
+            total_usd: usd,
+            timestamp: ts,
+        };
+        let a = "0x7521eda00e2ce05ac4a9d8353d096ccb970d5188";
+        let b = "0x2fb4d46372ea1748ec3c29bd2c7b536019df5200";
+        let history = vec![
+            snap(a, 141_340.53, 100),
+            snap(b, 8.68, 200), // same total, same instant, different account
+            snap(a, 8.68, 200), // the bogus reading
+            snap(a, 143_631.42, 300),
+        ];
+
+        let (kept, removed) = without_snapshot(history.clone(), a, 200);
+        assert_eq!(removed, 1);
+        assert_eq!(
+            kept.iter()
+                .map(|s| (s.address.as_str(), s.timestamp))
+                .collect::<Vec<_>>(),
+            vec![(a, 100), (b, 200), (a, 300)],
+        );
+
+        // A timestamp the account never recorded must report that, so the caller
+        // can refuse instead of reporting a delete the history never saw.
+        let (kept, removed) = without_snapshot(history.clone(), a, 250);
+        assert_eq!(removed, 0);
+        assert_eq!(kept.len(), history.len());
+
+        // Addresses compare case-insensitively, as everywhere else in the file:
+        // a history written by an older version may not be lowercased.
+        let (_, removed) = without_snapshot(history, &a.to_uppercase(), 100);
+        assert_eq!(removed, 1);
     }
 
     /// `WebviewWindowBuilder::build()` only posts a CreateWindow message to the

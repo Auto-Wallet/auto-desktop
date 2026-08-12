@@ -1925,6 +1925,9 @@
   align-items: baseline;
   gap: 5px;
   white-space: nowrap;
+  /* The chart lets clicks through to the card; the labels take them, so the
+     delete button under one is reachable. */
+  pointer-events: auto;
   font-size: 10.5px;
   font-weight: 700;
   line-height: 1;
@@ -1936,10 +1939,63 @@
   --tag-y: 0;
   transform: translate(var(--tag-x), var(--tag-y));
 }
+.hero-chart-tag b,
+.hero-chart-tag i {
+  /* Above the hover pill below, which is a positioned pseudo-element and would
+     otherwise paint over plain inline text. */
+  position: relative;
+}
 .hero-chart-tag i {
   font-style: normal;
   font-weight: 600;
   opacity: 0.72;
+}
+/* Hover backing, so a label you can act on says so before you find the button.
+   Inset on a pseudo-element: real padding would move the label off its point. */
+.hero-chart-tag.is-deletable::before {
+  content: "";
+  position: absolute;
+  inset: -4px -7px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.hero-chart-tag.is-deletable:hover::before {
+  opacity: 1;
+}
+/* Out of flow on purpose: in flow it would widen the label and shove the text
+   off the point it marks, even while invisible. */
+.hero-chart-del {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  transform: translate(3px, -50%);
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.24);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+/* At the right edge there is no room outside the label, so it swaps sides. */
+.hero-chart-tag.at-end .hero-chart-del {
+  left: auto;
+  right: 100%;
+  transform: translate(-3px, -50%);
+}
+.hero-chart-tag:hover .hero-chart-del,
+.hero-chart-del:focus-visible {
+  opacity: 1;
+}
+.hero-chart-del:hover {
+  background: rgba(255, 255, 255, 0.42);
 }
 .hero-chart-tag.is-high {
   --tag-y: calc(-100% - 7px);
