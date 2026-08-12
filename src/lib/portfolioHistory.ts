@@ -8,6 +8,19 @@ export type PortfolioSnapshot = {
   timestamp: number;
 };
 
+/**
+ * A peak or trough on the drawn curve. Coordinates are fractions of the chart
+ * box (0..1), not viewBox units: the SVG stretches to fill its box with
+ * `preserveAspectRatio="none"`, so HTML labels positioned in percent land
+ * exactly on the point while escaping that horizontal stretch.
+ */
+export type TrendExtreme = {
+  xPct: number;
+  yPct: number;
+  totalUsd: number;
+  timestamp: number;
+};
+
 export type PortfolioTrend = {
   snapshots: PortfolioSnapshot[];
   percent: number | null;
@@ -15,6 +28,8 @@ export type PortfolioTrend = {
   path: string;
   areaPath: string;
   isFlat: boolean;
+  high: TrendExtreme | null;
+  low: TrendExtreme | null;
 };
 
 const HOUR = 60 * 60;
@@ -81,7 +96,9 @@ function smoothPath(points: TrendPoint[]): string {
   return path;
 }
 
-function buildTrendPath(samples: PortfolioSnapshot[]): Pick<PortfolioTrend, "path" | "areaPath" | "isFlat"> {
+function buildTrendPath(
+  samples: PortfolioSnapshot[],
+): Pick<PortfolioTrend, "path" | "areaPath" | "isFlat" | "high" | "low"> {
   const width = 320;
   const height = 118;
   const padX = 8;
@@ -116,13 +133,40 @@ function buildTrendPath(samples: PortfolioSnapshot[]): Pick<PortfolioTrend, "pat
   const first = points[0] ?? [padX, height / 2];
   const last = points[points.length - 1] ?? [width - padX, height / 2];
   const areaPath = `${path} L ${last[0].toFixed(1)} ${height} L ${first[0].toFixed(1)} ${height} Z`;
-  return { path, areaPath, isFlat: flat };
+
+  // Peak and trough. A flat line has neither — every point is both, and marking
+  // one would claim a high and a low that the wallet never actually had.
+  let hi = 0;
+  let lo = 0;
+  samples.forEach((s, i) => {
+    if (s.totalUsd > samples[hi].totalUsd) hi = i;
+    if (s.totalUsd < samples[lo].totalUsd) lo = i;
+  });
+  const extreme = (i: number): TrendExtreme => ({
+    xPct: points[i][0] / width,
+    yPct: points[i][1] / height,
+    totalUsd: samples[i].totalUsd,
+    timestamp: samples[i].timestamp,
+  });
+  const marked = !flat && hi !== lo && points.length > 1;
+
+  return {
+    path,
+    areaPath,
+    isFlat: flat,
+    high: marked ? extreme(hi) : null,
+    low: marked ? extreme(lo) : null,
+  };
 }
 
 export function usePortfolioHistory(
   address: string | undefined,
   total: number | null,
-  loading: boolean,
+  // True while `total` is not yet a complete, comparable figure — still loading,
+  // or missing a source that normally counts toward it. Recording is refused
+  // until it clears: a partial total is not a smaller portfolio, and writing it
+  // to the history puts a permanent false crash in the chart.
+  pending: boolean,
 ): PortfolioTrend & {
   recordNow: () => Promise<void>;
   reload: () => Promise<void>;
@@ -138,13 +182,13 @@ export function usePortfolioHistory(
   }, [address]);
 
   const recordNow = useCallback(async () => {
-    if (!address || total == null || loading || !isTauri()) return;
+    if (!address || total == null || pending || !isTauri()) return;
     const next = await invoke<PortfolioSnapshot[]>("record_portfolio_snapshot", {
       address,
       totalUsd: total,
     });
     setSnapshots(next);
-  }, [address, loading, total]);
+  }, [address, pending, total]);
 
   useEffect(() => {
     void reload();

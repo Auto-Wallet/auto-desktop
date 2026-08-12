@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, "localStorage", {
   } satisfies Storage,
 });
 
-const { translate, translationKeys } = await import("./i18n");
+const { localeTag, translate, translationKeys } = await import("./i18n");
 
 // The Send button reads its label straight off the backend's phase name. A phase
 // with no string renders as raw "wallet.phase.awaiting-window" text, because
@@ -45,4 +45,14 @@ test("zh and en carry the same set of keys", () => {
   const zh = new Set(translationKeys("zh"));
   expect([...en].filter((k) => !zh.has(k))).toEqual([]);
   expect([...zh].filter((k) => !en.has(k))).toEqual([]);
+});
+
+test("dates follow the UI language, not the machine locale", () => {
+  // Regression: the portfolio chart and the activity list passed `undefined` to
+  // toLocale*String, so macOS decided — and a Chinese machine printed "7月13日"
+  // into the English UI.
+  const when = new Date(Date.UTC(2026, 6, 13, 12));
+  const short = { month: "short", day: "numeric" } as const;
+  expect(when.toLocaleDateString(localeTag("en"), short)).toBe("Jul 13");
+  expect(when.toLocaleDateString(localeTag("zh"), short)).toBe("7月13日");
 });

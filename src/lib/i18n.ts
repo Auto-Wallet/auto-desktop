@@ -990,6 +990,15 @@ export function setLang(next: Lang) {
   for (const l of listeners) l();
 }
 
+/**
+ * BCP-47 tag for `Intl` / `toLocale*String`. Always format dates and numbers
+ * against the UI language, never the machine's locale: passing `undefined`
+ * hands the job to macOS, which printed Chinese dates into the English UI.
+ */
+export function localeTag(l: Lang): string {
+  return l === "zh" ? "zh-CN" : "en-US";
+}
+
 export type TFn = (
   key: string,
   vars?: Record<string, string | number>,

@@ -40,6 +40,26 @@ export type DefiState =
   | { status: "ok"; positions: DefiPosition[]; source: DefiSource; error?: undefined }
   | { status: "error"; positions: DefiPosition[]; source?: DefiSource; error: string };
 
+/**
+ * Whether the displayed portfolio total is still short of a source that counts
+ * toward it, and so must not be written to the snapshot history.
+ *
+ * Balances resolving is not enough: DeFi starts out `idle` (not yet started),
+ * and for a wallet held mostly in protocols the tokens-only total is a small
+ * fraction of the real one. Recording it leaves a permanent false crash in the
+ * chart. `error` means DeFi returned no positions at all, which is equally
+ * incomplete — only `ok` makes the number comparable to its neighbours.
+ */
+export function isPortfolioTotalPending(input: {
+  balancesLoading: boolean;
+  defiEnabled: boolean;
+  defiStatus: DefiState["status"];
+}): boolean {
+  if (input.balancesLoading) return true;
+  if (!input.defiEnabled) return false;
+  return input.defiStatus !== "ok";
+}
+
 export function useDefiPositions(
   address: string | undefined,
   hasWalletAssetsOverOneUsd: boolean | undefined = false,

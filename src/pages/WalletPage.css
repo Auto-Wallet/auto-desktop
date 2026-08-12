@@ -1871,14 +1871,25 @@
 .hero-eye:hover {
   background: rgba(255, 255, 255, 0.26);
 }
+/* Spans the full card height, right of the balance block. Offsets resolve
+   against .hero (the chart is its direct child) — keep it out of .hero-row,
+   which would clamp it to the balance block's height. */
 .hero-chart {
   position: absolute;
-  top: 16px;
+  top: 18px;
   right: 76px;
-  bottom: 82px;
+  bottom: 18px;
   left: min(430px, 47%);
   color: rgba(255, 255, 255, 0.78);
   pointer-events: none;
+}
+/* The edge fade and the wash belong to the CURVE only. On .hero-chart they also
+   dim the high/low labels, which have to stay legible — and without the fade
+   the area fill ends in a hard vertical edge that reads as a stray panel. */
+.hero-chart svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
   opacity: 0.92;
   mask-image: linear-gradient(
     90deg,
@@ -1888,18 +1899,59 @@
     transparent
   );
 }
-.hero-chart svg {
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
 .hero-chart-line {
   fill: none;
   stroke: url("#portfolioLineFade");
-  stroke-width: 4;
+  /* Screen pixels, not viewBox units — see the non-scaling-stroke note in
+     PortfolioSparkline. */
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
-  filter: drop-shadow(0 8px 16px rgba(255, 255, 255, 0.1));
+}
+
+/* Peak / trough markers */
+.hero-chart-dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.9;
+}
+.hero-chart-tag {
+  position: absolute;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.96);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  /* Split so the vertical half (peak above / trough below) and the horizontal
+     half (edge alignment) can be set by independent classes. */
+  --tag-x: -50%;
+  --tag-y: 0;
+  transform: translate(var(--tag-x), var(--tag-y));
+}
+.hero-chart-tag i {
+  font-style: normal;
+  font-weight: 600;
+  opacity: 0.72;
+}
+.hero-chart-tag.is-high {
+  --tag-y: calc(-100% - 7px);
+}
+.hero-chart-tag.is-low {
+  --tag-y: 7px;
+}
+.hero-chart-tag.at-start {
+  --tag-x: -6px;
+}
+.hero-chart-tag.at-end {
+  --tag-x: calc(-100% + 6px);
 }
 .hero-chart-area {
   fill: url("#portfolioAreaFade");

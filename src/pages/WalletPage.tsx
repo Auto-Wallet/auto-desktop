@@ -12,7 +12,11 @@ import {
 import { isTauri, openExternalUrl } from "../lib/platform";
 import { explorerTxUrl, txExplorerUrl } from "../lib/explorer";
 import { ChainIcon } from "../lib/ChainIcon";
-import { useDefiPositions, type DefiState } from "../lib/defi";
+import {
+  isPortfolioTotalPending,
+  useDefiPositions,
+  type DefiState,
+} from "../lib/defi";
 import {
   fmtAmount,
   fmtPct,
@@ -65,7 +69,11 @@ import {
   type PriceState,
   type PricedToken,
 } from "../lib/prices";
-import { usePortfolioHistory, type PortfolioTrend } from "../lib/portfolioHistory";
+import {
+  usePortfolioHistory,
+  type PortfolioTrend,
+  type TrendExtreme,
+} from "../lib/portfolioHistory";
 import {
   fetchAllQuotes,
   getProvider,
@@ -96,7 +104,7 @@ import {
   type TokenBalance,
   type TokenMeta,
 } from "../lib/tokens";
-import { useT, type TFn } from "../lib/i18n";
+import { localeTag, useT, type Lang, type TFn } from "../lib/i18n";
 import { Icon, type IconName } from "../lib/icons";
 import { Avatar, CopyButton } from "../lib/ui";
 import { askConfirm } from "../lib/confirm";
@@ -171,7 +179,7 @@ function saveDefiEnabledAccounts(addresses: string[]) {
 // "coming soon" for activity. No fabricated holdings — failed prices/balances
 // surface as explicit states.
 export default function WalletPage() {
-  const { t } = useT();
+  const { t, lang } = useT();
   const chains = useChains();
   const chainIds = useMemo(() => chains.map((c) => c.id), [chains]);
   const active = useActiveAccount();
@@ -369,11 +377,19 @@ export default function WalletPage() {
     [allRows, prices.status, defi],
   );
   const isDefiLoading = defi.status === "loading";
-  const trend = usePortfolioHistory(
-    active.address,
-    portfolio.total,
-    portfolio.loading,
-  );
+  // Every snapshot has to be comparable to every other one, or the chart draws
+  // crashes that never happened. `portfolio.loading` goes false while DeFi is
+  // still "idle" (it has not even started), so a tokens-only total — cents, for
+  // a wallet whose value is nearly all DeFi — used to land in the history. On
+  // error DeFi contributes no positions, so that total is known-incomplete too.
+  // Passed as `pending` so BOTH recording paths honour it, including the hourly
+  // timer that fires 20s after a refresh, while DeFi is often still in flight.
+  const totalPending = isPortfolioTotalPending({
+    balancesLoading: portfolio.loading,
+    defiEnabled,
+    defiStatus: defi.status,
+  });
+  const trend = usePortfolioHistory(active.address, portfolio.total, totalPending);
   const trendPercent = trend.percent;
 
   function refreshAll() {
@@ -398,9 +414,8 @@ export default function WalletPage() {
   }
 
   useEffect(() => {
-    if (portfolio.total == null || portfolio.loading) return;
     void trend.recordNow();
-  }, [active.address, portfolio.loading, portfolio.total]);
+  }, [active.address, portfolio.total, totalPending]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -441,6 +456,11 @@ export default function WalletPage() {
             which read as disconnected patches). */}
         <div className="wallet-top">
           <div className="hero">
+            {/* Sits OUTSIDE .hero-row on purpose: the chart is absolutely
+                positioned and .hero-row is `position: relative`, so nesting it
+                there caps its height at the balance block (~100px) instead of
+                the card. That is what collapsed it to nothing in v0.2.39. */}
+            <PortfolioSparkline trend={trend} />
             <div className="hero-row">
               <div className="hero-main">
                 <div className="hero-label">
@@ -485,7 +505,6 @@ export default function WalletPage() {
                   </>
                 )}
               </div>
-              <PortfolioSparkline trend={trend} />
               {/* Refresh balances + prices (the eye/hide-balance toggle was dropped). */}
               <button
                 className="hero-eye"
@@ -718,6 +737,7 @@ export default function WalletPage() {
               records={accountActivity}
               chains={chains}
               t={t}
+              lang={lang}
               onReplace={(record, action) => setReplaceTarget({ record, action })}
             />
           )}
@@ -1354,10 +1374,58 @@ function PortfolioSparkline({ trend }: { trend: PortfolioTrend }) {
           </linearGradient>
         </defs>
         <path className="hero-chart-area" d={trend.areaPath} />
-        <path className="hero-chart-line" d={trend.path} />
+        {/* The box is far wider than the viewBox is tall and the aspect ratio is
+            not preserved, so a scaled stroke comes out heavy on the verticals
+            and thin on the horizontals. Non-scaling keeps one hairline weight
+            in screen pixels all the way round. */}
+        <path
+          className="hero-chart-line"
+          d={trend.path}
+          vectorEffect="non-scaling-stroke"
+        />
       </svg>
+      {trend.high && <TrendMark mark={trend.high} kind="high" />}
+      {trend.low && <TrendMark mark={trend.low} kind="low" />}
     </div>
   );
+}
+
+function TrendMark({
+  mark,
+  kind,
+}: {
+  mark: TrendExtreme;
+  kind: "high" | "low";
+}) {
+  const { lang } = useT();
+  // Both sit on the true point. Near an edge the label flips from centred to
+  // left/right aligned rather than being nudged inward — a peak at either end
+  // would otherwise print its label floating away from its own dot.
+  const x = mark.xPct * 100;
+  const y = mark.yPct * 100;
+  const align = x < 12 ? "start" : x > 88 ? "end" : "center";
+  return (
+    <>
+      <span
+        className={`hero-chart-dot is-${kind}`}
+        style={{ left: `${x}%`, top: `${y}%` }}
+      />
+      <span
+        className={`hero-chart-tag is-${kind} at-${align}`}
+        style={{ left: `${x}%`, top: `${y}%` }}
+      >
+        <b className="tnum">{fmtUsd(mark.totalUsd, { dp: mark.totalUsd >= 1000 ? 0 : 2 })}</b>
+        <i>{formatTrendDate(mark.timestamp, lang)}</i>
+      </span>
+    </>
+  );
+}
+
+function formatTrendDate(timestamp: number, lang: Lang): string {
+  return new Date(timestamp * 1000).toLocaleDateString(localeTag(lang), {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function HeroAction({
@@ -1551,11 +1619,13 @@ function ActivityList({
   records,
   chains,
   t,
+  lang,
   onReplace,
 }: {
   records: ActivityRecord[];
   chains: Chain[];
   t: TFn;
+  lang: Lang;
   onReplace: (record: ActivityRecord, action: "speedup" | "cancel") => void;
 }) {
   if (records.length === 0) {
@@ -1709,7 +1779,7 @@ function ActivityList({
                 </span>
               )}
               <span className="activity-time">
-                {formatActivityTime(record.timestamp)}
+                {formatActivityTime(record.timestamp, lang)}
               </span>
               {canReplace && (
                 <span className="activity-actions">
@@ -1752,9 +1822,9 @@ function safeHexToBigInt(value: string | null | undefined): bigint {
   }
 }
 
-function formatActivityTime(timestamp: number): string {
+function formatActivityTime(timestamp: number, lang: Lang): string {
   if (!timestamp) return "";
-  return new Date(timestamp * 1000).toLocaleString(undefined, {
+  return new Date(timestamp * 1000).toLocaleString(localeTag(lang), {
     month: "short",
     day: "numeric",
     hour: "2-digit",
