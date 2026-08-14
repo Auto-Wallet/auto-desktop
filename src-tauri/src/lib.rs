@@ -3365,6 +3365,19 @@ fn reload_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), Strin
     Ok(())
 }
 
+/// Navigate back inside a tab webview. Shell-only; dApps are never granted this
+/// command. `history.back()` is a no-op when the tab has no earlier page, so the
+/// browser stays open instead of returning to the dApps list.
+#[tauri::command]
+fn go_back_dapp<R: Runtime>(app: AppHandle<R>, label: String) -> Result<(), String> {
+    validate_dapp_label(&label)?;
+    if let Some(dapp) = app.get_webview(&label) {
+        dapp.eval("window.history.back()")
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Show a tab webview whose page never reported a finished load — the shell's
 /// timeout escape hatch. Without it, a page that never fires `Finished` (a dead
 /// host, a redirect loop) would sit behind the loading animation forever, since
@@ -7597,6 +7610,7 @@ pub fn run() {
             sync_toast_overlay,
             sync_menu_overlay,
             reload_dapp,
+            go_back_dapp,
             hide_dapp,
             show_dapp,
             close_dapp,
@@ -9352,6 +9366,7 @@ mod e2e {
                 sync_toast_overlay,
                 sync_menu_overlay,
                 reload_dapp,
+                go_back_dapp,
                 hide_dapp,
                 show_dapp,
                 close_dapp,
@@ -10220,6 +10235,7 @@ mod e2e {
                 json!({ "id": "dlg-1", "action": "ok", "value": null }),
             ),
             ("reload_dapp", json!({ "label": "dapp-9" })),
+            ("go_back_dapp", json!({ "label": "dapp-9" })),
             ("hide_dapp", json!({ "label": "dapp-9" })),
             ("close_dapp", json!({ "label": "dapp-9" })),
             ("set_active_chain", json!({ "chainId": "0x1" })),
@@ -10265,7 +10281,7 @@ mod e2e {
         }
     }
 
-    /// open_dapp / reload_dapp / hide_dapp / close_dapp reject labels that aren't `dapp-<id>`,
+    /// open_dapp / reload_dapp / go_back_dapp / hide_dapp / close_dapp reject labels that aren't `dapp-<id>`,
     /// so these shell commands can never target the trusted shell/approval webviews.
     #[test]
     fn e2e_dapp_controls_reject_foreign_labels() {
@@ -10409,6 +10425,9 @@ mod e2e {
 
         invoke(&shell, "reload_dapp", json!({ "label": "dapp-0" }))
             .expect("shell reload_dapp should succeed");
+
+        invoke(&shell, "go_back_dapp", json!({ "label": "dapp-0" }))
+            .expect("shell go_back_dapp should succeed");
 
         invoke(&shell, "hide_dapp", json!({ "label": "dapp-0" }))
             .expect("shell hide_dapp should succeed");

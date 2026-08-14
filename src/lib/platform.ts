@@ -71,6 +71,12 @@ export function reloadDapp(label: string): Promise<void> {
   return invoke("reload_dapp", { label });
 }
 
+/** Navigate back inside the native dApp tab webview. When the page has no
+ * history entry, the webview stays on the current page. */
+export function goBackDapp(label: string): Promise<void> {
+  return invoke("go_back_dapp", { label });
+}
+
 /** Show a tab webview whose page never reported a finished load — the loading
  *  timeout's escape hatch (`open_dapp` keeps an unloaded webview hidden so it
  *  cannot cover the loading animation with a blank rectangle). */

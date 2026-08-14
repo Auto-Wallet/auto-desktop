@@ -90,7 +90,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dapps.displayName": "Display name",
     "dapps.url": "URL",
 
-    "browser.back": "Back to dApps",
+    "browser.back": "Back",
 
     "settings.title": "Settings",
     "settings.network": "Network",
@@ -580,7 +580,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dapps.displayName": "显示名称",
     "dapps.url": "网址",
 
-    "browser.back": "返回 dApps",
+    "browser.back": "后退",
 
     "settings.title": "设置",
     "settings.network": "网络",

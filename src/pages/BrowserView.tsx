@@ -16,6 +16,7 @@ import { hostOf, type Dapp } from "../lib/dapps";
 import { hasDappLoaded, markDappLoaded } from "../lib/dappLoadState";
 import {
   dappLabel,
+  goBackDapp,
   hideDapp,
   isTauri,
   openDapp,
@@ -191,10 +192,18 @@ export default function BrowserView({ tab, onBack }: { tab: Tab; onBack: () => v
     }
   }
 
+  function handleBack() {
+    if (!native) {
+      onBack();
+      return;
+    }
+    void goBackDapp(label).catch((e) => reportDappControlError("go_back_dapp", label, e));
+  }
+
   return (
     <div className="browser">
       <header className="browser-bar">
-        <button className="icon-btn" onClick={onBack} title={t("browser.back")}>
+        <button className="icon-btn" onClick={handleBack} title={t("browser.back")}>
           <Icon name="arrowLeft" size={18} />
         </button>
         <button
