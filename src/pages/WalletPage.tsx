@@ -10,7 +10,7 @@ import {
   type ActivityRecord,
 } from "../lib/activity";
 import { isTauri, openExternalUrl } from "../lib/platform";
-import { explorerTxUrl, txExplorerUrl } from "../lib/explorer";
+import { explorerTokenUrl, explorerTxUrl, txExplorerUrl } from "../lib/explorer";
 import { ChainIcon } from "../lib/ChainIcon";
 import {
   isPortfolioTotalPending,
@@ -221,6 +221,7 @@ export default function WalletPage() {
   const [showAddToken, setShowAddToken] = useState(false);
   const [showSend, setShowSend] = useState(false);
   const [showBridge, setShowBridge] = useState(false);
+  const [selectedTokenKey, setSelectedTokenKey] = useState<string | null>(null);
   const [tokenSearch, setTokenSearch] = useState("");
   const [showZeroTokenBalances, setShowZeroTokenBalances] = useState(false);
   const [replaceTarget, setReplaceTarget] = useState<{
@@ -308,6 +309,10 @@ export default function WalletPage() {
         includeZeroDefaultTokens: true,
       }),
     [chains, custom, balances, tokenBalances, prices, tokenPrices],
+  );
+  const selectedToken = useMemo(
+    () => tokenListRows.find((row) => row.key === selectedTokenKey) ?? null,
+    [tokenListRows, selectedTokenKey],
   );
   const walletAssetsOverOneUsd = useMemo(
     () => computeWalletAssetsOverOneUsd(allRows, prices.status === "loading"),
@@ -705,6 +710,7 @@ export default function WalletPage() {
                         row={r}
                         t={t}
                         canSign={!!active.signer}
+                        onOpen={() => setSelectedTokenKey(r.key)}
                         onSend={(assetKey) => {
                           setSendAssetKey(assetKey);
                           setShowSend(true);
@@ -758,6 +764,27 @@ export default function WalletPage() {
         </div>
       </div>
 
+      {selectedToken && (
+        <TokenDetailModal
+          row={selectedToken}
+          canSign={!!active.signer}
+          onClose={() => setSelectedTokenKey(null)}
+          onReceive={() => {
+            setSelectedTokenKey(null);
+            setShowReceive(true);
+          }}
+          onSend={(assetKey) => {
+            setSelectedTokenKey(null);
+            setSendAssetKey(assetKey);
+            setShowSend(true);
+          }}
+          onSwap={(assetKey) => {
+            setSelectedTokenKey(null);
+            setBridgeAssetKey(assetKey);
+            setShowBridge(true);
+          }}
+        />
+      )}
       {showReceive && (
         <ReceiveModal account={active} onClose={() => setShowReceive(false)} />
       )}
@@ -1161,24 +1188,28 @@ type Portfolio = {
 type BalState = BalanceState | TokenBalance | undefined;
 
 // One line in the token list: a chain's native coin, or an ERC-20 held on it.
-type DisplayRow = {
+type DisplayRowBase = {
   key: string;
   /** 0x-hex chain id this row lives on (for the network filter). */
   chainId: string;
   chainName: string;
   chainSymbol: string;
   chainColor: string;
-  kind: "native" | "erc20";
   symbol: string;
+  name: string;
   decimals: number;
-  address?: string;
   /** Coin-glyph background color (chain brand for native, seeded for tokens). */
   color: string;
   logo?: string;
   state: BalState;
   price?: Price;
-  isCustom?: boolean;
 };
+
+type DisplayRow = DisplayRowBase &
+  (
+    | { kind: "native"; address?: never; isCustom?: never }
+    | { kind: "erc20"; address: string; isCustom: boolean }
+  );
 
 // Deterministic pleasant color from a string (token contract) — only used as the
 // glyph background when a token has no logo.
@@ -1212,6 +1243,7 @@ function buildRows(
       chainColor: c.color,
       kind: "native",
       symbol: c.symbol,
+      name: `${c.name} ${c.symbol}`,
       decimals: c.decimals,
       color: c.color,
       logo: chainLogo(c.id),
@@ -1233,6 +1265,7 @@ function buildRows(
         chainColor: c.color,
         kind: "erc20",
         symbol: tk.symbol,
+        name: tk.name,
         decimals: tk.decimals,
         address: tk.address,
         color: seedColor(tk.address),
@@ -1540,12 +1573,14 @@ function HoldingRow({
   row,
   t,
   canSign,
+  onOpen,
   onSend,
   onSwap,
 }: {
   row: DisplayRow;
   t: TFn;
   canSign: boolean;
+  onOpen: () => void;
   onSend: (assetKey: string) => void;
   onSwap: (assetKey: string) => void;
 }) {
@@ -1558,18 +1593,26 @@ function HoldingRow({
   const sendAssetKey =
     row.kind === "native"
       ? `n:${row.chainId}`
-      : row.address
-        ? `e:${row.chainId}:${row.address}`
-        : null;
+      : `e:${row.chainId}:${row.address}`;
   const canSend =
     canSign &&
-    !!sendAssetKey &&
     row.state?.status === "ok" &&
     BigInt(row.state.wei) > 0n;
   return (
     <div
       className="token-card"
       style={{ "--tk": row.color } as React.CSSProperties}
+      role="button"
+      tabIndex={0}
+      aria-label={t("wallet.openTokenDetails", { symbol: row.symbol })}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
     >
       <div className="token-id">
         <Coin symbol={row.symbol} color={row.color} logo={row.logo} size={36} />
@@ -1641,18 +1684,216 @@ function HoldingRow({
         <button
           className="token-action send"
           disabled={!canSend}
-          onClick={() => sendAssetKey && onSend(sendAssetKey)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSend(sendAssetKey);
+          }}
         >
           <Icon name="send" size={12} /> {t("wallet.send")}
         </button>
         <button
           className="token-action"
           disabled={!canSend}
-          onClick={() => sendAssetKey && onSwap(sendAssetKey)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSwap(sendAssetKey);
+          }}
         >
           <Icon name="swap" size={12} /> {t("wallet.swap")}
         </button>
       </div>
+    </div>
+  );
+}
+
+function TokenDetailModal({
+  row,
+  canSign,
+  onClose,
+  onReceive,
+  onSend,
+  onSwap,
+}: {
+  row: DisplayRow;
+  canSign: boolean;
+  onClose: () => void;
+  onReceive: () => void;
+  onSend: (assetKey: string) => void;
+  onSwap: (assetKey: string) => void;
+}) {
+  const { t } = useT();
+  const { cls, close } = useModalExit(onClose);
+  const chain = findChain(row.chainId);
+  const assetKey =
+    row.kind === "native" ? `n:${row.chainId}` : `e:${row.chainId}:${row.address}`;
+  const hasBalance =
+    row.state?.status === "ok" && BigInt(row.state.wei) > 0n;
+  const canMove = canSign && hasBalance;
+  const usd =
+    row.state?.status === "ok" && row.price
+      ? weiToUsd(row.state.wei, row.decimals, row.price.usd)
+      : null;
+  const explorerUrl =
+    row.kind === "erc20"
+      ? explorerTokenUrl(chain, row.chainId, row.chainName, row.address)
+      : null;
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [close]);
+
+  return (
+    <div className={`scrim token-detail-scrim t-scrim ${cls}`} onClick={close}>
+      <div
+        className={`modal token-detail-modal t-modal ${cls}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="token-detail-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head token-detail-head">
+          <div className="token-detail-heading">
+            <Coin symbol={row.symbol} color={row.color} logo={row.logo} size={48} />
+            <div>
+              <div className="token-detail-symbol" id="token-detail-title">
+                {row.symbol}
+                {row.isCustom && (
+                  <span className="badge neutral">{t("wallet.custom")}</span>
+                )}
+              </div>
+              <div className="token-detail-name">{row.name}</div>
+            </div>
+          </div>
+          <button
+            className="icon-btn bare"
+            onClick={close}
+            aria-label={t("common.close")}
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+
+        <div className="modal-body token-detail-body">
+          <div className="token-detail-balance">
+            <span>{t("wallet.balance")}</span>
+            {row.state?.status === "ok" ? (
+              <strong className="disp tnum">
+                {fmtUnitsDisplay(row.state.wei, row.decimals)}
+                <small>{row.symbol}</small>
+              </strong>
+            ) : row.state?.status === "error" ? (
+              <strong className="token-detail-error">{t("wallet.balanceUnavailable")}</strong>
+            ) : (
+              <span className="skeleton" style={{ width: 150, height: 28 }} />
+            )}
+            {usd != null && <em className="tnum">{fmtUsd(usd)}</em>}
+          </div>
+
+          <div className="token-detail-actions">
+            <button disabled={!canMove} onClick={() => onSend(assetKey)}>
+              <span><Icon name="send" size={17} /></span>
+              {t("wallet.send")}
+            </button>
+            <button disabled={!canMove} onClick={() => onSwap(assetKey)}>
+              <span><Icon name="swap" size={17} /></span>
+              {t("wallet.swap")}
+            </button>
+            <button onClick={onReceive}>
+              <span><Icon name="receive" size={17} /></span>
+              {t("wallet.receive")}
+            </button>
+            {explorerUrl && (
+              <button onClick={() => void openExternalUrl(explorerUrl)}>
+                <span><Icon name="external" size={17} /></span>
+                {t("wallet.explorer")}
+              </button>
+            )}
+          </div>
+
+          <div className="token-detail-stats">
+            <TokenDetailStat
+              label={t("wallet.price")}
+              value={row.price ? fmtUsd(row.price.usd, { dp: row.price.usd < 1 ? 4 : 2 }) : "—"}
+            />
+            <TokenDetailStat
+              label={t("wallet.change24h")}
+              value={
+                row.price && !row.price.synthetic ? fmtPct(row.price.change24h) : "—"
+              }
+              tone={
+                row.price && !row.price.synthetic
+                  ? row.price.change24h >= 0
+                    ? "up"
+                    : "down"
+                  : undefined
+              }
+            />
+            <TokenDetailStat label={t("wallet.decimals")} value={String(row.decimals)} />
+          </div>
+
+          <div className="token-detail-info">
+            <div className="token-detail-info-row">
+              <span>{t("wallet.network")}</span>
+              <strong>
+                <ChainIcon
+                  chain={{
+                    id: row.chainId,
+                    name: row.chainName,
+                    symbol: row.chainSymbol,
+                    color: row.chainColor,
+                  }}
+                  size={15}
+                />
+                {row.chainName}
+              </strong>
+            </div>
+            <div className="token-detail-info-row">
+              <span>{t("wallet.tokenType")}</span>
+              <strong>{row.kind === "erc20" ? "ERC-20" : t("wallet.nativeToken")}</strong>
+            </div>
+            <div className="token-detail-address">
+              <span>{t("wallet.tokenAddress")}</span>
+              {row.address ? (
+                <div className="token-detail-address-box">
+                  <code>{row.address}</code>
+                  <CopyButton
+                    className="icon-btn"
+                    title={t("wallet.copy")}
+                    size={15}
+                    value={row.address}
+                    onCopied={() => toast(t("common.copied"))}
+                  />
+                </div>
+              ) : (
+                <strong className="token-detail-native-note">
+                  {t("wallet.nativeNoContract")}
+                </strong>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TokenDetailStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "up" | "down";
+}) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong className={`tnum${tone ? ` ${tone}` : ""}`}>{value}</strong>
     </div>
   );
 }

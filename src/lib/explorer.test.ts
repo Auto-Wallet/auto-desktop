@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { explorerTxUrl, txExplorerUrl } from "./explorer";
+import { explorerTokenUrl, explorerTxUrl, txExplorerUrl } from "./explorer";
 import type { ActivityRecord } from "./activity";
 
 const HASH = "0x212e4a0d1111222233334444555566667777888899990000aaaabbbbe917b714";
@@ -71,5 +71,37 @@ describe("txExplorerUrl", () => {
       hash: HASH,
     } as ActivityRecord;
     expect(txExplorerUrl(undefined, record)).toBe(`https://arbiscan.io/tx/${HASH}`);
+  });
+});
+
+describe("explorerTokenUrl", () => {
+  const TOKEN = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+  it("derives the token route from a configured transaction explorer", () => {
+    expect(
+      explorerTokenUrl(
+        { id: "0x1", name: "Ethereum", explorerUrl: "https://etherscan.io/tx/" },
+        "0x1",
+        "Ethereum",
+        TOKEN,
+      ),
+    ).toBe(`https://etherscan.io/token/${TOKEN}`);
+  });
+
+  it("uses a known explorer when the chain has no configured URL", () => {
+    expect(explorerTokenUrl(undefined, "0x2105", "Base", TOKEN)).toBe(
+      `https://basescan.org/token/${TOKEN}`,
+    );
+  });
+
+  it("does not invent a route for an unknown explorer shape", () => {
+    expect(
+      explorerTokenUrl(
+        { id: "0xdeadbeef", name: "Nowhere", explorerUrl: "https://scan.test/search?q=" },
+        "0xdeadbeef",
+        "Nowhere",
+        TOKEN,
+      ),
+    ).toBeNull();
   });
 });

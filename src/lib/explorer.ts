@@ -57,3 +57,48 @@ export function explorerTxUrl(
     bases[id] ?? (name.includes("0g") ? "https://chainscan.0g.ai/tx/" : null);
   return base ? `${base}${hash}` : null;
 }
+
+/** Explorer page for an ERC-20 contract. Configured explorer URLs are stored as
+ * transaction routes, so only derive a token route when that shape is clear. */
+export function explorerTokenUrl(
+  chain: ExplorerChain | undefined,
+  chainId: string,
+  chainName: string,
+  address: string,
+): string | null {
+  if (!address) return null;
+
+  const configured = chain?.explorerUrl?.trim();
+  if (configured) {
+    const marker = configured.indexOf("/tx/");
+    if (marker >= 0) return `${configured.slice(0, marker)}/token/${address}`;
+    if (configured.endsWith("/tx")) {
+      return `${configured.slice(0, -3)}/token/${address}`;
+    }
+  }
+
+  const id = chainId.toLowerCase();
+  const name = (chain?.name ?? chainName).toLowerCase();
+  const bases: Record<string, string> = {
+    "0x1": "https://etherscan.io/token/",
+    "0x2105": "https://basescan.org/token/",
+    "0xa": "https://optimistic.etherscan.io/token/",
+    "0xa4b1": "https://arbiscan.io/token/",
+    "0x89": "https://polygonscan.com/token/",
+    "0x38": "https://bscscan.com/token/",
+    "0xa86a": "https://snowtrace.io/token/",
+    "0xe708": "https://lineascan.build/token/",
+    "0x13e31": "https://blastscan.io/token/",
+    "0x144": "https://era.zksync.network/token/",
+    "0x44d": "https://zkevm.polygonscan.com/token/",
+    "0x92": "https://sonicscan.org/token/",
+    "0xc4": "https://www.oklink.com/xlayer/token/",
+    "0x1e0": "https://worldscan.org/token/",
+    "0x378": "https://wanscan.org/token/",
+    "0x440": "https://andromeda-explorer.metis.io/token/",
+    "0xa4ec": "https://celoscan.io/token/",
+  };
+  const base =
+    bases[id] ?? (name.includes("0g") ? "https://chainscan.0g.ai/token/" : null);
+  return base ? `${base}${address}` : null;
+}
