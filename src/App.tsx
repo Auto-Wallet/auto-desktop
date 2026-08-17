@@ -8,6 +8,7 @@ import WalletPage from "./pages/WalletPage";
 import DappsPage from "./pages/DappsPage";
 import BrowserView from "./pages/BrowserView";
 import SettingsPage from "./pages/SettingsPage";
+import OkxPage from "./pages/OkxPage";
 import LockScreen from "./pages/LockScreen";
 import { ensureDapp, type Dapp } from "./lib/dapps";
 import { forgetDappLoad } from "./lib/dappLoadState";
@@ -40,7 +41,7 @@ import { txExplorerUrl } from "./lib/explorer";
 import { useMenuOverlay, type MenuOverlayPayload } from "./lib/menuOverlay";
 import { SidebarFooter } from "./SidebarFooter";
 
-type Page = "wallet" | "dapps" | "browser" | "settings";
+type Page = "wallet" | "okx" | "dapps" | "browser" | "settings";
 type Tab = { id: string; dapp: Dapp };
 type DappDialogEvent = {
   id: string;
@@ -322,6 +323,7 @@ function App() {
 
       <main className="main">
         {page === "wallet" && <WalletPage />}
+        {page === "okx" && <OkxPage />}
         {page === "dapps" && <DappsPage onOpen={openTab} />}
         {page === "browser" && activeTab && (
           <BrowserView
@@ -415,11 +417,12 @@ function Sidebar({
   const theme = useEffectiveTheme();
 
   const nav: {
-    key: "wallet" | "dapps";
+    key: "wallet" | "okx" | "dapps";
     i18n: string;
-    icon: "wallet" | "compass";
+    icon: "wallet" | "okx" | "compass";
   }[] = [
     { key: "wallet", i18n: "nav.wallet", icon: "wallet" },
+    { key: "okx", i18n: "nav.okx", icon: "okx" },
     { key: "dapps", i18n: "nav.explore", icon: "compass" },
   ];
 
@@ -452,7 +455,7 @@ function Sidebar({
             onClick={() => setPage(item.key)}
           >
             <span className="nav-ic">
-              <Icon name={item.icon} size={19} />
+              <Icon name={item.icon} size={19} sw={item.icon === "okx" ? 0 : undefined} fill={item.icon === "okx" ? "currentColor" : undefined} />
             </span>
             {!collapsed && <span className="nav-label">{t(item.i18n)}</span>}
           </button>

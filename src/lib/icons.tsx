@@ -4,6 +4,13 @@
 import type { JSX } from "react";
 
 const PATHS: Record<string, JSX.Element> = {
+  // token-branded:okx-background — square OKX mark from better-icons / Iconify.
+  okx: (
+    <>
+      <path fill="#050505" d="M24 0H0v24h24z" />
+      <path fill="#fff" d="M4 4h5.333v5.333H4zm10.667 5.333H9.333v5.334H4V20h5.333v-5.333h5.334V20H20v-5.333h-5.333zm0 0V4H20v5.333z" />
+    </>
+  ),
   wallet: (
     <>
       <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H18a2 2 0 0 1 2 2v0H5.5" />
@@ -264,6 +271,22 @@ export function Icon({
   sw?: number;
   fill?: string;
 }) {
+  if (name === "okx") {
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="none"
+        style={{ display: "block", borderRadius: Math.max(3, size * 0.18) }}
+      >
+        {/* token-branded:okx-background — fetched through better-icons / Iconify. */}
+        <path fill="#050505" d="M24 0H0v24h24z" />
+        <path fill="#fff" d="M4 4h5.333v5.333H4zm10.667 5.333H9.333v5.334H4V20h5.333v-5.333h5.334V20H20v-5.333h-5.333zm0 0V4H20v5.333z" />
+      </svg>
+    );
+  }
   const p = PATHS[name];
   if (!p) return null;
   return (

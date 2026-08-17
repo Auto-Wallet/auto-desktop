@@ -1,0 +1,672 @@
+.okx-page {
+  --okx-black: #101113;
+  --okx-paper: #ffffff;
+  --okx-lime: #c7ff35;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 38px clamp(28px, 5vw, 72px) 72px;
+  color: var(--ink);
+  background:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    var(--bg);
+  background-size: 48px 48px;
+  background-position: -1px -1px;
+}
+
+[data-theme="dark"] .okx-page {
+  --okx-black: #f6f6f2;
+  --okx-paper: #111214;
+  --okx-lime: #baf42d;
+}
+
+.okx-header {
+  max-width: 1120px;
+  margin: 0 auto 28px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  animation: okx-rise 0.34s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.okx-header h1,
+.okx-setup-intro h1 {
+  margin: 8px 0 4px;
+  font-family: var(--font-display);
+  font-size: clamp(30px, 4vw, 48px);
+  line-height: 0.98;
+  letter-spacing: -0.055em;
+}
+
+.okx-header p,
+.okx-setup-intro > p {
+  margin: 8px 0 0;
+  color: var(--ink-3);
+  font-size: 15px;
+}
+
+.okx-eyebrow,
+.okx-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font: 700 11px/1 var(--font-mono);
+  letter-spacing: 0.13em;
+}
+
+.okx-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: currentColor;
+}
+
+.okx-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.okx-connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: 4px;
+  color: var(--ink-3);
+  font: 600 12px/1 var(--font-mono);
+}
+
+.okx-connected i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--up);
+  box-shadow: 0 0 0 4px var(--up-soft);
+}
+
+.okx-icon-button,
+.okx-refresh,
+.okx-open-api,
+.okx-connect-button,
+.okx-danger-link,
+.okx-segmented button {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.okx-icon-button {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--ink-2);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+
+.okx-refresh {
+  min-height: 38px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 11px;
+  background: var(--okx-black);
+  color: var(--okx-paper);
+  font-weight: 700;
+}
+
+.okx-refresh:disabled,
+.okx-connect-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.okx-refresh:not(:disabled):hover,
+.okx-connect-button:not(:disabled):hover,
+.okx-open-api:hover {
+  transform: translateY(-1px);
+}
+
+.okx-refresh svg,
+.okx-connect-button svg,
+.okx-open-api svg {
+  transition: transform 0.18s ease;
+}
+
+.okx-refresh:hover svg {
+  transform: rotate(30deg);
+}
+
+.okx-connection-bar {
+  max-width: 1120px;
+  margin: -12px auto 18px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--sh-sm);
+}
+
+.okx-connection-bar div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.okx-connection-bar strong { font-size: 13px; }
+.okx-connection-bar span { color: var(--ink-3); font: 500 11px/1 var(--font-mono); }
+.okx-danger-link { color: var(--down); background: transparent; font-weight: 700; }
+
+.okx-balance-hero {
+  position: relative;
+  max-width: 1120px;
+  min-height: 214px;
+  margin: 0 auto 24px;
+  padding: 34px 38px;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 24px;
+  overflow: hidden;
+  border-radius: 22px;
+  color: var(--okx-paper);
+  background: var(--okx-black);
+  box-shadow: 0 24px 52px rgba(16, 17, 19, 0.18);
+  animation: okx-rise 0.38s 0.04s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.okx-balance-hero > div:not(.okx-pixel-field) {
+  position: relative;
+  z-index: 1;
+}
+
+.okx-hero-total {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 46%;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.okx-balance-hero span {
+  display: block;
+  color: color-mix(in srgb, var(--okx-paper) 62%, transparent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.okx-balance-hero strong {
+  display: block;
+  margin: 8px 0 12px;
+  font-family: var(--font-display);
+  font-size: clamp(38px, 6vw, 62px);
+  line-height: 0.94;
+  letter-spacing: -0.055em;
+}
+
+.okx-balance-hero strong em {
+  margin-left: 7px;
+  color: color-mix(in srgb, var(--okx-paper) 56%, transparent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+
+.okx-balance-hero small {
+  color: color-mix(in srgb, var(--okx-paper) 48%, transparent);
+  font: 500 11px/1 var(--font-mono);
+}
+
+.okx-hero-note {
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--okx-paper) 18%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--okx-paper) 8%, transparent);
+  backdrop-filter: blur(10px);
+  color: var(--okx-paper);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.okx-hero-note span { color: var(--okx-paper); font-size: 12px; }
+
+.okx-account-overview {
+  width: min(520px, 52%);
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--okx-paper) 13%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--okx-paper) 6%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.okx-account-overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.okx-account-overview-head > span {
+  color: color-mix(in srgb, var(--okx-paper) 64%, transparent);
+  font: 700 10px/1 var(--font-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.okx-account-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.okx-account-values > div {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--okx-paper) 7%, transparent);
+}
+
+.okx-account-values span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.okx-account-values span i {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #9b9ba1;
+}
+
+.okx-account-values span i.funding { background: #5e5ce6; }
+.okx-account-values span i.trading { background: #55c98b; }
+.okx-account-values span i.earn { background: var(--okx-lime); }
+
+.okx-account-values strong {
+  margin: 16px 0 5px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: clamp(14px, 1.5vw, 19px);
+  letter-spacing: -0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.okx-account-values small {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.okx-pixel-field {
+  position: absolute;
+  top: -54px;
+  right: 70px;
+  width: 240px;
+  height: 240px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 10px;
+  transform: rotate(8deg);
+  opacity: 0.11;
+}
+
+.okx-pixel-field i { background: var(--okx-paper); border-radius: 4px; }
+.okx-pixel-field i:nth-child(2),
+.okx-pixel-field i:nth-child(4),
+.okx-pixel-field i:nth-child(9) { opacity: 0; }
+
+.okx-section {
+  max-width: 1120px;
+  margin: 0 auto 24px;
+  border: 1px solid var(--line-2);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--sh-sm);
+  overflow: hidden;
+  animation: okx-rise 0.4s 0.08s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.okx-orders-section { animation-delay: 0.12s; }
+
+.okx-section-head {
+  min-height: 82px;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.okx-section-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 19px;
+  letter-spacing: -0.025em;
+}
+
+.okx-section-head p {
+  margin: 4px 0 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.okx-count {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--ink-3);
+  font: 700 11px/1 var(--font-mono);
+}
+
+.okx-segmented {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+
+.okx-segmented button {
+  padding: 7px 13px;
+  border-radius: 8px;
+  color: var(--ink-3);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.okx-segmented button.on {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--sh-sm);
+}
+
+.okx-table-wrap { overflow-x: auto; }
+.okx-table { width: 100%; border-collapse: collapse; }
+.okx-table th {
+  padding: 12px 24px;
+  text-align: right;
+  color: var(--ink-4);
+  background: var(--surface-2);
+  font: 700 10px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.okx-table th:first-child,
+.okx-table th:nth-child(2) { text-align: left; }
+.okx-table td {
+  padding: 15px 24px;
+  text-align: right;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.okx-table tbody tr:first-child td { border-top: 0; }
+.okx-table tbody tr:hover td { background: var(--surface-2); }
+.okx-table td:first-child,
+.okx-table td:nth-child(2) { text-align: left; }
+.okx-table td:first-child { display: flex; align-items: center; gap: 10px; }
+.okx-table td:last-child strong { display: block; color: var(--ink); }
+.okx-table td:last-child small { display: block; margin-top: 2px; color: var(--ink-4); }
+
+.okx-coin {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--okx-paper);
+  background: var(--okx-black);
+  font: 800 12px/1 var(--font-mono);
+}
+
+.okx-coin.btc { background: #f7931a; font-family: Georgia, serif; font-size: 17px; }
+.okx-coin.eth { background: #627eea; }
+.okx-coin.usdc { background: #2775ca; border-radius: 50%; }
+.okx-coin.usdt { background: #26a17b; border-radius: 50%; font-size: 15px; }
+
+.okx-account-tag,
+.okx-option,
+.okx-state {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+}
+.okx-account-tag { padding: 4px 8px; color: var(--ink-2); background: var(--surface-3); }
+.okx-account-tag.funding { color: var(--brand-ink); background: var(--brand-soft); }
+.okx-account-tag.earn { color: #557000; background: rgba(188, 255, 45, 0.18); }
+.okx-account-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.okx-order-grid {
+  padding: 20px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.okx-order-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line-2);
+  border-radius: 15px;
+  background: var(--surface);
+}
+
+.okx-order-top,
+.okx-order-top > div,
+.okx-order-yield,
+.okx-order-card dl div,
+.okx-order-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.okx-order-top > div { justify-content: flex-start; min-width: 0; }
+.okx-order-top strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.okx-option { padding: 4px 7px; }
+.okx-option.call { color: var(--up); background: var(--up-soft); }
+.okx-option.put { color: var(--coral); background: var(--coral-soft); }
+.okx-state { padding: 5px 8px; color: var(--ink-3); background: var(--surface-3); white-space: nowrap; }
+.okx-state.live { color: var(--up); background: var(--up-soft); }
+.okx-state.pending_settle,
+.okx-state.pending_redeem,
+.okx-state.initial { color: var(--warn); background: var(--warn-soft); }
+.okx-state.rejected { color: var(--down); background: var(--down-soft); }
+
+.okx-order-yield {
+  margin: 20px 0 18px;
+  padding: 14px 0 16px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.okx-order-yield span { color: var(--ink-3); font-size: 11px; }
+.okx-order-yield strong { color: var(--up); font-family: var(--font-display); font-size: 25px; }
+.okx-order-card dl { margin: 0; }
+.okx-order-card dl div { margin: 9px 0; font-size: 12px; }
+.okx-order-card dt { color: var(--ink-3); }
+.okx-order-card dd { margin: 0; color: var(--ink-2); font-weight: 600; text-align: right; }
+.okx-order-card footer { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line-2); }
+.okx-order-card footer span { color: var(--ink-4); font: 500 10px/1 var(--font-mono); }
+.okx-order-card footer b { color: var(--up); font-size: 11px; }
+
+.okx-setup-page {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.95fr) minmax(420px, 1.05fr);
+  align-content: center;
+  gap: clamp(34px, 7vw, 96px);
+  padding-top: 54px;
+}
+
+.okx-setup-intro,
+.okx-setup-form { width: 100%; max-width: 520px; }
+.okx-setup-intro { justify-self: end; animation: okx-rise 0.36s ease both; }
+.okx-setup-form { justify-self: start; }
+.okx-setup-brand {
+  width: 76px;
+  height: 76px;
+  margin-bottom: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  color: var(--okx-paper);
+  background: var(--okx-black);
+  box-shadow: 12px 12px 0 var(--okx-lime);
+}
+.okx-setup-intro h1 { max-width: 500px; margin-top: 14px; font-size: clamp(38px, 5vw, 58px); }
+.okx-setup-intro > p { max-width: 480px; font-size: 16px; line-height: 1.55; }
+
+.okx-steps { margin: 30px 0 24px; padding: 0; list-style: none; }
+.okx-steps li { position: relative; display: flex; gap: 14px; padding: 0 0 20px; }
+.okx-steps li:not(:last-child)::after { content: ""; position: absolute; top: 28px; bottom: 5px; left: 15px; width: 1px; background: var(--line-3); }
+.okx-steps b { position: relative; z-index: 1; width: 31px; height: 31px; display: grid; place-items: center; flex: none; border-radius: 9px; color: var(--okx-paper); background: var(--okx-black); font: 700 9px/1 var(--font-mono); }
+.okx-steps span { display: flex; flex-direction: column; gap: 3px; padding-top: 2px; }
+.okx-steps strong { font-size: 13px; }
+.okx-steps small { max-width: 410px; color: var(--ink-3); font-size: 12px; line-height: 1.35; }
+
+.okx-open-api {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 11px;
+  color: var(--okx-paper);
+  background: var(--okx-black);
+  font-size: 12px;
+  font-weight: 750;
+  transition: transform 0.16s ease;
+}
+
+.okx-setup-form {
+  padding: 28px;
+  border: 1px solid var(--line-2);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: var(--sh-lg);
+  animation: okx-rise 0.4s 0.08s ease both;
+}
+
+.okx-form-heading { display: flex; gap: 13px; margin-bottom: 24px; }
+.okx-form-heading > span { width: 38px; height: 38px; display: grid; place-items: center; flex: none; border-radius: 11px; color: var(--brand-ink); background: var(--brand-soft); }
+.okx-form-heading h2 { margin: 1px 0 3px; font-family: var(--font-display); font-size: 20px; }
+.okx-form-heading p { margin: 0; color: var(--ink-3); font-size: 12px; }
+.okx-setup-form label { display: block; margin-top: 14px; }
+.okx-setup-form label > span { display: block; margin: 0 0 6px 2px; color: var(--ink-2); font-size: 11px; font-weight: 750; }
+.okx-setup-form input,
+.okx-setup-form select {
+  width: 100%;
+  height: 43px;
+  padding: 0 13px;
+  border: 1px solid var(--line-2);
+  border-radius: 11px;
+  outline: 0;
+  color: var(--ink);
+  background: var(--surface-2);
+  font: 500 12px/1 var(--font-mono);
+}
+.okx-setup-form input:focus,
+.okx-setup-form select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.okx-storage-note { margin: 18px 0; padding: 11px 12px; display: flex; align-items: flex-start; gap: 9px; border-radius: 11px; color: var(--ink-3); background: var(--surface-2); font-size: 11px; line-height: 1.4; }
+.okx-storage-note svg { flex: none; color: var(--up); }
+.okx-connect-button { width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 12px; color: var(--okx-paper); background: var(--okx-black); font-weight: 800; transition: transform 0.16s ease; }
+
+.okx-inline-error,
+.okx-dcd-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  color: var(--down);
+  background: var(--down-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.okx-inline-error { margin: 12px 0; border-radius: 11px; }
+.okx-inline-error svg { flex: none; margin-top: 1px; }
+.okx-section > .okx-inline-error { margin: 20px; }
+.okx-dcd-error { margin: 20px; border-radius: 14px; color: var(--ink-2); background: var(--warn-soft); }
+.okx-dcd-error > span { flex: none; color: var(--warn); }
+.okx-dcd-error strong { display: block; margin-bottom: 4px; color: var(--ink); }
+.okx-dcd-error p { margin: 0; }
+.okx-dcd-error code { display: block; margin-top: 8px; color: var(--ink-3); font-size: 10px; }
+
+.okx-empty,
+.okx-page-error {
+  min-height: 170px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.okx-empty > span { width: 42px; height: 42px; margin-bottom: 10px; display: grid; place-items: center; border-radius: 12px; color: var(--ink-3); background: var(--surface-2); }
+.okx-empty strong { font-size: 13px; }
+.okx-empty p { max-width: 380px; margin: 5px 0 0; color: var(--ink-3); font-size: 12px; }
+.okx-page-error { max-width: 520px; margin: 15vh auto 0; padding: 32px; border: 1px solid var(--line-2); border-radius: 20px; background: var(--surface); }
+.okx-page-error h2 { margin: 12px 0 3px; }
+.okx-page-error p { color: var(--down); font-size: 12px; }
+
+.okx-skeleton { padding: 8px 20px; }
+.okx-skeleton span { display: block; height: 52px; margin: 8px 0; border-radius: 10px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); background-size: 200% 100%; animation: okx-shimmer 1.3s linear infinite; }
+.okx-loading { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.okx-loading span { width: 8px; height: 8px; border-radius: 2px; background: var(--ink); animation: okx-bounce 0.8s ease-in-out infinite alternate; }
+.okx-loading span:nth-child(2) { animation-delay: 0.14s; }
+.okx-loading span:nth-child(3) { animation-delay: 0.28s; }
+
+@keyframes okx-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes okx-shimmer { to { background-position: -200% 0; } }
+@keyframes okx-bounce { to { transform: translateY(-8px); opacity: 0.35; } }
+
+@media (max-width: 980px) {
+  .okx-setup-page { grid-template-columns: 1fr; align-content: start; }
+  .okx-setup-intro,
+  .okx-setup-form { justify-self: center; }
+  .okx-order-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .okx-page { padding: 26px 18px 56px; }
+  .okx-header { align-items: flex-start; flex-direction: column; gap: 18px; }
+  .okx-header-actions { width: 100%; }
+  .okx-connected { flex: 1; }
+  .okx-balance-hero { min-height: 190px; padding: 28px 24px; align-items: stretch; flex-direction: column; }
+  .okx-account-overview { width: 100%; }
+  .okx-pixel-field { right: -30px; }
+  .okx-table th,
+  .okx-table td { padding-left: 16px; padding-right: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .okx-header,
+  .okx-balance-hero,
+  .okx-section,
+  .okx-setup-intro,
+  .okx-setup-form { animation: none; }
+}

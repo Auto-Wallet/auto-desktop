@@ -1,0 +1,26 @@
+# Read-only OKX account calls. Granted only to the trusted shell webview. The
+# remote dApp webviews must never receive account data or credential commands.
+[[permission]]
+identifier = "allow-okx-connection-status"
+description = "Allow the trusted shell to check whether OKX is configured."
+commands.allow = ["okx_connection_status"]
+
+[[permission]]
+identifier = "allow-okx-save-credentials"
+description = "Allow the trusted shell to validate and securely save OKX credentials."
+commands.allow = ["okx_save_credentials"]
+
+[[permission]]
+identifier = "allow-okx-delete-credentials"
+description = "Allow the trusted shell to remove OKX credentials."
+commands.allow = ["okx_delete_credentials"]
+
+[[permission]]
+identifier = "allow-okx-get-assets"
+description = "Allow the trusted shell to read OKX trading and funding assets."
+commands.allow = ["okx_get_assets"]
+
+[[permission]]
+identifier = "allow-okx-get-dcd-orders"
+description = "Allow the trusted shell to read OKX Dual Investment orders."
+commands.allow = ["okx_get_dcd_orders"]

@@ -37,6 +37,12 @@ mod eth_tx;
 mod eip712;
 // Ledger hardware wallet over USB-HID (framing + Ethereum APDUs + hidapi I/O).
 mod ledger;
+mod okx_account;
+
+use okx_account::{
+    okx_connection_status, okx_delete_credentials, okx_get_assets, okx_get_dcd_orders,
+    okx_save_credentials,
+};
 
 const DEFI_PROVIDER_TIMEOUT: Duration = Duration::from_secs(12);
 const DEBUG_SHELL_CONSOLE_MENU_ID: &str = "debug-shell-console";
@@ -7642,6 +7648,11 @@ pub fn run() {
             okx_dex_swap,
             okx_dex_approve_transaction,
             okx_dex_history,
+            okx_connection_status,
+            okx_save_credentials,
+            okx_delete_credentials,
+            okx_get_assets,
+            okx_get_dcd_orders,
             get_chains,
             add_chain,
             update_chain,
@@ -9376,6 +9387,11 @@ mod e2e {
                 safe_pending_transactions,
                 safe_confirm_transaction,
                 wallet_send,
+                okx_connection_status,
+                okx_save_credentials,
+                okx_delete_credentials,
+                okx_get_assets,
+                okx_get_dcd_orders,
                 set_active_chain,
                 get_active_chain,
                 get_chains,
@@ -10391,6 +10407,39 @@ mod e2e {
                     "transaction": {}
                 }),
             ),
+        ] {
+            let err = invoke(&dapp, command, args).unwrap_err();
+            let message = err.as_str().unwrap_or_default();
+            assert!(
+                message.contains("not allowed") || message.contains("not found"),
+                "remote dapp unexpectedly reached {command}: {err}"
+            );
+        }
+    }
+
+    /// SECURITY: exchange credentials and account data stay behind the trusted
+    /// shell capability. A remote dApp cannot even check whether OKX is connected.
+    #[test]
+    fn e2e_dapp_cannot_reach_okx_account_commands() {
+        let app = build_app();
+        let dapp = dapp_webview(app);
+
+        for (command, args) in [
+            ("okx_connection_status", json!({})),
+            (
+                "okx_save_credentials",
+                json!({
+                    "creds": {
+                        "apiKey": "not-a-real-key",
+                        "secretKey": "not-a-real-secret",
+                        "passphrase": "not-a-real-passphrase",
+                        "region": "global"
+                    }
+                }),
+            ),
+            ("okx_delete_credentials", json!({})),
+            ("okx_get_assets", json!({})),
+            ("okx_get_dcd_orders", json!({})),
         ] {
             let err = invoke(&dapp, command, args).unwrap_err();
             let message = err.as_str().unwrap_or_default();

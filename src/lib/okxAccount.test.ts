@@ -1,0 +1,247 @@
+import { describe, expect, test } from "bun:test";
+import {
+  createSingleFlight,
+  isCurrentDcdOrder,
+  mergeOkxPortfolioAssets,
+  parseOkxAssets,
+  parseOkxDcdOrders,
+  type OkxAssets,
+} from "./okxAccount";
+
+test("shares one in-flight OKX refresh across duplicate callers", async () => {
+  let calls = 0;
+  let finish: ((value: string) => void) | undefined;
+  const pending = new Promise<string>((resolve) => {
+    finish = resolve;
+  });
+  const refresh = createSingleFlight(() => {
+    calls += 1;
+    return pending;
+  });
+
+  const first = refresh();
+  const second = refresh();
+
+  expect(first).toBe(second);
+  expect(calls).toBe(1);
+  if (finish === undefined) throw new Error("test refresh did not expose its resolver");
+  finish("loaded");
+  expect(await first).toBe("loaded");
+});
+
+test("portfolio BTC includes principal from OKX's uppercase LIVE Dual Investment state", () => {
+  const assets: OkxAssets = {
+    totalEquityUsd: "105236.00",
+    updatedAt: 1786970060000,
+    accountValues: { funding: "4.33", trading: "0.64", earn: "105231.02" },
+    assets: [{
+      account: "funding",
+      currency: "BTC",
+      balance: "0.00006763",
+      available: "0.00006763",
+      frozen: "0",
+      usdValue: null,
+    }],
+  };
+  const [live, settled] = parseOkxDcdOrders({
+    data: [
+      {
+        ordId: "live",
+        productId: "BTC-USDT-260827-120000-C",
+        state: "LIVE",
+        strike: "120000",
+        notionalSz: "0.9466",
+        annualizedYield: "0.1748",
+        settleTime: "1787798400000",
+      },
+      {
+        ordId: "settled",
+        productId: "BTC-USDT-260815-120000-C",
+        state: "SETTLED",
+        strike: "120000",
+        notionalSz: "8",
+        annualizedYield: "0.1",
+        settleTime: "1786760000000",
+      },
+    ],
+  });
+
+  expect(mergeOkxPortfolioAssets(assets, [live, settled])).toEqual([{
+    accounts: ["funding", "earn"],
+    currency: "BTC",
+    balance: "0.94666763",
+    available: "0.00006763",
+    frozen: "0.9466",
+    usdValue: null,
+  }]);
+});
+
+test("an empty OKX available amount does not crash portfolio rendering", () => {
+  const assets = parseOkxAssets({
+    valuation: {
+      code: "0",
+      msg: "",
+      data: [{
+        totalBal: "0.64",
+        ts: "1786970060000",
+        details: { funding: "0", trading: "0.64", earn: "0" },
+      }],
+    },
+    trading: {
+      code: "0",
+      msg: "",
+      data: [{
+        details: [{
+          ccy: "USDC",
+          eq: "0.644713",
+          availEq: "",
+          frozenBal: "0",
+          eqUsd: "0.64",
+        }],
+      }],
+    },
+    funding: { code: "0", msg: "", data: [] },
+  });
+
+  const [usdc] = mergeOkxPortfolioAssets(assets, []);
+
+  expect(usdc.available).toBe("0");
+  expect(usdc.balance).toBe("0.644713");
+});
+
+describe("OKX account response parsing", () => {
+  test("keeps trading and funding balances distinct", () => {
+    const parsed = parseOkxAssets({
+      valuation: {
+        code: "0",
+        msg: "",
+        data: [{
+          totalBal: "105160.55",
+          ts: "1786970060000",
+          details: {
+            funding: "4.32",
+            trading: "0.64",
+            classic: "0",
+            earn: "105155.59",
+          },
+        }],
+      },
+      trading: {
+        code: "0",
+        msg: "",
+        data: [{
+          totalEq: "12543.21",
+          uTime: "1786970000000",
+          details: [{
+            ccy: "BTC",
+            eq: "0.125",
+            availEq: "0.1",
+            frozenBal: "0.025",
+            eqUsd: "8500.50",
+          }],
+        }],
+      },
+      funding: {
+        code: "0",
+        msg: "",
+        data: [{ ccy: "USDT", bal: "4042.71", availBal: "4000", frozenBal: "42.71" }],
+      },
+    });
+
+    expect(parsed.totalEquityUsd).toBe("105160.55");
+    expect(parsed.updatedAt).toBe(1786970060000);
+    expect(parsed.accountValues).toEqual({
+      funding: "4.32",
+      trading: "0.64",
+      earn: "105155.59",
+    });
+    expect(parsed.assets).toEqual([
+      {
+        account: "trading",
+        currency: "BTC",
+        balance: "0.125",
+        available: "0.1",
+        frozen: "0.025",
+        usdValue: "8500.50",
+      },
+      {
+        account: "funding",
+        currency: "USDT",
+        balance: "4042.71",
+        available: "4000",
+        frozen: "42.71",
+        usdValue: null,
+      },
+    ]);
+  });
+
+  test("parses a live Dual Investment order and rejects missing yield", () => {
+    const payload = {
+      code: "0",
+      msg: "",
+      data: [{
+        ordId: "987654321",
+        productId: "BTC-USDT-260827-120000-C",
+        state: "live",
+        strike: "120000",
+        notionalSz: "0.1",
+        notionalCcy: "BTC",
+        annualizedYield: "0.1748",
+        yieldSz: "0.000335",
+        yieldCcy: "BTC",
+        expTime: "1787798400000",
+        settleSz: "",
+        settleCcy: "",
+        settlePx: "",
+      }],
+    };
+    const [order] = parseOkxDcdOrders(payload);
+    expect(order.annualizedYield).toBe("0.1748");
+    expect(order.optionType).toBe("call");
+    expect(isCurrentDcdOrder(order)).toBe(true);
+
+    const withoutYield = structuredClone(payload);
+    delete (withoutYield.data[0] as Record<string, unknown>).annualizedYield;
+    expect(() => parseOkxDcdOrders(withoutYield)).toThrow("annualizedYield must be a string");
+  });
+
+  test("parses the code-less Dual Investment history shape returned by OKX", () => {
+    const [order] = parseOkxDcdOrders({
+      data: [{
+        ordId: "123",
+        productId: "BTC-USDT-260827-120000-C",
+        state: "live",
+        baseCcy: "BTC",
+        quoteCcy: "USDT",
+        strike: "120000",
+        notionalSz: "0.9466",
+        annualizedYield: "0.1748",
+        yieldSz: "0.00059912",
+        settleTime: "1787798400000",
+      }],
+    });
+
+    expect(order.principalCurrency).toBe("BTC");
+    expect(order.expiresAt).toBe(1787798400000);
+  });
+
+  test("parses a Dual Investment response with OKX's numeric success code", () => {
+    const [order] = parseOkxDcdOrders({
+      code: 0,
+      msg: "",
+      data: [{
+        ordId: "456",
+        productId: "BTC-USDT-260827-120000-C",
+        state: "live",
+        strike: "120000",
+        notionalSz: "0.9466",
+        notionalCcy: "BTC",
+        annualizedYield: "0.1748",
+        settleTime: "1787798400000",
+      }],
+    });
+
+    expect(order.orderId).toBe("456");
+    expect(order.principal).toBe("0.9466");
+  });
+});

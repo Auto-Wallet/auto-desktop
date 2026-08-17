@@ -1,6 +1,6 @@
 [package]
 name = "auto-desktop"
-version = "0.2.56"
+version = "0.2.57"
 description = "AutoDesktop — a lightweight desktop wallet & dApp browser"
 authors = ["you"]
 edition = "2021"
@@ -46,6 +46,11 @@ base64 = "0.22.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
 sha2 = "0.10"
 hmac = "0.12"
+time = { version = "0.3", features = ["formatting", "macros"] }
+
+# Store exchange API credentials in the operating system credential store. The
+# API secret and passphrase must never be written to app settings or localStorage.
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "linux-native-sync-persistent"] }
 
 # Ledger hardware wallet over USB-HID. WKWebView has no WebHID, so we talk to the
 # device from Rust. Default features build the bundled C hidapi against IOKit on
