@@ -365,6 +365,30 @@ function multiplyDecimalStrings(left: string, right: string, label: string): str
   return fraction.length === 0 ? `${sign}${whole}` : `${sign}${whole}.${fraction}`;
 }
 
+function divideDecimalStrings(numerator: string, denominator: string, precision: number, label: string): string {
+  const decimal = /^-?\d+(?:\.\d+)?$/;
+  if (!decimal.test(numerator) || !decimal.test(denominator)) {
+    throw new Error(`${label} must contain decimal strings`);
+  }
+  const toParts = (value: string) => {
+    const negative = value.startsWith("-");
+    const unsigned = negative ? value.slice(1) : value;
+    const [whole, fraction = ""] = unsigned.split(".");
+    return { negative, units: BigInt(`${whole}${fraction}`), scale: fraction.length };
+  };
+  const numeratorParts = toParts(numerator);
+  const denominatorParts = toParts(denominator);
+  if (denominatorParts.units === 0n) throw new Error(`${label} denominator must not be zero`);
+  const scaledNumerator = numeratorParts.units * (10n ** BigInt(denominatorParts.scale + precision));
+  const scaledDenominator = denominatorParts.units * (10n ** BigInt(numeratorParts.scale));
+  const quotient = (scaledNumerator + (scaledDenominator / 2n)) / scaledDenominator;
+  const digits = quotient.toString().padStart(precision + 1, "0");
+  const whole = precision === 0 ? digits : digits.slice(0, -precision);
+  const fraction = precision === 0 ? "" : digits.slice(-precision).replace(/0+$/, "");
+  const sign = numeratorParts.negative !== denominatorParts.negative && quotient !== 0n ? "-" : "";
+  return fraction.length === 0 ? `${sign}${whole}` : `${sign}${whole}.${fraction}`;
+}
+
 export function isUsdStablecoin(currency: string): boolean {
   return USD_STABLECOINS.has(currency.toUpperCase());
 }
@@ -411,6 +435,32 @@ export function sumOkxDcdYieldByCurrency(
       amount: total.amount,
       usdValue: total.allPriced ? total.usdValue : null,
     }));
+}
+
+function okxDcdPrincipalUsdValue(order: OkxDcdOrder): string {
+  if (isUsdStablecoin(order.principalCurrency)) return order.principal;
+  const [baseCurrency, quoteCurrency] = order.productId.split("-");
+  if (baseCurrency === undefined || quoteCurrency === undefined) {
+    throw new Error(`OKX Dual Investment product ${order.productId} has no currency pair`);
+  }
+  if (order.principalCurrency !== baseCurrency || !isUsdStablecoin(quoteCurrency)) {
+    throw new Error(`Cannot value ${order.principalCurrency} principal for ${order.productId}`);
+  }
+  return multiplyDecimalStrings(order.principal, order.strike, `${order.orderId} principal USD value`);
+}
+
+export function calculateOkxDcdWeightedApr(orders: OkxDcdOrder[]): string | null {
+  if (orders.length === 0) return null;
+  let totalPrincipalUsd = "0";
+  let weightedAprTotal = "0";
+  for (const order of orders) {
+    const principalUsd = okxDcdPrincipalUsdValue(order);
+    totalPrincipalUsd = addDecimalStrings(totalPrincipalUsd, principalUsd, "Dual Investment principal USD value");
+    const weightedApr = multiplyDecimalStrings(principalUsd, order.annualizedYield, `${order.orderId} weighted APR`);
+    weightedAprTotal = addDecimalStrings(weightedAprTotal, weightedApr, "Dual Investment weighted APR");
+  }
+  if (totalPrincipalUsd === "0") throw new Error("Dual Investment principal USD value must be greater than zero");
+  return divideDecimalStrings(weightedAprTotal, totalPrincipalUsd, 12, "Dual Investment weighted APR");
 }
 
 export function mergeOkxPortfolioAssets(

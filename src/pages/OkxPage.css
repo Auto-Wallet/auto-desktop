@@ -460,6 +460,23 @@
   font-size: 10px;
   font-weight: 700;
 }
+.okx-order-yield-summary-divider {
+  width: 1px;
+  height: 30px;
+  flex: none;
+  margin-left: 2px;
+  background: color-mix(in srgb, var(--up) 18%, var(--line));
+}
+.okx-order-yield-summary-average {
+  min-width: 82px;
+  padding: 2px 4px 2px 2px;
+}
+.okx-order-yield-summary-average strong {
+  color: var(--up);
+  font-size: 15px;
+  line-height: 1;
+  white-space: nowrap;
+}
 
 .okx-table-wrap { overflow-x: auto; }
 .okx-table { width: 100%; border-collapse: collapse; }

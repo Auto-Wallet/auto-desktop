@@ -56,6 +56,8 @@ describe("OKX Dual Investment table", () => {
 
     expect(html).toContain("okx-order-yield-summary");
     expect(html).toContain("Total yield");
+    expect(html).toContain("Average APR");
+    expect(html).toContain("73.54%");
     expect(html).toContain("+0.00123456 BTC");
     expect(html).toContain("($79.16)");
   });

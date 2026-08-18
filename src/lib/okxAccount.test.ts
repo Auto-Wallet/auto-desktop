@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  calculateOkxDcdWeightedApr,
   createSingleFlight,
   isCurrentDcdOrder,
   mergeOkxPortfolioAssets,
@@ -133,6 +134,34 @@ test("all-order yield totals stay exact and keep currencies separate", () => {
     { currency: "BTC", amount: "0.00129121", usdValue: "81.6490665377571751" },
     { currency: "USDC", amount: "12.5", usdValue: "12.50" },
   ]);
+});
+
+test("average APR is weighted by each order's USD principal value", () => {
+  const orders = parseOkxDcdOrders({
+    data: [
+      {
+        ordId: "sell-high",
+        productId: "BTC-USDC-260818-60000-C",
+        state: "SETTLED",
+        strike: "60000",
+        notionalSz: "1",
+        annualizedYield: "0.2",
+        settleTime: "1787068800000",
+      },
+      {
+        ordId: "buy-low",
+        productId: "BTC-USDC-260818-60000-P",
+        state: "SETTLED",
+        strike: "60000",
+        notionalSz: "40000",
+        annualizedYield: "0.05",
+        settleTime: "1787068800000",
+      },
+    ],
+  });
+
+  expect(calculateOkxDcdWeightedApr(orders)).toBe("0.14");
+  expect(calculateOkxDcdWeightedApr([])).toBeNull();
 });
 
 test("an empty OKX available amount does not crash portfolio rendering", () => {

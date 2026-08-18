@@ -4,6 +4,7 @@ import { askConfirm } from "../lib/confirm";
 import { Icon } from "../lib/icons";
 import { useT } from "../lib/i18n";
 import {
+  calculateOkxDcdWeightedApr,
   deleteOkxCredentials,
   createSingleFlight,
   estimateOkxDcdOrderYieldUsd,
@@ -372,6 +373,7 @@ function Coin({ currency }: { currency: string }) {
 export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
   const { t } = useT();
   const totals = sumOkxDcdYieldByCurrency(orders);
+  const averageApr = calculateOkxDcdWeightedApr(orders);
   return (
     <div className="okx-order-yield-summary">
       <span className="okx-order-yield-summary-icon"><Icon name="activity" size={16} /></span>
@@ -388,7 +390,12 @@ export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
                 )}
               </strong>
             ))}
-        </div>
+          </div>
+      </div>
+      <span className="okx-order-yield-summary-divider" aria-hidden="true" />
+      <div className="okx-order-yield-summary-average" title={t("okx.averageAprHint")}>
+        <span className="okx-order-yield-summary-label">{t("okx.averageApr")}</span>
+        <strong className="tnum">{averageApr === null ? "—" : formatYield(averageApr)}</strong>
       </div>
     </div>
   );
