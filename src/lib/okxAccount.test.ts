@@ -5,6 +5,7 @@ import {
   mergeOkxPortfolioAssets,
   parseOkxAssets,
   parseOkxDcdOrders,
+  sumOkxDcdYieldByCurrency,
   type OkxAssets,
 } from "./okxAccount";
 
@@ -74,6 +75,64 @@ test("portfolio BTC includes principal from OKX's uppercase LIVE Dual Investment
     frozen: "0.9466",
     usdValue: null,
   }]);
+});
+
+test("all-order yield totals stay exact and keep currencies separate", () => {
+  const orders = parseOkxDcdOrders({
+    data: [
+      {
+        ordId: "btc-a",
+        productId: "BTC-USDC-260817-63750-C",
+        state: "SETTLED",
+        strike: "63750",
+        notionalSz: "0.946",
+        annualizedYield: "0.118",
+        yieldSz: "0.00059912",
+        yieldCcy: "BTC",
+        settlePx: "63490.15930194",
+        settleCcy: "BTC",
+        settleTime: "1786982400000",
+      },
+      {
+        ordId: "btc-b",
+        productId: "BTC-USDC-260815-63750-C",
+        state: "SETTLED",
+        strike: "63750",
+        notionalSz: "0.9453",
+        annualizedYield: "0.2788",
+        yieldSz: "0.00069209",
+        yieldCcy: "BTC",
+        settlePx: "63013.25304047",
+        settleCcy: "BTC",
+        settleTime: "1786809600000",
+      },
+      {
+        ordId: "usdc",
+        productId: "BTC-USDC-260814-60000-P",
+        state: "REDEEMED",
+        strike: "60000",
+        notionalSz: "1000",
+        annualizedYield: "0.15",
+        yieldSz: "12.50",
+        yieldCcy: "USDC",
+        settleTime: "1786723200000",
+      },
+      {
+        ordId: "live",
+        productId: "BTC-USDC-260818-63750-C",
+        state: "LIVE",
+        strike: "63750",
+        notionalSz: "0.9466",
+        annualizedYield: "0.7354",
+        settleTime: "1787068800000",
+      },
+    ],
+  });
+
+  expect(sumOkxDcdYieldByCurrency(orders)).toEqual([
+    { currency: "BTC", amount: "0.00129121", usdValue: "81.6490665377571751" },
+    { currency: "USDC", amount: "12.5", usdValue: "12.50" },
+  ]);
 });
 
 test("an empty OKX available amount does not crash portfolio rendering", () => {
@@ -222,6 +281,7 @@ describe("OKX account response parsing", () => {
     });
 
     expect(order.principalCurrency).toBe("BTC");
+    expect(order.yieldCurrency).toBe("BTC");
     expect(order.expiresAt).toBe(1787798400000);
   });
 

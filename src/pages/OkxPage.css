@@ -406,6 +406,61 @@
   box-shadow: var(--sh-sm);
 }
 
+.okx-order-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.okx-order-yield-summary {
+  min-height: 48px;
+  padding: 7px 12px 7px 9px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--up) 20%, var(--line-2));
+  border-radius: 13px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--up-soft) 74%, var(--surface)), var(--surface));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--up) 7%, transparent);
+}
+.okx-order-yield-summary-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 9px;
+  color: var(--up);
+  background: color-mix(in srgb, var(--up-soft) 88%, var(--surface));
+}
+.okx-order-yield-summary-label {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ink-3);
+  font: 700 9px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.okx-order-yield-summary-values {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.okx-order-yield-summary-values > strong {
+  color: var(--up);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.okx-order-yield-summary-values small {
+  margin-left: 5px;
+  color: var(--ink-2);
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .okx-table-wrap { overflow-x: auto; }
 .okx-table { width: 100%; border-collapse: collapse; }
 .okx-table th {
@@ -464,33 +519,6 @@
 .okx-account-tag.earn { color: #557000; background: rgba(188, 255, 45, 0.18); }
 .okx-account-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 
-.okx-order-grid {
-  padding: 20px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.okx-order-card {
-  min-width: 0;
-  padding: 18px;
-  border: 1px solid var(--line-2);
-  border-radius: 15px;
-  background: var(--surface);
-}
-
-.okx-order-top,
-.okx-order-top > div,
-.okx-order-yield,
-.okx-order-card dl div,
-.okx-order-card footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.okx-order-top > div { justify-content: flex-start; min-width: 0; }
-.okx-order-top strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .okx-option { padding: 4px 7px; }
 .okx-option.call { color: var(--up); background: var(--up-soft); }
 .okx-option.put { color: var(--coral); background: var(--coral-soft); }
@@ -501,21 +529,92 @@
 .okx-state.initial { color: var(--warn); background: var(--warn-soft); }
 .okx-state.rejected { color: var(--down); background: var(--down-soft); }
 
-.okx-order-yield {
-  margin: 20px 0 18px;
-  padding: 14px 0 16px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+.okx-order-table-wrap { overflow-x: auto; }
+.okx-order-table {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: collapse;
+  table-layout: fixed;
 }
-.okx-order-yield span { color: var(--ink-3); font-size: 11px; }
-.okx-order-yield strong { color: var(--up); font-family: var(--font-display); font-size: 25px; }
-.okx-order-card dl { margin: 0; }
-.okx-order-card dl div { margin: 9px 0; font-size: 12px; }
-.okx-order-card dt { color: var(--ink-3); }
-.okx-order-card dd { margin: 0; color: var(--ink-2); font-weight: 600; text-align: right; }
-.okx-order-card footer { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line-2); }
-.okx-order-card footer span { color: var(--ink-4); font: 500 10px/1 var(--font-mono); }
-.okx-order-card footer b { color: var(--up); font-size: 11px; }
+.okx-order-table th {
+  padding: 12px 16px;
+  text-align: right;
+  color: var(--ink-4);
+  background: var(--surface-2);
+  font: 700 10px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.okx-order-table th:first-child {
+  width: 27%;
+  padding-left: 24px;
+  text-align: left;
+}
+.okx-order-table th:nth-child(2) { width: 10%; }
+.okx-order-table th:nth-child(3) { width: 13%; }
+.okx-order-table th:nth-child(4) { width: 12%; }
+.okx-order-table th:nth-child(5) { width: 12%; }
+.okx-order-table th:nth-child(6) { width: 14%; }
+.okx-order-table th:last-child { width: 15%; padding-right: 24px; }
+.okx-order-table td {
+  padding: 18px 16px;
+  text-align: right;
+  vertical-align: middle;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.okx-order-table tbody tr:first-child td { border-top: 0; }
+.okx-order-table tbody tr:hover td { background: color-mix(in srgb, var(--surface-2) 72%, transparent); }
+.okx-order-table td:first-child { padding-left: 24px; text-align: left; }
+.okx-order-table td:last-child { padding-right: 24px; }
+.okx-order-product {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+}
+.okx-order-product > div { min-width: 0; }
+.okx-order-product-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+.okx-order-product-title strong { color: var(--ink); font-size: 13px; white-space: nowrap; }
+.okx-order-product small {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-4);
+  font: 500 9px/1.25 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.okx-order-product-id { color: var(--ink-3) !important; }
+.okx-order-apr {
+  color: var(--up);
+  font-family: var(--font-display);
+  font-size: 17px;
+}
+.okx-order-return {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  color: var(--up);
+}
+.okx-order-return strong { color: var(--up); }
+.okx-order-return small { color: var(--ink-3); font-size: 10px; font-weight: 700; }
+.okx-order-empty { color: var(--ink-4); }
+.okx-order-settlement,
+.okx-order-state-cell {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+.okx-order-settlement span { color: var(--ink-4); font-size: 9px; }
+.okx-order-settlement strong { color: var(--ink-2); font-size: 11px; }
+.okx-order-settlement strong + span { margin-top: 5px; }
+.okx-order-state-cell time { color: var(--ink-2); font-size: 11px; white-space: nowrap; }
+.okx-order-state-cell .okx-state { margin-top: 4px; }
 
 .okx-setup-page {
   display: grid;
@@ -648,13 +747,14 @@
   .okx-setup-page { grid-template-columns: 1fr; align-content: start; }
   .okx-setup-intro,
   .okx-setup-form { justify-self: center; }
-  .okx-order-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
   .okx-page { padding: 26px 18px 56px; }
   .okx-header { align-items: flex-start; flex-direction: column; gap: 18px; }
   .okx-header-actions { width: 100%; }
+  .okx-section-head { align-items: flex-start; flex-direction: column; }
+  .okx-order-head-actions { width: 100%; justify-content: space-between; }
   .okx-connected { flex: 1; }
   .okx-balance-hero { min-height: 190px; padding: 28px 24px; align-items: stretch; flex-direction: column; }
   .okx-account-overview { width: 100%; }
