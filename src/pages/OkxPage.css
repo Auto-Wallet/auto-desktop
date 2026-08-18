@@ -549,7 +549,7 @@
 .okx-order-table-wrap { overflow-x: auto; }
 .okx-order-table {
   width: 100%;
-  min-width: 1080px;
+  min-width: 960px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -563,15 +563,15 @@
   text-transform: uppercase;
 }
 .okx-order-table th:first-child {
-  width: 27%;
+  width: 22%;
   padding-left: 24px;
   text-align: left;
 }
-.okx-order-table th:nth-child(2) { width: 10%; }
-.okx-order-table th:nth-child(3) { width: 13%; }
-.okx-order-table th:nth-child(4) { width: 12%; }
-.okx-order-table th:nth-child(5) { width: 12%; }
-.okx-order-table th:nth-child(6) { width: 14%; }
+.okx-order-table th:nth-child(2) { width: 8%; }
+.okx-order-table th:nth-child(3) { width: 12%; }
+.okx-order-table th:nth-child(4) { width: 11%; }
+.okx-order-table th:nth-child(5) { width: 14%; }
+.okx-order-table th:nth-child(6) { width: 18%; }
 .okx-order-table th:last-child { width: 15%; padding-right: 24px; }
 .okx-order-table td {
   padding: 18px 16px;

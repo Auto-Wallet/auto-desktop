@@ -65,6 +65,16 @@ function formatAmount(value: string): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 }).format(number);
 }
 
+function formatSummaryYieldAmount(value: string, currency: string): string {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value;
+  const fractionDigits = isUsdStablecoin(currency) ? 2 : 6;
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(number);
+}
+
 function formatYield(value: string): string {
   const number = Number(value);
   if (!Number.isFinite(number)) return value;
@@ -238,13 +248,11 @@ export default function OkxPage() {
             <h2>{t("okx.dualInvestment")}</h2>
             <p>{t("okx.dualInvestmentHint")}</p>
           </div>
-          <div className="okx-order-head-actions">
-            {showAllOrders && orders !== null && ordersError === null && <OrderYieldSummary orders={orders} />}
-            <div className="okx-segmented">
-              <button className={!showAllOrders ? "on" : ""} onClick={() => setShowAllOrders(false)}>{t("okx.current")}</button>
-              <button className={showAllOrders ? "on" : ""} onClick={() => setShowAllOrders(true)}>{t("okx.all")}</button>
-            </div>
-          </div>
+          <OrderHeadActions
+            allOrders={ordersError === null ? orders : null}
+            showAllOrders={showAllOrders}
+            onShowAllOrders={setShowAllOrders}
+          />
         </div>
         {ordersError !== null
           ? <DcdError message={ordersError} />
@@ -384,7 +392,7 @@ export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
             ? <strong className="okx-order-empty">—</strong>
             : totals.map((total) => (
               <strong className="tnum" key={total.currency}>
-                +{formatAmount(total.amount)} {total.currency}
+                +{formatSummaryYieldAmount(total.amount, total.currency)} {total.currency}
                 {!isUsdStablecoin(total.currency) && total.usdValue !== null && (
                   <small title={t("okx.estimatedUsd")}>(${formatMoney(total.usdValue)})</small>
                 )}
@@ -396,6 +404,27 @@ export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
       <div className="okx-order-yield-summary-average" title={t("okx.averageAprHint")}>
         <span className="okx-order-yield-summary-label">{t("okx.averageApr")}</span>
         <strong className="tnum">{averageApr === null ? "—" : formatYield(averageApr)}</strong>
+      </div>
+    </div>
+  );
+}
+
+export function OrderHeadActions({
+  allOrders,
+  showAllOrders,
+  onShowAllOrders,
+}: {
+  allOrders: OkxDcdOrder[] | null;
+  showAllOrders: boolean;
+  onShowAllOrders: (showAll: boolean) => void;
+}) {
+  const { t } = useT();
+  return (
+    <div className="okx-order-head-actions">
+      {allOrders !== null && <OrderYieldSummary orders={allOrders} />}
+      <div className="okx-segmented">
+        <button className={!showAllOrders ? "on" : ""} onClick={() => onShowAllOrders(false)}>{t("okx.current")}</button>
+        <button className={showAllOrders ? "on" : ""} onClick={() => onShowAllOrders(true)}>{t("okx.all")}</button>
       </div>
     </div>
   );
