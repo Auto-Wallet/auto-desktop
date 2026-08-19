@@ -40,6 +40,7 @@ import {
 import { txExplorerUrl } from "./lib/explorer";
 import { useMenuOverlay, type MenuOverlayPayload } from "./lib/menuOverlay";
 import { SidebarFooter } from "./SidebarFooter";
+import { setNativeMenuLanguage } from "./lib/nativeMenu";
 
 type Page = "wallet" | "okx" | "dapps" | "browser" | "settings";
 type Tab = { id: string; dapp: Dapp };
@@ -102,6 +103,12 @@ function App() {
   // dApp always connects to the account shown in the sidebar (and follows wallet
   // switches). Backend resets to the first account on every unlock; this re-syncs it.
   useActiveAccountSync();
+
+  useEffect(() => {
+    void setNativeMenuLanguage(lang).catch((error) => {
+      console.error("[AutoDesktop] failed to localize the native menu", error);
+    });
+  }, [lang]);
 
   // Gate the whole app behind the vault: load its status on boot, then show the
   // lock/setup screen until the wallet is unlocked for this session. A backend

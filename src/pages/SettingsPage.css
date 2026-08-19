@@ -79,6 +79,14 @@ button.set-row:hover {
   color: var(--ink-2);
   flex: none;
 }
+.set-row .touch-id-row-ic {
+  color: var(--brand-ink);
+  background: var(--brand-soft);
+}
+.toggle:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 
 /* networks */
 .network-tools {

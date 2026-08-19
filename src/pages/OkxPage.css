@@ -544,6 +544,7 @@
 .okx-state.pending_settle,
 .okx-state.pending_redeem,
 .okx-state.initial { color: var(--warn); background: var(--warn-soft); }
+.okx-state.redeemed { color: var(--warn); background: var(--warn-soft); }
 .okx-state.rejected { color: var(--down); background: var(--down-soft); }
 
 .okx-order-table-wrap { overflow-x: auto; }
@@ -563,16 +564,16 @@
   text-transform: uppercase;
 }
 .okx-order-table th:first-child {
-  width: 22%;
+  width: 18%;
   padding-left: 24px;
   text-align: left;
 }
-.okx-order-table th:nth-child(2) { width: 8%; }
-.okx-order-table th:nth-child(3) { width: 12%; }
+.okx-order-table th:nth-child(2) { width: 7%; }
+.okx-order-table th:nth-child(3) { width: 11%; }
 .okx-order-table th:nth-child(4) { width: 11%; }
 .okx-order-table th:nth-child(5) { width: 14%; }
-.okx-order-table th:nth-child(6) { width: 18%; }
-.okx-order-table th:last-child { width: 15%; padding-right: 24px; }
+.okx-order-table th:nth-child(6) { width: 17%; }
+.okx-order-table th:last-child { width: 22%; padding-right: 24px; }
 .okx-order-table td {
   padding: 18px 16px;
   text-align: right;
@@ -607,6 +608,7 @@
   overflow-wrap: anywhere;
 }
 .okx-order-product-id { color: var(--ink-3) !important; }
+.okx-order-price-error { color: var(--down) !important; cursor: help; }
 .okx-order-apr {
   color: var(--up);
   font-family: var(--font-display);
@@ -621,17 +623,31 @@
 .okx-order-return strong { color: var(--up); }
 .okx-order-return small { color: var(--ink-3); font-size: 10px; font-weight: 700; }
 .okx-order-empty { color: var(--ink-4); }
+.okx-order-yield-cell {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+.okx-order-yield-cell .okx-state { margin-top: 1px; }
+.okx-order-prices,
 .okx-order-settlement,
-.okx-order-state-cell {
+.okx-order-timeline {
   display: grid;
   justify-items: end;
   gap: 4px;
 }
+.okx-order-prices span,
 .okx-order-settlement span { color: var(--ink-4); font-size: 9px; }
+.okx-order-prices strong,
 .okx-order-settlement strong { color: var(--ink-2); font-size: 11px; }
+.okx-order-prices strong + span,
 .okx-order-settlement strong + span { margin-top: 5px; }
-.okx-order-state-cell time { color: var(--ink-2); font-size: 11px; white-space: nowrap; }
-.okx-order-state-cell .okx-state { margin-top: 4px; }
+.okx-order-timeline > span:not(.okx-state) {
+  color: var(--ink-4);
+  font-size: 9px;
+}
+.okx-order-timeline time { color: var(--ink-2); font-size: 10px; white-space: nowrap; }
+.okx-order-timeline time + span { margin-top: 3px; }
 
 .okx-setup-page {
   display: grid;

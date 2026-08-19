@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-set-app-menu-language"
+description = "Allow the trusted shell to rebuild the native application menu in the selected app language."
+commands.allow = ["set_app_menu_language"]

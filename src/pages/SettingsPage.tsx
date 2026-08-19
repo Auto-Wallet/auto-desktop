@@ -10,10 +10,15 @@ import {
 } from "../lib/chains";
 import { setActiveChain, useActiveChain } from "../lib/activeChain";
 import {
+  disableTouchId,
+  enableTouchId,
   exportWalletSecret,
+  getTouchIdStatus,
   lockVault,
+  type TouchIdStatus,
   type ExportedSecret,
   type WalletInfo,
+  useVault,
 } from "../lib/vault";
 import { useActiveWallet } from "../lib/accounts";
 import { setLang, useT, type Lang, type TFn } from "../lib/i18n";
@@ -59,7 +64,12 @@ export default function SettingsPage() {
   const langSegRef = useSegPill<HTMLDivElement>(lang);
   const closeBehavior = useCloseBehavior();
   const closeToggle = useToggleInit(closeBehavior === "hide");
+  const vault = useVault();
   const activeWallet = useActiveWallet();
+  const [touchIdStatus, setTouchIdStatus] = useState<TouchIdStatus | null>(null);
+  const [touchIdBusy, setTouchIdBusy] = useState(false);
+  const touchIdEnabled = touchIdStatus !== null && touchIdStatus.enabled;
+  const touchIdToggle = useToggleInit(touchIdEnabled);
   const [updated, setUpdated] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -88,6 +98,49 @@ export default function SettingsPage() {
     : updateInfo?.available
       ? t("settings.installUpdate")
       : t("settings.checkUpdates");
+
+  useEffect(() => {
+    let active = true;
+    void getTouchIdStatus()
+      .then((status) => {
+        if (active) setTouchIdStatus(status);
+      })
+      .catch((error) => {
+        if (active) toast(t("settings.touchIdFailed", { error: errText(error) }), "warn");
+      });
+    return () => {
+      active = false;
+    };
+  }, [t]);
+
+  async function handleTouchIdToggle() {
+    if (touchIdStatus === null || touchIdBusy) return;
+    if (!touchIdStatus.enabled) {
+      const confirmed = await askConfirm({
+        title: t("settings.touchIdConfirmTitle"),
+        message: t("settings.touchIdConfirmMessage"),
+        confirmLabel: t("settings.touchIdConfirm"),
+      });
+      if (!confirmed) return;
+    }
+
+    setTouchIdBusy(true);
+    try {
+      if (touchIdStatus.enabled) {
+        await disableTouchId();
+        setTouchIdStatus({ available: touchIdStatus.available, enabled: false });
+        toast(t("settings.touchIdDisabled"));
+      } else {
+        await enableTouchId(t("settings.touchIdEnableReason"));
+        setTouchIdStatus({ available: touchIdStatus.available, enabled: true });
+        toast(t("settings.touchIdEnabled"));
+      }
+    } catch (error) {
+      toast(t("settings.touchIdFailed", { error: errText(error) }), "warn");
+    } finally {
+      setTouchIdBusy(false);
+    }
+  }
 
   async function handleCheckUpdates() {
     if (updateInfo?.available && !updateInfo.manual) {
@@ -442,6 +495,31 @@ export default function SettingsPage() {
                   </button>
                 </>
               )}
+              {vault.hasPassword &&
+                touchIdStatus !== null &&
+                touchIdStatus.available && (
+                  <div className="set-row">
+                    <span className="row-ic touch-id-row-ic">
+                      <Icon name="fingerprint" size={18} />
+                    </span>
+                    <div className="gr">
+                      <div className="rl">{t("settings.touchId")}</div>
+                      <div className="rs">{t("settings.touchIdHint")}</div>
+                    </div>
+                    <button
+                      className={`toggle t-toggle${touchIdToggle.initCls}${
+                        touchIdStatus.enabled ? " on" : ""
+                      }`}
+                      data-on={touchIdToggle.dataOn}
+                      aria-label={t("settings.touchId")}
+                      aria-pressed={touchIdStatus.enabled}
+                      disabled={touchIdBusy}
+                      onClick={() => void handleTouchIdToggle()}
+                    >
+                      <i className="t-toggle-thumb" />
+                    </button>
+                  </div>
+                )}
             </div>
           </div>
 

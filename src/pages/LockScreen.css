@@ -215,6 +215,41 @@
   background: var(--line);
   margin: 2px 0;
 }
+.lock-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-4);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.lock-or::before,
+.lock-or::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+}
+.btn-touch-id {
+  border: 1px solid color-mix(in srgb, var(--brand) 28%, var(--line-2));
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+  box-shadow: none;
+}
+.btn-touch-id:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--line-2));
+  background: var(--brand-soft-2);
+}
+.touch-id-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: var(--sh-sm);
+}
 
 /* password strength */
 .pw-strength {

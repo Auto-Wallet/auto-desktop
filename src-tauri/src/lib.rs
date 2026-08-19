@@ -13,7 +13,6 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
-use tauri::menu::{Menu, SubmenuBuilder};
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl};
@@ -37,17 +36,19 @@ mod eth_tx;
 mod eip712;
 // Ledger hardware wallet over USB-HID (framing + Ethereum APDUs + hidapi I/O).
 mod ledger;
+mod native_menu;
 mod okx_account;
+mod touch_id;
 
+use native_menu::{DEBUG_DAPP_CONSOLE_MENU_ID, DEBUG_SHELL_CONSOLE_MENU_ID};
 use okx_account::{
-    okx_connection_status, okx_delete_credentials, okx_get_assets, okx_get_dcd_orders,
-    okx_save_credentials,
+    okx_connection_status, okx_delete_credentials, okx_get_assets, okx_get_dcd_index_prices,
+    okx_get_dcd_orders, okx_save_credentials,
 };
 
 const DEFI_PROVIDER_TIMEOUT: Duration = Duration::from_secs(12);
-const DEBUG_SHELL_CONSOLE_MENU_ID: &str = "debug-shell-console";
-const DEBUG_DAPP_CONSOLE_MENU_ID: &str = "debug-dapp-console";
 const DAPP_LAYOUT_INVALIDATED_EVENT: &str = "dapp-layout-invalidated";
+const TOUCH_ID_MARKER_FILE: &str = "touch-id-enabled";
 
 #[derive(Serialize)]
 struct Wallet {
@@ -1054,18 +1055,22 @@ fn handle_debug_menu_event<R: Runtime + 'static>(app: &AppHandle<R>, menu_id: &s
     }
 }
 
-fn install_debug_menu<R: Runtime + 'static>(app: &tauri::App<R>) -> tauri::Result<()> {
-    let menu = Menu::default(app.handle())?;
-    let debug_menu = SubmenuBuilder::new(app, "Debug")
-        .text(DEBUG_SHELL_CONSOLE_MENU_ID, "Toggle Main Window Console")
-        .text(DEBUG_DAPP_CONSOLE_MENU_ID, "Toggle dApp Page Console")
-        .build()?;
-    menu.append(&debug_menu)?;
+fn install_app_menu<R: Runtime + 'static>(app: &tauri::App<R>) -> tauri::Result<()> {
+    let menu = native_menu::build(app.handle(), "en")
+        .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
         handle_debug_menu_event(app, event.id().as_ref());
     });
     Ok(())
+}
+
+#[tauri::command]
+fn set_app_menu_language<R: Runtime>(app: AppHandle<R>, language: String) -> Result<(), String> {
+    let menu = native_menu::build(&app, &language)?;
+    app.set_menu(menu)
+        .map(|_| ())
+        .map_err(|error| format!("installing app menu: {error}"))
 }
 
 fn ensure_signing_webview_is_active(label: &str) -> Result<(), String> {
@@ -7139,6 +7144,13 @@ fn boot_load_ledger_only<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 /// address.
 #[tauri::command]
 fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<String, String> {
+    unlock_vault_with_password(&app, Zeroizing::new(password))
+}
+
+fn unlock_vault_with_password<R: Runtime>(
+    app: &AppHandle<R>,
+    password: Zeroizing<String>,
+) -> Result<String, String> {
     let disk = read_all_keystores(&app)?;
     if disk.is_empty() {
         return Err("no wallet to unlock".to_string());
@@ -7168,7 +7180,7 @@ fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<Strin
         .next()
         .map(|a| a.address.clone())
         .unwrap_or_default();
-    let password = used_password.then(|| Zeroizing::new(password));
+    let password = used_password.then_some(password);
     *store_state().lock().unwrap() = Some(WalletStore {
         password,
         wallets,
@@ -7178,6 +7190,76 @@ fn unlock_vault<R: Runtime>(app: AppHandle<R>, password: String) -> Result<Strin
         return Err("unlock failed".to_string());
     }
     Ok(active)
+}
+
+fn touch_id_marker_file<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join(TOUCH_ID_MARKER_FILE))
+        .map_err(|error| format!("resolving Touch ID settings path: {error}"))
+}
+
+#[tauri::command]
+fn touch_id_status<R: Runtime>(app: AppHandle<R>) -> Result<touch_id::TouchIdStatus, String> {
+    let enabled = touch_id::read_enabled_marker(&touch_id_marker_file(&app)?)?;
+    Ok(touch_id::TouchIdStatus {
+        available: touch_id::available(),
+        enabled,
+    })
+}
+
+#[tauri::command]
+async fn enable_touch_id<R: Runtime>(app: AppHandle<R>, reason: String) -> Result<(), String> {
+    let password = {
+        let guard = store_state().lock().unwrap();
+        let store = guard
+            .as_ref()
+            .ok_or("unlock the wallet before enabling Touch ID")?;
+        let password = store
+            .password
+            .as_ref()
+            .ok_or("this wallet does not use an app password")?;
+        Zeroizing::new(password.to_string())
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        touch_id::authenticate(&reason)?;
+        touch_id::save_password(&password)
+    })
+    .await
+    .map_err(|error| format!("running Touch ID setup: {error}"))??;
+    let marker = touch_id_marker_file(&app)?;
+    if let Err(error) = touch_id::write_enabled_marker(&marker) {
+        let rollback = touch_id::delete_password();
+        return match rollback {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(format!("{error}; rollback failed: {rollback_error}")),
+        };
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn disable_touch_id<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    touch_id::delete_password()?;
+    touch_id::remove_enabled_marker(&touch_id_marker_file(&app)?)
+}
+
+#[tauri::command]
+async fn unlock_vault_with_touch_id<R: Runtime>(
+    app: AppHandle<R>,
+    reason: String,
+) -> Result<String, String> {
+    if !touch_id::read_enabled_marker(&touch_id_marker_file(&app)?)? {
+        return Err("Touch ID unlock is not enabled".to_string());
+    }
+    let password = tauri::async_runtime::spawn_blocking(move || {
+        touch_id::authenticate(&reason)?;
+        touch_id::load_password()
+    })
+    .await
+    .map_err(|error| format!("running Touch ID unlock: {error}"))??;
+    unlock_vault_with_password(&app, password)
 }
 
 /// Lock the wallet: drop all decrypted key material (and the app password) from
@@ -7195,6 +7277,7 @@ fn lock_vault() {
 /// `delete_wallet`.
 #[tauri::command]
 fn reset_vault<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    disable_touch_id(app.clone())?;
     *store_state().lock().unwrap() = None;
     let dir = wallets_dir(&app)?;
     match std::fs::remove_dir_all(&dir) {
@@ -7381,6 +7464,19 @@ fn rename_wallet<R: Runtime>(app: AppHandle<R>, id: String, label: String) -> Re
 /// remain). IRREVERSIBLE for a software wallet — the UI must confirm first.
 #[tauri::command]
 fn delete_wallet<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
+    let disk = read_all_keystores(&app)?;
+    let deleting_last_software_wallet = disk
+        .iter()
+        .find(|wallet| wallet.id == id)
+        .is_some_and(|wallet| wallet.kind == "hd" || wallet.kind == "privkey")
+        && disk
+            .iter()
+            .filter(|wallet| wallet.kind == "hd" || wallet.kind == "privkey")
+            .count()
+            == 1;
+    if deleting_last_software_wallet {
+        disable_touch_id(app.clone())?;
+    }
     let path = wallet_file(&app, &id)?;
     match std::fs::remove_file(&path) {
         Ok(()) => {}
@@ -7652,6 +7748,7 @@ pub fn run() {
             okx_save_credentials,
             okx_delete_credentials,
             okx_get_assets,
+            okx_get_dcd_index_prices,
             okx_get_dcd_orders,
             get_chains,
             add_chain,
@@ -7663,6 +7760,10 @@ pub fn run() {
             import_private_key,
             export_wallet_secret,
             unlock_vault,
+            unlock_vault_with_touch_id,
+            touch_id_status,
+            enable_touch_id,
+            disable_touch_id,
             lock_vault,
             reset_vault,
             ledger_addresses,
@@ -7671,7 +7772,8 @@ pub fn run() {
             expose_dapp_account,
             add_account,
             rename_wallet,
-            delete_wallet
+            delete_wallet,
+            set_app_menu_language
         ])
         .setup(|app| {
             // Load any persisted custom networks / RPC overrides before the UI asks.
@@ -7682,7 +7784,7 @@ pub fn run() {
             if let Err(e) = boot_load_ledger_only(app.handle()) {
                 println!("[AutoDesktop] warn: could not restore Ledger wallets: {e}");
             }
-            install_debug_menu(app)?;
+            install_app_menu(app)?;
             let (startup_size, should_maximize) = startup_window_size(app);
             // Container window (no webview of its own). Built hidden so the
             // decoration-aware fitting below never flashes a wrongly-sized frame.
@@ -9404,6 +9506,10 @@ mod e2e {
                 import_private_key,
                 export_wallet_secret,
                 unlock_vault,
+                unlock_vault_with_touch_id,
+                touch_id_status,
+                enable_touch_id,
+                disable_touch_id,
                 lock_vault,
                 reset_vault,
                 ledger_addresses,
@@ -9412,7 +9518,8 @@ mod e2e {
                 expose_dapp_account,
                 add_account,
                 rename_wallet,
-                delete_wallet
+                delete_wallet,
+                set_app_menu_language
             ])
             .build(build_context())
             .expect("failed to build mock app");
@@ -10439,6 +10546,10 @@ mod e2e {
             ),
             ("okx_delete_credentials", json!({})),
             ("okx_get_assets", json!({})),
+            (
+                "okx_get_dcd_index_prices",
+                json!({ "instrumentIds": ["BTC-USDC"] }),
+            ),
             ("okx_get_dcd_orders", json!({})),
         ] {
             let err = invoke(&dapp, command, args).unwrap_err();

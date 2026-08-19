@@ -256,6 +256,13 @@ const PATHS: Record<string, JSX.Element> = {
       <path d="M4 12h16" />
     </>
   ),
+  fingerprint: (
+    <>
+      <path d="M6.8 9.2A5.7 5.7 0 0 1 12 6a5.8 5.8 0 0 1 5.8 5.8c0 3.1-.7 6-2.1 8.2" />
+      <path d="M4.2 13.5c0-1.7.3-3.2 1-4.5M9.2 20c1-2.1 1.5-4.8 1.5-7.7a1.3 1.3 0 0 1 2.6 0c0 3.4-.6 6.7-1.8 9" />
+      <path d="M7 13c0 3-.7 5.8-2 7.5M15.8 12.1c0 1.9-.2 3.8-.7 5.6M9 3.3A9 9 0 0 1 21 12" />
+    </>
+  ),
 };
 
 export type IconName = keyof typeof PATHS;

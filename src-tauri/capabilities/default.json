@@ -47,6 +47,7 @@
     "allow-okx-save-credentials",
     "allow-okx-delete-credentials",
     "allow-okx-get-assets",
+    "allow-okx-get-dcd-index-prices",
     "allow-okx-get-dcd-orders",
     "allow-get-chains",
     "allow-add-chain",
@@ -58,6 +59,10 @@
     "allow-import-private-key",
     "allow-export-wallet-secret",
     "allow-unlock-vault",
+    "allow-unlock-vault-with-touch-id",
+    "allow-touch-id-status",
+    "allow-enable-touch-id",
+    "allow-disable-touch-id",
     "allow-lock-vault",
     "allow-reset-vault",
     "allow-ledger-addresses",
@@ -66,6 +71,7 @@
     "allow-expose-dapp-account",
     "allow-add-account",
     "allow-rename-wallet",
-    "allow-delete-wallet"
+    "allow-delete-wallet",
+    "allow-set-app-menu-language"
   ]
 }

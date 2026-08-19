@@ -1,14 +1,43 @@
 import { describe, expect, test } from "bun:test";
 import {
-  calculateOkxDcdWeightedApr,
+  calculateOkxDcdRealizedApr,
   createSingleFlight,
+  getOkxDcdIndexInstrumentId,
   isCurrentDcdOrder,
   mergeOkxPortfolioAssets,
   parseOkxAssets,
   parseOkxDcdOrders,
+  parseOkxIndexPrices,
   sumOkxDcdYieldByCurrency,
   type OkxAssets,
 } from "./okxAccount";
+
+test("parses the OKX index price used by Dual Investment", () => {
+  expect(parseOkxIndexPrices({
+    code: "0",
+    msg: "",
+    data: [{
+      instId: "BTC-USDC",
+      idxPx: "64123.4567",
+      high24h: "65000",
+      low24h: "62000",
+      open24h: "63000",
+      sodUtc0: "63200",
+      sodUtc8: "63100",
+      ts: "1787100000123",
+    }],
+  })).toEqual([{
+    instrumentId: "BTC-USDC",
+    price: "64123.4567",
+    updatedAt: 1787100000123,
+  }]);
+});
+
+test("maps Dual Investment products to the index instruments OKX settles against", () => {
+  expect(getOkxDcdIndexInstrumentId("BTC-USDC-260818-63750-C")).toBe("BTC-USDC");
+  expect(getOkxDcdIndexInstrumentId("BETH-USDT-260818-5000-C")).toBe("ETH-USDT");
+  expect(getOkxDcdIndexInstrumentId("OKSOL-USDG-260818-250-C")).toBe("SOL-USD");
+});
 
 test("shares one in-flight OKX refresh across duplicate callers", async () => {
   let calls = 0;
@@ -54,7 +83,10 @@ test("portfolio BTC includes principal from OKX's uppercase LIVE Dual Investment
         strike: "120000",
         notionalSz: "0.9466",
         annualizedYield: "0.1748",
-        settleTime: "1787798400000",
+        expTime: "1787798400000",
+        settleTime: "",
+        cTime: "1786939200000",
+        uTime: "1786970060000",
       },
       {
         ordId: "settled",
@@ -63,7 +95,10 @@ test("portfolio BTC includes principal from OKX's uppercase LIVE Dual Investment
         strike: "120000",
         notionalSz: "8",
         annualizedYield: "0.1",
+        expTime: "1786760000000",
         settleTime: "1786760000000",
+        cTime: "1786500800000",
+        uTime: "1786760000000",
       },
     ],
   });
@@ -92,7 +127,10 @@ test("all-order yield totals stay exact and keep currencies separate", () => {
         yieldCcy: "BTC",
         settlePx: "63490.15930194",
         settleCcy: "BTC",
+        expTime: "1786982400000",
         settleTime: "1786982400000",
+        cTime: "1786896000000",
+        uTime: "1786982400000",
       },
       {
         ordId: "btc-b",
@@ -105,7 +143,10 @@ test("all-order yield totals stay exact and keep currencies separate", () => {
         yieldCcy: "BTC",
         settlePx: "63013.25304047",
         settleCcy: "BTC",
+        expTime: "1786809600000",
         settleTime: "1786809600000",
+        cTime: "1786723200000",
+        uTime: "1786809600000",
       },
       {
         ordId: "usdc",
@@ -116,7 +157,10 @@ test("all-order yield totals stay exact and keep currencies separate", () => {
         annualizedYield: "0.15",
         yieldSz: "12.50",
         yieldCcy: "USDC",
+        expTime: "1787068800000",
         settleTime: "1786723200000",
+        cTime: "1786636800000",
+        uTime: "1786723200000",
       },
       {
         ordId: "live",
@@ -125,7 +169,10 @@ test("all-order yield totals stay exact and keep currencies separate", () => {
         strike: "63750",
         notionalSz: "0.9466",
         annualizedYield: "0.7354",
-        settleTime: "1787068800000",
+        expTime: "1787068800000",
+        settleTime: "",
+        cTime: "1786982400000",
+        uTime: "1787025600000",
       },
     ],
   });
@@ -136,32 +183,79 @@ test("all-order yield totals stay exact and keep currencies separate", () => {
   ]);
 });
 
-test("average APR is weighted by each order's USD principal value", () => {
-  const orders = parseOkxDcdOrders({
-    data: [
-      {
-        ordId: "sell-high",
-        productId: "BTC-USDC-260818-60000-C",
-        state: "SETTLED",
-        strike: "60000",
-        notionalSz: "1",
-        annualizedYield: "0.2",
-        settleTime: "1787068800000",
-      },
-      {
-        ordId: "buy-low",
-        productId: "BTC-USDC-260818-60000-P",
-        state: "SETTLED",
-        strike: "60000",
-        notionalSz: "40000",
-        annualizedYield: "0.05",
-        settleTime: "1787068800000",
-      },
-    ],
+test("realized APR uses actual yield and held time instead of the quoted APR", () => {
+  const [order] = parseOkxDcdOrders({
+    data: [{
+      ordId: "settled-realized",
+      productId: "BTC-USDC-260818-60000-P",
+      state: "SETTLED",
+      strike: "60000",
+      notionalSz: "1000",
+      notionalCcy: "USDC",
+      annualizedYield: "0.99",
+      yieldSz: "10",
+      yieldCcy: "USDC",
+      expTime: "1787068800000",
+      settleTime: "1787068800000",
+      cTime: "1783915200000",
+      uTime: "1787068800000",
+    }],
   });
 
-  expect(calculateOkxDcdWeightedApr(orders)).toBe("0.14");
-  expect(calculateOkxDcdWeightedApr([])).toBeNull();
+  expect(calculateOkxDcdRealizedApr([order])).toBe("0.1");
+  expect(calculateOkxDcdRealizedApr([{ ...order, state: "live", annualizedYield: "9.99" }, order])).toBe("0.1");
+  expect(calculateOkxDcdRealizedApr([])).toBeNull();
+});
+
+test("realized APR includes the net result of an early redemption", () => {
+  const [order] = parseOkxDcdOrders({
+    data: [{
+      ordId: "redeemed-with-penalty",
+      productId: "BTC-USDC-260818-60000-P",
+      state: "REDEEMED",
+      strike: "60000",
+      notionalSz: "1000",
+      notionalCcy: "USDC",
+      annualizedYield: "0.5",
+      yieldSz: "5",
+      yieldCcy: "USDC",
+      settleSz: "990",
+      settleCcy: "USDC",
+      expTime: "1787068800000",
+      settleTime: "1784779200000",
+      cTime: "1783915200000",
+      uTime: "1784779200000",
+    }],
+  });
+
+  expect(calculateOkxDcdRealizedApr([order])).toBe("-0.365");
+  expect(sumOkxDcdYieldByCurrency([order])).toEqual([
+    { currency: "USDC", amount: "-10", usdValue: "-10" },
+  ]);
+});
+
+test("redeemed APR uses the actual redemption time instead of the scheduled expiry", () => {
+  const [order] = parseOkxDcdOrders({
+    data: [{
+      ordId: "redeemed-before-expiry",
+      productId: "BTC-USDC-260925-60000-P",
+      state: "REDEEMED",
+      strike: "60000",
+      notionalSz: "10000",
+      notionalCcy: "USDC",
+      annualizedYield: "0.5",
+      yieldSz: "10",
+      yieldCcy: "USDC",
+      settleSz: "10010",
+      settleCcy: "USDC",
+      expTime: "1790352000000",
+      settleTime: "1790352000000",
+      cTime: "1786636800000",
+      uTime: "1786723200000",
+    }],
+  });
+
+  expect(calculateOkxDcdRealizedApr([order])).toBe("0.365");
 });
 
 test("an empty OKX available amount does not crash portfolio rendering", () => {
@@ -278,6 +372,9 @@ describe("OKX account response parsing", () => {
         yieldSz: "0.000335",
         yieldCcy: "BTC",
         expTime: "1787798400000",
+        settleTime: "",
+        cTime: "1786939200000",
+        uTime: "1786970060000",
         settleSz: "",
         settleCcy: "",
         settlePx: "",
@@ -305,7 +402,10 @@ describe("OKX account response parsing", () => {
         notionalSz: "0.9466",
         annualizedYield: "0.1748",
         yieldSz: "0.00059912",
-        settleTime: "1787798400000",
+        expTime: "1787798400000",
+        settleTime: "",
+        cTime: "1786939200000",
+        uTime: "1786970060000",
       }],
     });
 
@@ -326,7 +426,10 @@ describe("OKX account response parsing", () => {
         notionalSz: "0.9466",
         notionalCcy: "BTC",
         annualizedYield: "0.1748",
-        settleTime: "1787798400000",
+        expTime: "1787798400000",
+        settleTime: "",
+        cTime: "1786939200000",
+        uTime: "1786970060000",
       }],
     });
 

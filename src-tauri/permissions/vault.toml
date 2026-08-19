@@ -48,6 +48,26 @@ description = "Allow the shell to unlock the on-disk vault with the user's passw
 commands.allow = ["unlock_vault"]
 
 [[permission]]
+identifier = "allow-unlock-vault-with-touch-id"
+description = "Allow the shell to ask macOS Touch ID to release the protected vault password and unlock the wallet."
+commands.allow = ["unlock_vault_with_touch_id"]
+
+[[permission]]
+identifier = "allow-touch-id-status"
+description = "Allow the shell to read whether Touch ID unlock is available and enabled."
+commands.allow = ["touch_id_status"]
+
+[[permission]]
+identifier = "allow-enable-touch-id"
+description = "Allow the shell to protect the unlocked vault password with macOS Touch ID."
+commands.allow = ["enable_touch_id"]
+
+[[permission]]
+identifier = "allow-disable-touch-id"
+description = "Allow the shell to remove the Touch ID-protected vault password."
+commands.allow = ["disable_touch_id"]
+
+[[permission]]
 identifier = "allow-lock-vault"
 description = "Allow the shell to lock the wallet (drop decrypted keys from memory)."
 commands.allow = ["lock_vault"]

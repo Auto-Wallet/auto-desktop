@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./LockScreen.css";
 import logoMark from "../assets/auto-desktop-mark.png";
 import { useT } from "../lib/i18n";
@@ -9,8 +9,11 @@ import {
   createVault,
   importPrivateKey,
   importVault,
+  getTouchIdStatus,
   resetVault,
   unlockVault,
+  unlockVaultWithTouchId,
+  type TouchIdStatus,
   useVault,
 } from "../lib/vault";
 
@@ -432,21 +435,48 @@ function UnlockForm({ onDone, onForgot }: { onDone: () => void; onForgot: () => 
   const { t } = useT();
   const [pw, setPw] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"password" | "touchId" | null>(null);
+  const [touchIdStatus, setTouchIdStatus] = useState<TouchIdStatus | null>(null);
   // Shake on every rejection, not just the first — the message is identical
   // each time, so React state alone would never re-trigger it.
   const { ref: pwShakeRef, shake } = useShake<HTMLDivElement>();
 
+  useEffect(() => {
+    let active = true;
+    void getTouchIdStatus()
+      .then((status) => {
+        if (active) setTouchIdStatus(status);
+      })
+      .catch((reason) => {
+        if (active) setError(errText(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   async function submit() {
-    setBusy(true);
+    setBusy("password");
     setError(null);
     try {
       await unlockVault(pw);
       onDone();
     } catch (e) {
       setError(errText(e));
-      setBusy(false);
+      setBusy(null);
       shake();
+    }
+  }
+
+  async function submitTouchId() {
+    setBusy("touchId");
+    setError(null);
+    try {
+      await unlockVaultWithTouchId(t("lock.touchIdReason"));
+      onDone();
+    } catch (reason) {
+      setError(errText(reason));
+      setBusy(null);
     }
   }
 
@@ -461,9 +491,22 @@ function UnlockForm({ onDone, onForgot }: { onDone: () => void; onForgot: () => 
           <Icon name="alert" size={16} /> {error}
         </div>
       )}
-      <button className="btn btn-aurora btn-lg btn-block" disabled={busy} onClick={submit}>
-        <Icon name="unlock" size={18} /> {busy ? "…" : t("lock.unlock")}
+      <button className="btn btn-aurora btn-lg btn-block" disabled={busy !== null} onClick={submit}>
+        <Icon name="unlock" size={18} /> {busy === "password" ? "…" : t("lock.unlock")}
       </button>
+      {touchIdStatus !== null && touchIdStatus.available && touchIdStatus.enabled && (
+        <>
+          <div className="lock-or"><span>{t("lock.or")}</span></div>
+          <button
+            className="btn btn-touch-id btn-lg btn-block"
+            disabled={busy !== null}
+            onClick={submitTouchId}
+          >
+            <span className="touch-id-icon"><Icon name="fingerprint" size={21} /></span>
+            {busy === "touchId" ? t("lock.touchIdUnlocking") : t("lock.unlockWithTouchId")}
+          </button>
+        </>
+      )}
       <button className="lock-link" onClick={onForgot}>
         {t("lock.forgot")}
       </button>

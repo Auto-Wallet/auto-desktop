@@ -24,3 +24,8 @@ commands.allow = ["okx_get_assets"]
 identifier = "allow-okx-get-dcd-orders"
 description = "Allow the trusted shell to read OKX Dual Investment orders."
 commands.allow = ["okx_get_dcd_orders"]
+
+[[permission]]
+identifier = "allow-okx-get-dcd-index-prices"
+description = "Allow the trusted shell to read public OKX index prices used by Dual Investment."
+commands.allow = ["okx_get_dcd_index_prices"]

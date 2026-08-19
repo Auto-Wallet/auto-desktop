@@ -4,13 +4,16 @@ import { askConfirm } from "../lib/confirm";
 import { Icon } from "../lib/icons";
 import { useT } from "../lib/i18n";
 import {
-  calculateOkxDcdWeightedApr,
+  calculateOkxDcdRealizedApr,
   deleteOkxCredentials,
   createSingleFlight,
   estimateOkxDcdOrderYieldUsd,
   getOkxAssets,
   getOkxConnectionStatus,
   getOkxDcdOrders,
+  getOkxDcdIndexInstrumentId,
+  getOkxDcdIndexPrices,
+  getOkxDcdRealizedYield,
   isCurrentDcdOrder,
   isUsdStablecoin,
   mergeOkxPortfolioAssets,
@@ -20,6 +23,7 @@ import {
   type OkxConnectionStatus,
   type OkxCredentialsInput,
   type OkxDcdOrder,
+  type OkxIndexPrice,
   type OkxPortfolioAsset,
   type OkxRegion,
 } from "../lib/okxAccount";
@@ -59,13 +63,7 @@ function formatMoney(value: string): string {
   }).format(number);
 }
 
-function formatAmount(value: string): string {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return value;
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 }).format(number);
-}
-
-function formatSummaryYieldAmount(value: string, currency: string): string {
+function formatCurrencyAmount(value: string, currency: string): string {
   const number = Number(value);
   if (!Number.isFinite(number)) return value;
   const fractionDigits = isUsdStablecoin(currency) ? 2 : 6;
@@ -73,6 +71,16 @@ function formatSummaryYieldAmount(value: string, currency: string): string {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   }).format(number);
+}
+
+function signedAmount(value: string, formatted: string): string {
+  return Number(value) > 0 ? `+${formatted}` : formatted;
+}
+
+function formatEstimatedUsd(value: string): string {
+  const number = Number(value);
+  if (Number.isFinite(number) && number < 0) return `(-$${formatMoney((-number).toString())})`;
+  return `($${formatMoney(value)})`;
 }
 
 function formatYield(value: string): string {
@@ -99,6 +107,8 @@ export default function OkxPage() {
   const [assetsError, setAssetsError] = useState<string | null>(null);
   const [orders, setOrders] = useState<OkxDcdOrder[] | null>(null);
   const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [indexPrices, setIndexPrices] = useState<OkxIndexPrice[] | null>(null);
+  const [priceError, setPriceError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showAllOrders, setShowAllOrders] = useState(true);
   const [showConnection, setShowConnection] = useState(false);
@@ -107,12 +117,28 @@ export default function OkxPage() {
     setRefreshing(true);
     setAssetsError(null);
     setOrdersError(null);
+    setPriceError(null);
+    setIndexPrices(null);
+    const ordersRequest = getOkxDcdOrders().then((nextOrders) => {
+      setOrders(nextOrders);
+      return nextOrders;
+    });
+    const pricesRequest = ordersRequest.then((nextOrders) => {
+      const instrumentIds = Array.from(new Set(nextOrders.map((order) => (
+        getOkxDcdIndexInstrumentId(order.productId)
+      ))));
+      return getOkxDcdIndexPrices(instrumentIds).then(setIndexPrices);
+    });
     return Promise.allSettled([
       getOkxAssets().then(setAssets),
-      getOkxDcdOrders().then(setOrders),
+      ordersRequest,
+      pricesRequest,
     ]).then((results) => {
       if (results[0].status === "rejected") setAssetsError(errorMessage(results[0].reason));
       if (results[1].status === "rejected") setOrdersError(errorMessage(results[1].reason));
+      if (results[1].status === "fulfilled" && results[2].status === "rejected") {
+        setPriceError(errorMessage(results[2].reason));
+      }
       setRefreshing(false);
     });
   }), []);
@@ -169,6 +195,7 @@ export default function OkxPage() {
       void deleteOkxCredentials().then(() => {
         setAssets(null);
         setOrders(null);
+        setIndexPrices(null);
         setShowConnection(false);
         setStatus({ configured: false, apiKeyHint: null, region: null });
       });
@@ -256,7 +283,7 @@ export default function OkxPage() {
         </div>
         {ordersError !== null
           ? <DcdError message={ordersError} />
-          : <OrderList orders={visibleOrders} />}
+          : <OrderList orders={visibleOrders} indexPrices={indexPrices} priceError={priceError} />}
       </section>
     </div>
   );
@@ -339,7 +366,7 @@ function OkxSetup({ onConnected }: { onConnected: (status: OkxConnectionStatus) 
   );
 }
 
-function AssetTable({ assets }: { assets: OkxPortfolioAsset[] | null }) {
+export function AssetTable({ assets }: { assets: OkxPortfolioAsset[] | null }) {
   const { t } = useT();
   if (assets === null) return <TableSkeleton rows={3} />;
   if (assets.length === 0) return <EmptyState title={t("okx.noAssets")} />;
@@ -353,9 +380,9 @@ function AssetTable({ assets }: { assets: OkxPortfolioAsset[] | null }) {
             <td><div className="okx-account-tags">{asset.accounts.map((account) => (
               <span key={account} className={`okx-account-tag ${account}`}>{t(`okx.account.${account}`)}</span>
             ))}</div></td>
-            <td className="tnum">{formatAmount(asset.available)}</td>
-            <td className="tnum">{formatAmount(asset.frozen)}</td>
-            <td className="tnum"><strong>{formatAmount(asset.balance)}</strong>{asset.usdValue !== null && <small>${formatMoney(asset.usdValue)}</small>}</td>
+            <td className="tnum">{formatCurrencyAmount(asset.available, asset.currency)}</td>
+            <td className="tnum">{formatCurrencyAmount(asset.frozen, asset.currency)}</td>
+            <td className="tnum"><strong>{formatCurrencyAmount(asset.balance, asset.currency)}</strong>{asset.usdValue !== null && <small>${formatMoney(asset.usdValue)}</small>}</td>
           </tr>
         ))}</tbody>
       </table>
@@ -381,7 +408,7 @@ function Coin({ currency }: { currency: string }) {
 export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
   const { t } = useT();
   const totals = sumOkxDcdYieldByCurrency(orders);
-  const averageApr = calculateOkxDcdWeightedApr(orders);
+  const averageApr = calculateOkxDcdRealizedApr(orders);
   return (
     <div className="okx-order-yield-summary">
       <span className="okx-order-yield-summary-icon"><Icon name="activity" size={16} /></span>
@@ -392,9 +419,9 @@ export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
             ? <strong className="okx-order-empty">—</strong>
             : totals.map((total) => (
               <strong className="tnum" key={total.currency}>
-                +{formatSummaryYieldAmount(total.amount, total.currency)} {total.currency}
+                {signedAmount(total.amount, formatCurrencyAmount(total.amount, total.currency))} {total.currency}
                 {!isUsdStablecoin(total.currency) && total.usdValue !== null && (
-                  <small title={t("okx.estimatedUsd")}>(${formatMoney(total.usdValue)})</small>
+                  <small title={t("okx.estimatedUsd")}>{formatEstimatedUsd(total.usdValue)}</small>
                 )}
               </strong>
             ))}
@@ -430,7 +457,15 @@ export function OrderHeadActions({
   );
 }
 
-export function OrderList({ orders }: { orders: OkxDcdOrder[] | null }) {
+export function OrderList({
+  orders,
+  indexPrices,
+  priceError,
+}: {
+  orders: OkxDcdOrder[] | null;
+  indexPrices: OkxIndexPrice[] | null;
+  priceError: string | null;
+}) {
   const { t } = useT();
   if (orders === null) return <TableSkeleton rows={2} />;
   if (orders.length === 0) return <EmptyState title={t("okx.noOrders")} hint={t("okx.noOrdersHint")} />;
@@ -445,7 +480,7 @@ export function OrderList({ orders }: { orders: OkxDcdOrder[] | null }) {
             <th>{t("okx.strike")}</th>
             <th>{t("okx.yield")}</th>
             <th>{t("okx.settlement")}</th>
-            <th>{t("okx.expiryAndStatus")}</th>
+            <th>{t("okx.timeline")}</th>
           </tr>
         </thead>
         <tbody>{orders.map((order) => {
@@ -453,7 +488,13 @@ export function OrderList({ orders }: { orders: OkxDcdOrder[] | null }) {
           if (baseCurrency === undefined || quoteCurrency === undefined) {
             throw new Error(`OKX Dual Investment product ${order.productId} has no currency pair`);
           }
+          const realizedYield = getOkxDcdRealizedYield(order);
           const yieldUsdValue = estimateOkxDcdOrderYieldUsd(order);
+          const indexInstrumentId = getOkxDcdIndexInstrumentId(order.productId);
+          const indexPrice = indexPrices?.find((price) => price.instrumentId === indexInstrumentId);
+          const eventTime = order.state === "redeemed" || order.state === "rejected"
+            ? order.updatedAt
+            : order.expiresAt;
           return (
             <tr key={order.orderId}>
               <td>
@@ -470,32 +511,50 @@ export function OrderList({ orders }: { orders: OkxDcdOrder[] | null }) {
                 </div>
               </td>
               <td><strong className="okx-order-apr tnum">{formatYield(order.annualizedYield)}</strong></td>
-              <td><strong className="tnum">{formatAmount(order.principal)} {order.principalCurrency}</strong></td>
-              <td><strong className="tnum">{formatAmount(order.strike)} {quoteCurrency}</strong></td>
-              <td>{order.yieldAmount === null || order.yieldCurrency === null
-                ? <span className="okx-order-empty">—</span>
-                : <div className="okx-order-return">
-                  <strong className="tnum">+{formatAmount(order.yieldAmount)} {order.yieldCurrency}</strong>
-                  {!isUsdStablecoin(order.yieldCurrency) && yieldUsdValue !== null && (
-                    <small className="tnum" title={t("okx.estimatedUsd")}>(${formatMoney(yieldUsdValue)})</small>
+              <td><strong className="tnum">{formatCurrencyAmount(order.principal, order.principalCurrency)} {order.principalCurrency}</strong></td>
+              <td>
+                <div className="okx-order-prices">
+                  <span>{t("okx.strike")}</span>
+                  <strong className="tnum">{formatCurrencyAmount(order.strike, quoteCurrency)} {quoteCurrency}</strong>
+                  <span title={t("okx.indexPriceHint")}>{t("okx.indexPrice")}</span>
+                  {priceError === null
+                    ? <strong className="tnum">{indexPrice === undefined
+                      ? "—"
+                      : `${formatCurrencyAmount(indexPrice.price, quoteCurrency)} ${quoteCurrency}`}</strong>
+                    : <strong className="okx-order-price-error" title={priceError}>!</strong>}
+                </div>
+              </td>
+              <td>
+                <div className="okx-order-yield-cell">
+                  {realizedYield !== null && (
+                    <div className="okx-order-return">
+                      <strong className="tnum">{signedAmount(realizedYield.amount, formatCurrencyAmount(realizedYield.amount, realizedYield.currency))} {realizedYield.currency}</strong>
+                      {!isUsdStablecoin(realizedYield.currency) && yieldUsdValue !== null && (
+                        <small className="tnum" title={t("okx.estimatedUsd")}>{formatEstimatedUsd(yieldUsdValue)}</small>
+                      )}
+                    </div>
                   )}
-                </div>}</td>
+                  <span className={`okx-state ${order.state}`}>{t(STATE_KEYS[order.state])}</span>
+                </div>
+              </td>
               <td>
                 <div className="okx-order-settlement">
                   <span>{t("okx.settledAmount")}</span>
                   <strong className="tnum">{order.settledAmount === null || order.settledCurrency === null
                     ? "—"
-                    : `${formatAmount(order.settledAmount)} ${order.settledCurrency}`}</strong>
+                    : `${formatCurrencyAmount(order.settledAmount, order.settledCurrency)} ${order.settledCurrency}`}</strong>
                   <span>{t("okx.settlementPrice")}</span>
                   <strong className="tnum">{order.settlementPrice === null
                     ? "—"
-                    : `${formatAmount(order.settlementPrice)} ${quoteCurrency}`}</strong>
+                    : `${formatCurrencyAmount(order.settlementPrice, quoteCurrency)} ${quoteCurrency}`}</strong>
                 </div>
               </td>
               <td>
-                <div className="okx-order-state-cell">
-                  <time dateTime={new Date(order.expiresAt).toISOString()}>{formatDate(order.expiresAt)}</time>
-                  <span className={`okx-state ${order.state}`}>{t(STATE_KEYS[order.state])}</span>
+                <div className="okx-order-timeline">
+                  <span>{t("okx.subscribedAt")}</span>
+                  <time dateTime={new Date(order.createdAt).toISOString()}>{formatDate(order.createdAt)}</time>
+                  <span>{t("okx.expiry")}</span>
+                  <time dateTime={new Date(eventTime).toISOString()}>{formatDate(eventTime)}</time>
                 </div>
               </td>
             </tr>

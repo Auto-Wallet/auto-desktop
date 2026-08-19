@@ -3,6 +3,7 @@
 //! Credentials live in the operating system credential store. Only this trusted
 //! Rust backend can read them; remote dApp webviews receive no matching ACL grant.
 
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use base64::engine::general_purpose::STANDARD as B64;
@@ -106,6 +107,22 @@ fn api_key_hint(api_key: &str) -> Result<String, String> {
         return Err("API key is too short".to_string());
     }
     Ok(format!("••••{}", &api_key[api_key.len() - 4..]))
+}
+
+fn validate_index_instrument_id(instrument_id: &str) -> Result<(), String> {
+    let mut parts = instrument_id.split('-');
+    let base = parts.next().unwrap_or_default();
+    let quote = parts.next().unwrap_or_default();
+    let valid_currency = |currency: &str| {
+        (2..=12).contains(&currency.len())
+            && currency
+                .bytes()
+                .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit())
+    };
+    if !valid_currency(base) || !valid_currency(quote) || parts.next().is_some() {
+        return Err(format!("invalid OKX index instrument ID: {instrument_id}"));
+    }
+    Ok(())
 }
 
 fn timestamp() -> Result<String, String> {
@@ -292,6 +309,29 @@ async fn private_get_with_optional_code(
     private_get_with_response_code(creds, request_path, ResponseCode::Optional).await
 }
 
+async fn public_get(region: &str, request_path: &str) -> Result<Value, String> {
+    if !request_path.starts_with("/api/v5/market/index-tickers?") {
+        return Err("refusing an invalid OKX public API path".to_string());
+    }
+    let url = format!("{}{request_path}", base_url(region)?);
+    let response = http_client()?
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("calling OKX: {e}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("reading OKX response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("OKX returned HTTP {status}: {body}"));
+    }
+    let value: Value =
+        serde_json::from_str(&body).map_err(|e| format!("decoding OKX response: {e}"))?;
+    validate_private_response(value, ResponseCode::Required)
+}
+
 #[tauri::command]
 pub fn okx_connection_status() -> Result<OkxConnectionStatus, String> {
     match load_credentials()? {
@@ -346,6 +386,42 @@ pub async fn okx_get_dcd_orders() -> Result<Value, String> {
     private_get_with_optional_code(&creds, "/api/v5/finance/sfp/dcd/order-history?limit=100").await
 }
 
+#[tauri::command]
+pub async fn okx_get_dcd_index_prices(instrument_ids: Vec<String>) -> Result<Value, String> {
+    const MAX_INDEX_INSTRUMENTS: usize = 20;
+
+    let creds = require_credentials()?;
+    let mut unique_ids = HashSet::new();
+    let mut prices = Vec::new();
+    for instrument_id in instrument_ids {
+        validate_index_instrument_id(&instrument_id)?;
+        if !unique_ids.insert(instrument_id.clone()) {
+            continue;
+        }
+        if unique_ids.len() > MAX_INDEX_INSTRUMENTS {
+            return Err(format!(
+                "at most {MAX_INDEX_INSTRUMENTS} OKX index instruments can be requested"
+            ));
+        }
+        let response = public_get(
+            &creds.region,
+            &format!("/api/v5/market/index-tickers?instId={instrument_id}"),
+        )
+        .await?;
+        let rows = response
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "OKX index price response is missing data array".to_string())?;
+        if rows.len() != 1 {
+            return Err(format!(
+                "OKX index price response for {instrument_id} must contain one ticker"
+            ));
+        }
+        prices.push(rows[0].clone());
+    }
+    Ok(json!({ "code": "0", "msg": "", "data": prices }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,6 +455,23 @@ mod tests {
         assert_eq!(base_url("global").unwrap(), "https://www.okx.com");
         assert_eq!(base_url("eu").unwrap(), "https://eea.okx.com");
         assert!(base_url("https://attacker.example").is_err());
+    }
+
+    #[test]
+    fn dual_investment_index_ids_are_allowlisted() {
+        assert!(validate_index_instrument_id("BTC-USDC").is_ok());
+        assert!(validate_index_instrument_id("ETH-USDT").is_ok());
+        assert!(validate_index_instrument_id("../../account/balance").is_err());
+        assert!(validate_index_instrument_id("btc-usdc").is_err());
+    }
+
+    #[test]
+    fn trusted_shell_can_call_dual_investment_index_prices() {
+        let capability = include_str!("../capabilities/default.json");
+        let permissions = include_str!("../permissions/okx-account.toml");
+
+        assert!(capability.contains("\"allow-okx-get-dcd-index-prices\""));
+        assert!(permissions.contains("commands.allow = [\"okx_get_dcd_index_prices\"]"));
     }
 
     #[test]

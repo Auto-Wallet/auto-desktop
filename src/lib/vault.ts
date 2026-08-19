@@ -46,6 +46,11 @@ export type LedgerAccount = { index: number; path: string; address: string };
 /** A newly added wallet (id + active address). */
 export type WalletRef = { id: string; address: string };
 
+export type TouchIdStatus = {
+  available: boolean;
+  enabled: boolean;
+};
+
 type RustStatus = {
   exists: boolean;
   unlocked: boolean;
@@ -296,6 +301,31 @@ export async function unlockVault(password: string): Promise<void> {
     return;
   }
   await invoke<string>("unlock_vault", { password });
+  await refreshVaultStatus();
+}
+
+/** Whether this Mac can offer Touch ID and whether this vault opted in. */
+export async function getTouchIdStatus(): Promise<TouchIdStatus> {
+  if (!isTauri()) return { available: false, enabled: false };
+  return invoke<TouchIdStatus>("touch_id_status");
+}
+
+/** Verify Touch ID, then save the current in-memory vault password in Keychain. */
+export async function enableTouchId(reason: string): Promise<void> {
+  if (!isTauri()) throw new Error("Touch ID is only available in the macOS app");
+  await invoke("enable_touch_id", { reason });
+}
+
+/** Remove the local Keychain item and its non-secret enabled marker. */
+export async function disableTouchId(): Promise<void> {
+  if (!isTauri()) throw new Error("Touch ID is only available in the macOS app");
+  await invoke("disable_touch_id");
+}
+
+/** Ask macOS for Touch ID, then read the password from Keychain and unlock. */
+export async function unlockVaultWithTouchId(reason: string): Promise<void> {
+  if (!isTauri()) throw new Error("Touch ID is only available in the macOS app");
+  await invoke<string>("unlock_vault_with_touch_id", { reason });
   await refreshVaultStatus();
 }
 

@@ -63,10 +63,19 @@ export type OkxDcdOrder = {
   annualizedYield: string;
   yieldAmount: string | null;
   yieldCurrency: string | null;
+  createdAt: number;
+  updatedAt: number;
   expiresAt: number;
+  settledAt: number | null;
   settledAmount: string | null;
   settledCurrency: string | null;
   settlementPrice: string | null;
+};
+
+export type OkxIndexPrice = {
+  instrumentId: string;
+  price: string;
+  updatedAt: number;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -131,6 +140,11 @@ function timestamp(value: unknown, label: string): number {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${label} is invalid`);
   return parsed;
+}
+
+function optionalTimestamp(value: unknown, label: string): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  return timestamp(value, label);
 }
 
 function parseEnvelope(value: unknown, label: string): unknown[] {
@@ -271,12 +285,40 @@ export function parseOkxDcdOrders(value: unknown): OkxDcdOrder[] {
       annualizedYield: string(item.annualizedYield, `OKX Dual Investment order ${index}.annualizedYield`),
       yieldAmount,
       yieldCurrency,
+      createdAt: timestamp(item.cTime, `OKX Dual Investment order ${index}.cTime`),
+      updatedAt: timestamp(item.uTime, `OKX Dual Investment order ${index}.uTime`),
       expiresAt: timestamp(expiry, `OKX Dual Investment order ${index}.settleTime`),
+      settledAt: optionalTimestamp(item.settleTime, `OKX Dual Investment order ${index}.settleTime`),
       settledAmount,
       settledCurrency,
       settlementPrice: optionalString(item.settlePx, `OKX Dual Investment order ${index}.settlePx`),
     };
   });
+}
+
+export function parseOkxIndexPrices(value: unknown): OkxIndexPrice[] {
+  return parseEnvelope(value, "OKX index prices").map((value, index) => {
+    const item = record(value, `OKX index price ${index}`);
+    return {
+      instrumentId: string(item.instId, `OKX index price ${index}.instId`),
+      price: string(item.idxPx, `OKX index price ${index}.idxPx`),
+      updatedAt: timestamp(item.ts, `OKX index price ${index}.ts`),
+    };
+  });
+}
+
+export function getOkxDcdIndexInstrumentId(productId: string): string {
+  const [baseCurrency, quoteCurrency] = productId.split("-");
+  if (baseCurrency === undefined || quoteCurrency === undefined) {
+    throw new Error(`OKX Dual Investment product ${productId} has no currency pair`);
+  }
+  const indexBaseCurrency = baseCurrency === "BETH"
+    ? "ETH"
+    : baseCurrency === "OKSOL"
+      ? "SOL"
+      : baseCurrency;
+  const indexQuoteCurrency = quoteCurrency === "USDG" ? "USD" : quoteCurrency;
+  return `${indexBaseCurrency}-${indexQuoteCurrency}`;
 }
 
 async function okxInvoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -302,6 +344,10 @@ export async function getOkxAssets(): Promise<OkxAssets> {
 
 export async function getOkxDcdOrders(): Promise<OkxDcdOrder[]> {
   return parseOkxDcdOrders(await okxInvoke("okx_get_dcd_orders"));
+}
+
+export async function getOkxDcdIndexPrices(instrumentIds: string[]): Promise<OkxIndexPrice[]> {
+  return parseOkxIndexPrices(await okxInvoke("okx_get_dcd_index_prices", { instrumentIds }));
 }
 
 export function isCurrentDcdOrder(order: OkxDcdOrder): boolean {
@@ -393,16 +439,34 @@ export function isUsdStablecoin(currency: string): boolean {
   return USD_STABLECOINS.has(currency.toUpperCase());
 }
 
-export function estimateOkxDcdOrderYieldUsd(order: OkxDcdOrder): string | null {
+export function getOkxDcdRealizedYield(order: OkxDcdOrder): { amount: string; currency: string } | null {
+  if (isCurrentDcdOrder(order)) return null;
+  if (
+    order.settledAmount !== null
+    && order.settledCurrency !== null
+    && order.settledCurrency === order.principalCurrency
+  ) {
+    const negativePrincipal = order.principal.startsWith("-") ? order.principal.slice(1) : `-${order.principal}`;
+    return {
+      amount: addDecimalStrings(order.settledAmount, negativePrincipal, `${order.orderId} realized yield`),
+      currency: order.principalCurrency,
+    };
+  }
   if (order.yieldAmount === null || order.yieldCurrency === null) return null;
-  if (isUsdStablecoin(order.yieldCurrency)) return order.yieldAmount;
+  return { amount: order.yieldAmount, currency: order.yieldCurrency };
+}
+
+export function estimateOkxDcdOrderYieldUsd(order: OkxDcdOrder): string | null {
+  const realizedYield = getOkxDcdRealizedYield(order);
+  if (realizedYield === null) return null;
+  if (isUsdStablecoin(realizedYield.currency)) return realizedYield.amount;
   if (order.settlementPrice === null) return null;
   const [baseCurrency, quoteCurrency] = order.productId.split("-");
   if (baseCurrency === undefined || quoteCurrency === undefined) {
     throw new Error(`OKX Dual Investment product ${order.productId} has no currency pair`);
   }
-  if (order.yieldCurrency !== baseCurrency || !isUsdStablecoin(quoteCurrency)) return null;
-  return multiplyDecimalStrings(order.yieldAmount, order.settlementPrice, `${order.yieldCurrency} yield USD value`);
+  if (realizedYield.currency !== baseCurrency || !isUsdStablecoin(quoteCurrency)) return null;
+  return multiplyDecimalStrings(realizedYield.amount, order.settlementPrice, `${realizedYield.currency} yield USD value`);
 }
 
 export function sumOkxDcdYieldByCurrency(
@@ -410,20 +474,18 @@ export function sumOkxDcdYieldByCurrency(
 ): { currency: string; amount: string; usdValue: string | null }[] {
   const totals = new Map<string, { amount: string; usdValue: string | null; allPriced: boolean }>();
   for (const order of orders) {
-    if (order.yieldAmount === null && order.yieldCurrency === null) continue;
-    if (order.yieldAmount === null || order.yieldCurrency === null) {
-      throw new Error(`OKX Dual Investment order ${order.orderId} has incomplete yield data`);
-    }
+    const realizedYield = getOkxDcdRealizedYield(order);
+    if (realizedYield === null) continue;
     const usdValue = estimateOkxDcdOrderYieldUsd(order);
-    const existing = totals.get(order.yieldCurrency);
-    totals.set(order.yieldCurrency, {
+    const existing = totals.get(realizedYield.currency);
+    totals.set(realizedYield.currency, {
       amount: existing === undefined
-        ? addDecimalStrings("0", order.yieldAmount, `${order.yieldCurrency} yield`)
-        : addDecimalStrings(existing.amount, order.yieldAmount, `${order.yieldCurrency} yield`),
+        ? addDecimalStrings("0", realizedYield.amount, `${realizedYield.currency} yield`)
+        : addDecimalStrings(existing.amount, realizedYield.amount, `${realizedYield.currency} yield`),
       usdValue: existing === undefined
         ? usdValue
         : existing.usdValue !== null && usdValue !== null
-          ? addDecimalStrings(existing.usdValue, usdValue, `${order.yieldCurrency} yield USD value`)
+          ? addDecimalStrings(existing.usdValue, usdValue, `${realizedYield.currency} yield USD value`)
           : null,
       allPriced: existing === undefined ? usdValue !== null : existing.allPriced && usdValue !== null,
     });
@@ -449,18 +511,53 @@ function okxDcdPrincipalUsdValue(order: OkxDcdOrder): string {
   return multiplyDecimalStrings(order.principal, order.strike, `${order.orderId} principal USD value`);
 }
 
-export function calculateOkxDcdWeightedApr(orders: OkxDcdOrder[]): string | null {
-  if (orders.length === 0) return null;
-  let totalPrincipalUsd = "0";
-  let weightedAprTotal = "0";
-  for (const order of orders) {
-    const principalUsd = okxDcdPrincipalUsdValue(order);
-    totalPrincipalUsd = addDecimalStrings(totalPrincipalUsd, principalUsd, "Dual Investment principal USD value");
-    const weightedApr = multiplyDecimalStrings(principalUsd, order.annualizedYield, `${order.orderId} weighted APR`);
-    weightedAprTotal = addDecimalStrings(weightedAprTotal, weightedApr, "Dual Investment weighted APR");
+const MILLISECONDS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;
+
+function okxDcdRealizedAt(order: OkxDcdOrder): number {
+  if (order.state === "settled") {
+    if (order.settledAt === null) {
+      throw new Error(`OKX Dual Investment order ${order.orderId} is settled without a settlement time`);
+    }
+    return order.settledAt;
   }
-  if (totalPrincipalUsd === "0") throw new Error("Dual Investment principal USD value must be greater than zero");
-  return divideDecimalStrings(weightedAprTotal, totalPrincipalUsd, 12, "Dual Investment weighted APR");
+  if (order.state === "redeemed" || order.state === "rejected") return order.updatedAt;
+  throw new Error(`OKX Dual Investment order ${order.orderId} is not a realized order`);
+}
+
+export function calculateOkxDcdRealizedApr(orders: OkxDcdOrder[]): string | null {
+  let totalYieldUsd = "0";
+  let totalPrincipalTime = "0";
+  let realizedOrderCount = 0;
+
+  for (const order of orders) {
+    const realizedYield = getOkxDcdRealizedYield(order);
+    if (realizedYield === null) continue;
+    const yieldUsd = estimateOkxDcdOrderYieldUsd(order);
+    if (yieldUsd === null) {
+      throw new Error(`Cannot value ${realizedYield.currency} yield for ${order.orderId}`);
+    }
+    const endedAt = okxDcdRealizedAt(order);
+    const heldMilliseconds = endedAt - order.createdAt;
+    if (heldMilliseconds <= 0) {
+      throw new Error(`OKX Dual Investment order ${order.orderId} holding time must be greater than zero`);
+    }
+    const principalTime = multiplyDecimalStrings(
+      okxDcdPrincipalUsdValue(order),
+      heldMilliseconds.toString(),
+      `${order.orderId} principal time`,
+    );
+    totalYieldUsd = addDecimalStrings(totalYieldUsd, yieldUsd, "Dual Investment realized USD yield");
+    totalPrincipalTime = addDecimalStrings(totalPrincipalTime, principalTime, "Dual Investment principal time");
+    realizedOrderCount += 1;
+  }
+
+  if (realizedOrderCount === 0) return null;
+  const annualizedYieldUsd = multiplyDecimalStrings(
+    totalYieldUsd,
+    MILLISECONDS_PER_YEAR.toString(),
+    "Dual Investment annualized realized USD yield",
+  );
+  return divideDecimalStrings(annualizedYieldUsd, totalPrincipalTime, 12, "Dual Investment realized APR");
 }
 
 export function mergeOkxPortfolioAssets(
