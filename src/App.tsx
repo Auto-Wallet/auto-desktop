@@ -41,6 +41,7 @@ import { txExplorerUrl } from "./lib/explorer";
 import { useMenuOverlay, type MenuOverlayPayload } from "./lib/menuOverlay";
 import { SidebarFooter } from "./SidebarFooter";
 import { setNativeMenuLanguage } from "./lib/nativeMenu";
+import { autoUpdater, useAutoUpdate } from "./lib/autoUpdater";
 
 type Page = "wallet" | "okx" | "dapps" | "browser" | "settings";
 type Tab = { id: string; dapp: Dapp };
@@ -61,6 +62,9 @@ function App() {
   const txStatusRef = useRef<Map<string, string>>(new Map());
   const notifiedTxRef = useRef<Set<string>>(new Set());
   const submittedThisSessionRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (isTauri()) void autoUpdater.start();
+  }, []);
   const showTxToast = useCallback(
     (
       record: ActivityRecord | undefined,
@@ -306,6 +310,7 @@ function App() {
     return (
       <>
         <LockScreen onDone={() => setSessionUnlocked(true)} />
+        <AutoUpdateNotice />
         <ToastHost />
         <ConfirmHost />
       </>
@@ -329,6 +334,7 @@ function App() {
       />
 
       <main className="main">
+        <AutoUpdateNotice />
         {page === "wallet" && <WalletPage />}
         {page === "okx" && <OkxPage />}
         {page === "dapps" && <DappsPage onOpen={openTab} />}
@@ -346,6 +352,44 @@ function App() {
       <ConfirmHost />
       <NativeToastOverlay active={page === "browser"} />
     </div>
+  );
+}
+
+function AutoUpdateNotice() {
+  const { t } = useT();
+  const update = useAutoUpdate();
+  if (update.status !== "ready" && update.status !== "installing") return null;
+
+  return (
+    <aside className="auto-update-notice" role="status" aria-live="polite">
+      <span className="auto-update-icon" aria-hidden="true">
+        <Icon name="download" size={17} />
+      </span>
+      <div className="auto-update-copy">
+        <strong>
+          {t("update.ready", { version: update.version ?? "" })}
+        </strong>
+        {update.error && <small>{t("update.installFailed", { error: update.error })}</small>}
+      </div>
+      <div className="auto-update-actions">
+        <button
+          type="button"
+          className="auto-update-accept"
+          disabled={update.status === "installing"}
+          onClick={() => void autoUpdater.install()}
+        >
+          {update.status === "installing" ? t("update.installing") : t("update.install")}
+        </button>
+        <button
+          type="button"
+          className="auto-update-ignore"
+          disabled={update.status === "installing"}
+          onClick={() => void autoUpdater.ignore()}
+        >
+          {t("update.ignore")}
+        </button>
+      </div>
+    </aside>
   );
 }
 

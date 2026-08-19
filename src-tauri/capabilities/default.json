@@ -8,6 +8,8 @@
     "opener:default",
     "process:allow-restart",
     "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
     "updater:allow-download-and-install",
     "allow-open-dapp",
     "allow-set-dapp-bounds",

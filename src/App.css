@@ -279,10 +279,106 @@
 
 /* ---- Main ---- */
 .main {
+  position: relative;
   flex: 1;
   min-width: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg);
+}
+
+/* The package is already downloaded when this appears. It sits in the spare
+   top-row space shown in the wallet layout and stays above the browser chrome. */
+.auto-update-notice {
+  position: fixed;
+  z-index: 120;
+  top: 7px;
+  right: 28px;
+  max-width: min(520px, calc(100vw - 56px));
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line-2));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface) 94%, var(--brand-soft));
+  color: var(--ink);
+  box-shadow: var(--sh-md);
+  animation: auto-update-enter 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+.auto-update-icon {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+.auto-update-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.auto-update-copy strong {
+  font-size: 13px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.auto-update-copy small {
+  max-width: 280px;
+  margin-top: 2px;
+  color: var(--down);
+  font-size: 11px;
+}
+.auto-update-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 2px;
+}
+.auto-update-actions button {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.auto-update-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.auto-update-accept {
+  background: var(--brand);
+  color: #fff;
+}
+.auto-update-ignore {
+  background: transparent;
+  color: var(--ink-3);
+}
+.auto-update-ignore:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+@keyframes auto-update-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+@media (max-width: 760px) {
+  .auto-update-notice {
+    right: 12px;
+    max-width: calc(100vw - 24px);
+  }
+  .auto-update-copy strong {
+    white-space: normal;
+  }
 }
