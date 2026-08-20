@@ -151,12 +151,19 @@ fn http_client() -> Result<&'static reqwest::Client, String> {
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
                 .timeout(std::time::Duration::from_secs(15))
+                .pool_idle_timeout(std::time::Duration::from_secs(15))
+                .tcp_keepalive(std::time::Duration::from_secs(30))
                 .build()
                 .map_err(|e| format!("building OKX client: {e}"))
         })
         .as_ref()
         .map_err(Clone::clone)
+}
+
+fn calling_okx_error(error: &(dyn std::error::Error + 'static)) -> String {
+    format!("calling OKX: {}", crate::error_chain(error))
 }
 
 fn required_response_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -272,7 +279,7 @@ async fn private_get_with_response_code(
             .headers(headers)
             .send()
             .await
-            .map_err(|e| format!("calling OKX: {e}"))?;
+            .map_err(|e| calling_okx_error(&e))?;
         let status = response.status();
         let retry_after_seconds = response
             .headers()
@@ -318,7 +325,7 @@ async fn public_get(region: &str, request_path: &str) -> Result<Value, String> {
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("calling OKX: {e}"))?;
+        .map_err(|e| calling_okx_error(&e))?;
     let status = response.status();
     let body = response
         .text()
@@ -427,6 +434,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn okx_transport_error_reports_the_underlying_cause() {
+        #[derive(Debug)]
+        struct Cause;
+        impl std::fmt::Display for Cause {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "dns lookup failed")
+            }
+        }
+        impl std::error::Error for Cause {}
+
+        #[derive(Debug)]
+        struct Wrapper(Cause);
+        impl std::fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "error sending request for url (https://www.okx.com/)")
+            }
+        }
+        impl std::error::Error for Wrapper {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        assert_eq!(
+            calling_okx_error(&Wrapper(Cause)),
+            "calling OKX: error sending request for url (https://www.okx.com/): dns lookup failed"
+        );
+    }
+
+    #[test]
     fn signature_matches_fixed_vector() {
         let actual = signature(
             "2020-12-08T09:08:57.715Z",
@@ -527,5 +564,18 @@ mod tests {
         assert_eq!(normalized["code"], "0");
         assert_eq!(normalized["msg"], "");
         assert_eq!(normalized["data"][0]["ordId"], "456");
+    }
+
+    #[test]
+    #[ignore = "calls the live OKX public API"]
+    fn live_public_request_uses_the_same_client_as_account_reads() {
+        let response = tauri::async_runtime::block_on(public_get(
+            "global",
+            "/api/v5/market/index-tickers?instId=BTC-USDT",
+        ))
+        .unwrap();
+
+        assert_eq!(response["code"], "0");
+        assert_eq!(response["data"].as_array().map(Vec::len), Some(1));
     }
 }
