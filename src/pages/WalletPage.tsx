@@ -13,10 +13,10 @@ import { isTauri, openExternalUrl } from "../lib/platform";
 import { explorerTokenUrl, explorerTxUrl, txExplorerUrl } from "../lib/explorer";
 import { ChainIcon } from "../lib/ChainIcon";
 import {
-  isPortfolioTotalPending,
   useDefiPositions,
   type DefiState,
 } from "../lib/defi";
+import { summarizePortfolio } from "../lib/portfolioSummary";
 import {
   fmtAmount,
   fmtPct,
@@ -184,8 +184,13 @@ export default function WalletPage() {
   const chainIds = useMemo(() => chains.map((c) => c.id), [chains]);
   const active = useActiveAccount();
   const custom = useCustomTokens();
-  const { balances, refresh } = useBalances(active.address);
-  const { tokenBalances, refreshTokens } = useTokenBalances(
+  const { balances, balancesAddress, refresh } = useBalances(active.address);
+  const {
+    tokenBalances,
+    tokenBalancesAddress,
+    refreshTokens,
+    holdings,
+  } = useTokenBalances(
     active.address,
     chainIds,
   );
@@ -206,8 +211,9 @@ export default function WalletPage() {
     }
     return out;
   }, [chains, custom, tokenBalances]);
-  const { prices: tokenPrices, refresh: refreshTokenPrices } =
+  const { state: tokenPriceState, refresh: refreshTokenPrices } =
     useTokenPrices(pricedTokens);
+  const tokenPrices = tokenPriceState.prices;
 
   const [tab, setTab] = useState<"tokens" | "activity">("tokens");
   const holdingsSegRef = useSegPill<HTMLDivElement>(tab);
@@ -378,22 +384,49 @@ export default function WalletPage() {
     [searchedRows, showZeroTokenBalances],
   );
   const portfolio = useMemo(
-    () => computePortfolio(allRows, prices.status === "loading", defi),
-    [allRows, prices.status, defi],
+    () =>
+      summarizePortfolio({
+        accountCurrent:
+          balancesAddress === active.address &&
+          tokenBalancesAddress === active.address,
+        assets: allRows.map((row) => ({
+          balance: row.state,
+          decimals: row.decimals,
+          price: row.price,
+          priceSource: row.kind === "native" ? "native" : "token",
+        })),
+        tokenBalanceStates: holdings.map(
+          (holding) => tokenBalances[tokenKey(holding.chainId, holding.address)],
+        ),
+        nativePriceStatus: prices.status,
+        tokenPriceStatus: tokenPriceState.status,
+        defi: {
+          enabled: defiEnabled,
+          status: defi.status,
+          totalUsd: defi.positions.reduce(
+            (sum, position) => sum + position.balanceUsd,
+            0,
+          ),
+        },
+      }),
+    [
+      active.address,
+      allRows,
+      balancesAddress,
+      defi.positions,
+      defi.status,
+      defiEnabled,
+      holdings,
+      prices.status,
+      tokenBalances,
+      tokenBalancesAddress,
+      tokenPriceState.status,
+    ],
   );
-  const isDefiLoading = defi.status === "loading";
   // Every snapshot has to be comparable to every other one, or the chart draws
-  // crashes that never happened. `portfolio.loading` goes false while DeFi is
-  // still "idle" (it has not even started), so a tokens-only total — cents, for
-  // a wallet whose value is nearly all DeFi — used to land in the history. On
-  // error DeFi contributes no positions, so that total is known-incomplete too.
-  // Passed as `pending` so BOTH recording paths honour it, including the hourly
-  // timer that fires 20s after a refresh, while DeFi is often still in flight.
-  const totalPending = isPortfolioTotalPending({
-    balancesLoading: portfolio.loading,
-    defiEnabled,
-    defiStatus: defi.status,
-  });
+  // crashes that never happened. Only the same complete state that may paint an
+  // exact total may enter history; loading and partial failures both stay out.
+  const totalPending = portfolio.status !== "ready";
   const trend = usePortfolioHistory(active.address, portfolio.total, totalPending);
   const trendPercent = trend.percent;
 
@@ -486,40 +519,32 @@ export default function WalletPage() {
                   <Icon name="wallet" size={15} /> {t("wallet.total")} ·{" "}
                   {active.label}
                 </div>
-                {portfolio.loading && portfolio.total == null ? (
+                {portfolio.status === "loading" ? (
                   <div className="hero-skel" />
-                ) : portfolio.total != null ? (
+                ) : portfolio.status === "ready" ? (
                   <>
                     <div className="hero-total disp tnum">
                       <HeroAmount n={portfolio.total} />
-                      {isDefiLoading && (
-                        <span className="hero-loading" title={t("wallet.refreshingDefi")}>
-                          <Icon name="refresh" size={14} />
-                          {t("wallet.refreshingDefi")}
-                        </span>
-                      )}
                     </div>
-                    {portfolio.total != null && (
-                      <div className="hero-change">
-                        <span className="pill">
-                          <Icon
-                            name={(trendPercent ?? 0) >= 0 ? "arrowUp" : "arrowDown"}
-                            size={13}
-                          />
-                          {trendPercent == null
-                            ? t("wallet.trendCollecting")
-                            : fmtPct(trendPercent)}
-                        </span>
-                        <span style={{ opacity: 0.9 }}>· {trend.label}</span>
-                      </div>
-                    )}
+                    <div className="hero-change">
+                      <span className="pill">
+                        <Icon
+                          name={(trendPercent ?? 0) >= 0 ? "arrowUp" : "arrowDown"}
+                          size={13}
+                        />
+                        {trendPercent == null
+                          ? t("wallet.trendCollecting")
+                          : fmtPct(trendPercent)}
+                      </span>
+                      <span style={{ opacity: 0.9 }}>· {trend.label}</span>
+                    </div>
                   </>
                 ) : (
                   <>
                     <div className="hero-total disp tnum">$—</div>
                     <div className="hero-note">
                       <Icon name="info" size={13} />{" "}
-                      {t("wallet.pricesUnavailable")}
+                      {t("wallet.totalIncomplete")}
                     </div>
                   </>
                 )}
@@ -1176,13 +1201,6 @@ type SwapPickerItem = {
   sourceAssetKey?: string;
 };
 
-
-type Portfolio = {
-  total: number | null;
-  change: number | null;
-  loading: boolean;
-};
-
 // A balance state — native (BalanceState) and ERC-20 (TokenBalance) are the same
 // shape; the unified row carries whichever applies.
 type BalState = BalanceState | TokenBalance | undefined;
@@ -1358,36 +1376,6 @@ function computeWalletAssetsOverOneUsd(
 
   if (sawPricedAsset) return false;
   return sawLoading ? undefined : false;
-}
-
-function computePortfolio(
-  rows: DisplayRow[],
-  pricesLoading: boolean,
-  defi: DefiState,
-): Portfolio {
-  const loading =
-    pricesLoading ||
-    rows.some((r) => !r.state || r.state.status === "loading") ||
-    (defi.status === "loading" && defi.positions.length === 0);
-  let total = 0;
-  let delta = 0;
-  let priced = false;
-  for (const r of rows) {
-    if (!r.state || r.state.status !== "ok" || !r.price) continue;
-    const v = weiToUsd(r.state.wei, r.decimals, r.price.usd);
-    total += v;
-    delta += v * (r.price.change24h / 100);
-    priced = true;
-  }
-  const defiTotal = defi.positions.reduce((sum, p) => sum + p.balanceUsd, 0);
-  if (defiTotal > 0) {
-    total += defiTotal;
-    priced = true;
-  }
-  if (!priced) return { total: null, change: null, loading };
-  const prev = total - delta;
-  const change = prev > 0 ? (delta / prev) * 100 : 0;
-  return { total, change, loading };
 }
 
 function HeroAmount({ n }: { n: number }) {

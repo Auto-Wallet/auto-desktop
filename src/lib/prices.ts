@@ -22,6 +22,11 @@ export type PriceState =
   | { status: "ok"; prices: Record<string, Price> }
   | { status: "error"; message: string };
 
+export type TokenPriceState =
+  | { status: "loading"; prices: Record<string, Price> }
+  | { status: "ok"; prices: Record<string, Price> }
+  | { status: "error"; prices: Record<string, Price>; message: string };
+
 const ZERO_PRICE: Price = { usd: 0, change24h: 0, synthetic: true };
 
 export function priceForChainAsset(chainName: string, price: Price | undefined): Price | undefined {
@@ -288,16 +293,23 @@ export function usePrices(symbols: string[]): { state: PriceState; refresh: () =
  * Cached to localStorage; on failure the cached prices are served.
  */
 export function useTokenPrices(tokens: PricedToken[]): {
-  prices: Record<string, Price>;
+  state: TokenPriceState;
   refresh: () => void;
 } {
   // Stable key so we only refetch when the actual (token, symbol) set changes.
   const key = [...new Set(tokens.map((t) => `${tkPriceKey(t.chainId, t.address)}@${t.symbol}`))]
     .sort()
     .join("|");
-  const [prices, setPrices] = useState<Record<string, Price>>(() =>
-    tokenPricesByKey(key ? key.split("|") : [], loadOracle().prices),
+  const initialPrices = tokenPricesByKey(
+    key ? key.split("|") : [],
+    loadOracle().prices,
   );
+  const [state, setState] = useState<TokenPriceState>(() =>
+    key
+      ? { status: "loading", prices: initialPrices }
+      : { status: "ok", prices: initialPrices },
+  );
+  const [stateKey, setStateKey] = useState(key);
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -311,21 +323,37 @@ export function useTokenPrices(tokens: PricedToken[]): {
       ),
     ];
     if (ids.length === 0) {
-      setPrices(tokenPricesByKey(entries, loadOracle().prices));
+      setStateKey(key);
+      setState({
+        status: "ok",
+        prices: tokenPricesByKey(entries, loadOracle().prices),
+      });
       return;
     }
 
     let cancelled = false;
+    setStateKey(key);
+    setState({
+      status: "loading",
+      prices: tokenPricesByKey(entries, loadOracle().prices),
+    });
     readPriceOracle(ids)
       .then((byId) => {
         if (cancelled) return;
-        setPrices(tokenPricesByKey(entries, byId));
+        setState({ status: "ok", prices: tokenPricesByKey(entries, byId) });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         // A pricing outage must not blank already-shown amounts — keep the cached
         // values (loaded into state on mount), never a fabricated zero.
         if (!cancelled) {
-          setPrices((p) => ({ ...tokenPricesByKey(entries, loadOracle().prices), ...p }));
+          setState((previous) => ({
+            status: "error",
+            prices: {
+              ...tokenPricesByKey(entries, loadOracle().prices),
+              ...previous.prices,
+            },
+            message: error instanceof Error ? error.message : String(error),
+          }));
         }
       });
 
@@ -334,5 +362,14 @@ export function useTokenPrices(tokens: PricedToken[]): {
     };
   }, [key, nonce]);
 
-  return { prices, refresh };
+  if (stateKey !== key) {
+    return {
+      state: {
+        status: key ? "loading" : "ok",
+        prices: tokenPricesByKey(key ? key.split("|") : [], loadOracle().prices),
+      },
+      refresh,
+    };
+  }
+  return { state, refresh };
 }

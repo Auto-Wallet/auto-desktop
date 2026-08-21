@@ -20,13 +20,19 @@ const allLoading = (chains: Chain[]): Balances =>
 export function useBalances(address: string | undefined) {
   const chains = useChains();
   const [balances, setBalances] = useState<Balances>(() => allLoading(chains));
+  const [balancesAddress, setBalancesAddress] = useState(address);
   const [nonce, setNonce] = useState(0);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
-    if (!address) return;
+    if (!address) {
+      setBalancesAddress(undefined);
+      setBalances(allLoading(chains));
+      return;
+    }
     let cancelled = false;
+    setBalancesAddress(address);
     setBalances(allLoading(chains));
 
     for (const chain of chains) {
@@ -47,5 +53,5 @@ export function useBalances(address: string | undefined) {
     };
   }, [address, nonce, chains]);
 
-  return { balances, refresh };
+  return { balances, balancesAddress, refresh };
 }

@@ -1810,25 +1810,6 @@
   font-size: 0.58em;
   font-weight: 600;
 }
-.hero-loading {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  align-self: center;
-  padding: 5px 9px;
-  border-radius: var(--r-pill);
-  background: rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.92);
-  font-family: var(--font);
-  font-size: 11.5px;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: 0;
-  white-space: nowrap;
-}
-.hero-loading svg {
-  animation: spin 0.9s linear infinite;
-}
 .hero-change {
   display: inline-flex;
   align-items: center;
