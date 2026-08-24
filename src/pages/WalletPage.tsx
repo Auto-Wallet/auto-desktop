@@ -521,23 +521,32 @@ export default function WalletPage() {
                 </div>
                 {portfolio.status === "loading" ? (
                   <div className="hero-skel" />
-                ) : portfolio.status === "ready" ? (
+                ) : portfolio.status === "ready" || portfolio.status === "partial" ? (
                   <>
                     <div className="hero-total disp tnum">
-                      <HeroAmount n={portfolio.total} />
+                      <HeroAmount
+                        n={portfolio.total}
+                        approximate={portfolio.status === "partial"}
+                      />
                     </div>
-                    <div className="hero-change">
-                      <span className="pill">
-                        <Icon
-                          name={(trendPercent ?? 0) >= 0 ? "arrowUp" : "arrowDown"}
-                          size={13}
-                        />
-                        {trendPercent == null
-                          ? t("wallet.trendCollecting")
-                          : fmtPct(trendPercent)}
-                      </span>
-                      <span style={{ opacity: 0.9 }}>· {trend.label}</span>
-                    </div>
+                    {portfolio.status === "ready" ? (
+                      <div className="hero-change">
+                        <span className="pill">
+                          <Icon
+                            name={(trendPercent ?? 0) >= 0 ? "arrowUp" : "arrowDown"}
+                            size={13}
+                          />
+                          {trendPercent == null
+                            ? t("wallet.trendCollecting")
+                            : fmtPct(trendPercent)}
+                        </span>
+                        <span style={{ opacity: 0.9 }}>· {trend.label}</span>
+                      </div>
+                    ) : (
+                      <div className="hero-note">
+                        <Icon name="info" size={13} /> {t("wallet.totalPartial")}
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1378,7 +1387,7 @@ function computeWalletAssetsOverOneUsd(
   return sawLoading ? undefined : false;
 }
 
-function HeroAmount({ n }: { n: number }) {
+function HeroAmount({ n, approximate = false }: { n: number; approximate?: boolean }) {
   const [whole, cents] = fmtUsd(n).replace("$", "").split(".");
   // Wrapped in one inline element: .hero-total is a flex row with a gap, so a
   // bare fragment would split "$144" and ".54" into separate flex items and
@@ -1386,7 +1395,8 @@ function HeroAmount({ n }: { n: number }) {
   // a timer, so a per-digit re-entry just reads as the number flickering.
   return (
     <span className="hero-amt">
-      ${whole}
+      {approximate ? "≈$" : "$"}
+      {whole}
       <span className="cents">.{cents}</span>
     </span>
   );

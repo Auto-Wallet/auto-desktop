@@ -162,6 +162,58 @@ describe("wallet total display", () => {
     expect(summary).toEqual({ status: "incomplete", total: null, change: null });
   });
 
+  test("shows the known subtotal when another held asset has no price", () => {
+    const summary = summarizePortfolio({
+      accountCurrent: true,
+      assets: [
+        {
+          balance: { status: "ok", wei: "1000000000000000000" },
+          decimals: 18,
+          price,
+          priceSource: "native",
+        },
+        {
+          balance: { status: "ok", wei: "1000000" },
+          decimals: 6,
+          price: undefined,
+          priceSource: "token",
+        },
+      ],
+      tokenBalanceStates: [{ status: "ok", wei: "1000000" }],
+      nativePriceStatus: "ok",
+      tokenPriceStatus: "ok",
+      defi: { enabled: false, status: "idle", totalUsd: 0 },
+    });
+
+    expect(summary).toEqual({ status: "partial", total: 3_000, change: 0 });
+  });
+
+  test("shows the known subtotal when another chain RPC fails", () => {
+    const summary = summarizePortfolio({
+      accountCurrent: true,
+      assets: [
+        {
+          balance: { status: "ok", wei: "1000000000000000000" },
+          decimals: 18,
+          price,
+          priceSource: "native",
+        },
+        {
+          balance: { status: "error", message: "RPC timed out" },
+          decimals: 18,
+          price: { usd: 1, change24h: 0 },
+          priceSource: "native",
+        },
+      ],
+      tokenBalanceStates: [{ status: "error", message: "RPC timed out" }],
+      nativePriceStatus: "ok",
+      tokenPriceStatus: "ok",
+      defi: { enabled: true, status: "error", totalUsd: 0 },
+    });
+
+    expect(summary).toEqual({ status: "partial", total: 3_000, change: 0 });
+  });
+
   test("does not report a tokens-only zero while enabled DeFi is unresolved", () => {
     const base = {
       accountCurrent: true,

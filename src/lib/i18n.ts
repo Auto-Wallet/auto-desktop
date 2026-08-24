@@ -256,6 +256,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.pricesUnavailable": "USD prices unavailable right now.",
     "wallet.totalIncomplete":
       "Some balances or prices could not be loaded. Total hidden.",
+    "wallet.totalPartial":
+      "Known-price assets only; some balances or prices are unavailable.",
     "wallet.addToken": "Add a custom token",
     "wallet.custom": "Custom",
     "wallet.network": "Network",
@@ -853,6 +855,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "wallet.watchOnly": "观察账户 —— 仅可查看余额，无法签名。",
     "wallet.pricesUnavailable": "暂时无法获取美元价格。",
     "wallet.totalIncomplete": "部分余额或价格加载失败，已隐藏总资产。",
+    "wallet.totalPartial": "仅统计有价格的已知资产，部分余额或价格暂不可用。",
     "wallet.addToken": "添加自定义代币",
     "wallet.custom": "自定义",
     "wallet.network": "网络",
