@@ -6288,6 +6288,19 @@ fn append_diagnostic_log(path: &Path, message: &str) {
     }
 }
 
+fn append_defi_diagnostic(path: &Path, message: &str) {
+    append_diagnostic_log(
+        path,
+        &format!("version={} {message}", env!("CARGO_PKG_VERSION")),
+    );
+}
+
+fn log_defi_diagnostic<R: Runtime>(app: &AppHandle<R>, message: impl AsRef<str>) {
+    if let Ok(path) = diagnostic_log_path(app) {
+        append_defi_diagnostic(&path, message.as_ref());
+    }
+}
+
 fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -6396,6 +6409,10 @@ fn write_diagnostic_log<R: Runtime>(app: AppHandle<R>, message: String) -> Resul
     Ok(())
 }
 
+fn defi_provider_status_message(zerion_available: bool, debank_available: bool) -> String {
+    format!("defi providers zerion={zerion_available} debank={debank_available}")
+}
+
 fn xstake_logo_data_uri() -> String {
     let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#0f68aa"/><path fill="#fff" d="M20 15h8l5 8 5-8h8L37 31l10 18h-8l-6-10-6 10h-8l10-18z"/></svg>"##;
     format!("data:image/svg+xml;base64,{}", B64.encode(svg.as_bytes()))
@@ -6438,7 +6455,12 @@ async fn get_defi_positions<R: Runtime>(
         return Err("invalid address".to_string());
     }
     let has_wallet_assets = has_wallet_assets_over_one_usd.unwrap_or(false);
+    let zerion_available = zerion_api_key().is_some();
     let debank_available = debank_api_key().is_some();
+    log_defi_diagnostic(
+        &app,
+        defi_provider_status_message(zerion_available, debank_available),
+    );
     let price_oracle = PriceOracleStore::from_app(&app);
     let custom = fetch_custom_defi_positions(price_oracle, address).await;
     let zerion = fetch_zerion_defi_positions(address).await;
@@ -6446,14 +6468,31 @@ async fn get_defi_positions<R: Runtime>(
         Ok(result) => result,
         Err(err) => {
             if has_wallet_assets && debank_available {
+                log_defi_diagnostic(
+                    &app,
+                    format!(
+                        "defi fallback source=DeBank address={address} reason=zerion-error error={err}"
+                    ),
+                );
                 println!(
                     "[AutoDesktop] defi fallback source=DeBank address={address} reason=zerion-error error={err}"
                 );
                 let positions = fetch_debank_defi_positions(address)
                     .await
                     .inspect_err(|e| {
+                        log_defi_diagnostic(
+                            &app,
+                            format!("defi DeBank failed address={address} error={e}"),
+                        );
                         println!("[AutoDesktop] defi DeBank failed address={address} error={e}")
                     })?;
+                log_defi_diagnostic(
+                    &app,
+                    format!(
+                        "defi response source=DeBank address={address} positions={}",
+                        positions.len()
+                    ),
+                );
                 println!(
                     "[AutoDesktop] defi response source=DeBank address={address} positions={}",
                     positions.len()
@@ -6483,6 +6522,10 @@ async fn get_defi_positions<R: Runtime>(
         let mut source = "Zerion".to_string();
         if let (Some(zerion_key), Some(debank_key)) = (zerion_api_key(), debank_api_key()) {
             let registry = DebankRegistry::from_app(&app);
+            log_defi_diagnostic(
+                &app,
+                format!("defi DeBank supplement start address={address} force={force}"),
+            );
             let supplement = tokio::time::timeout(
                 UNISWAP_V4_TIMEOUT,
                 fetch_uniswap_v4_positions(&registry, &zerion_key, &debank_key, address, force),
@@ -6491,14 +6534,27 @@ async fn get_defi_positions<R: Runtime>(
             .unwrap_or_else(|_| Err(format!("timed out after {}s", UNISWAP_V4_TIMEOUT.as_secs())));
             match supplement {
                 Ok(positions) => {
+                    let position_count = positions.len();
                     let added = merge_uniswap_v4_positions(&mut zerion_positions, positions);
+                    log_defi_diagnostic(
+                        &app,
+                        format!(
+                            "defi DeBank supplement done address={address} positions={position_count} added={added}"
+                        ),
+                    );
                     if added > 0 {
                         source = format!("Zerion + {UNISWAP_V4_PROTOCOL_NAME}");
                     }
                 }
-                Err(err) => println!(
-                    "[AutoDesktop] defi Uniswap v4 supplement failed address={address} error={err}"
-                ),
+                Err(err) => {
+                    log_defi_diagnostic(
+                        &app,
+                        format!("defi DeBank supplement failed address={address} error={err}"),
+                    );
+                    println!(
+                        "[AutoDesktop] defi Uniswap v4 supplement failed address={address} error={err}"
+                    );
+                }
             }
         }
         println!(
@@ -6510,11 +6566,28 @@ async fn get_defi_positions<R: Runtime>(
     println!(
         "[AutoDesktop] defi fallback source=DeBank address={address} reason=zerion-empty-wallet-assets-present"
     );
+    log_defi_diagnostic(
+        &app,
+        format!(
+            "defi fallback source=DeBank address={address} reason=zerion-empty-wallet-assets-present"
+        ),
+    );
     let positions = fetch_debank_defi_positions(address)
         .await
         .inspect_err(|e| {
+            log_defi_diagnostic(
+                &app,
+                format!("defi DeBank failed address={address} error={e}"),
+            );
             println!("[AutoDesktop] defi DeBank failed address={address} error={e}")
         })?;
+    log_defi_diagnostic(
+        &app,
+        format!(
+            "defi response source=DeBank address={address} positions={}",
+            positions.len()
+        ),
+    );
     println!(
         "[AutoDesktop] defi response source=DeBank address={address} positions={}",
         positions.len()
@@ -8714,6 +8787,39 @@ mod tests {
         assert_eq!(positions[0].network_name, "Arbitrum");
         assert_eq!(positions[0].balance_usd, 5.5);
         assert_eq!(positions[0].symbols, vec!["GMX"]);
+    }
+
+    #[test]
+    fn defi_provider_status_is_fit_for_the_persistent_log() {
+        assert_eq!(
+            defi_provider_status_message(true, false),
+            "defi providers zerion=true debank=false"
+        );
+        assert_eq!(
+            defi_provider_status_message(false, true),
+            "defi providers zerion=false debank=true"
+        );
+    }
+
+    #[test]
+    fn defi_events_are_appended_to_the_persistent_log() {
+        let path = std::env::temp_dir().join(format!(
+            "autodesktop-defi-log-{}-{}.log",
+            std::process::id(),
+            unix_time_ms()
+        ));
+
+        append_defi_diagnostic(&path, "defi DeBank request start");
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains(&format!(
+                "version={} defi DeBank request start",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "unexpected diagnostic log: {text}"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     /// A position states its tokens twice. `detail` is the one that carries the
