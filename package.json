@@ -10,6 +10,7 @@
     "tauri": "tauri",
     "test": "bun test src tests",
     "build:injected": "bun run scripts/build-injected.ts",
+    "build:macos:local": "bun --env-file=.env.local run scripts/build-macos-local.ts",
     "gen:tokens": "bun run scripts/fetch-token-data.ts",
     "check:icons": "bun run scripts/check-icons.ts",
     "icon:windows": "bun run scripts/make-windows-icon.ts",
