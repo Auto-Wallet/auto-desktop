@@ -2092,17 +2092,19 @@ fn open_approval_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // 420x640 prompt can land on a display the user is not looking at — they see
     // nothing, and `always_on_top` only keeps it above its own screen's windows.
     // The reuse branch above always focuses; a freshly built one must too.
-    let win = tauri::WebviewWindowBuilder::new(
-        app,
-        "approval",
-        WebviewUrl::App("index.html?view=approval".into()),
+    let win = harden_window(
+        tauri::WebviewWindowBuilder::new(
+            app,
+            "approval",
+            WebviewUrl::App("index.html?view=approval".into()),
+        )
+        .title("Confirm request — AutoDesktop")
+        .inner_size(420.0, 640.0)
+        .resizable(false)
+        .always_on_top(true)
+        .focused(true)
+        .center(),
     )
-    .title("Confirm request — AutoDesktop")
-    .inner_size(420.0, 640.0)
-    .resizable(false)
-    .always_on_top(true)
-    .focused(true)
-    .center()
     .build()?;
     place_over_shell(app, &win);
     let _ = win.set_focus();
@@ -3080,6 +3082,31 @@ fn repair_dapp_bounds_after_devtools<R: Runtime + 'static>(app: AppHandle<R>, la
     });
 }
 
+/// Chromium flags for every Windows WebView2.
+///
+/// WebView2 forbids mixing `additional_browser_args` across webviews that share
+/// a user-data directory, so the trusted shell, overlays, approval window, and
+/// untrusted dApp tabs all get this same string. AutoDesktop talks to Ledger via
+/// Rust `hidapi`; no webview needs WebHID/WebUSB. A remote page that obtained
+/// WebHID could race APDUs against a Ledger during on-device review.
+///
+/// `additional_browser_args` *replaces* wry's defaults, so the ms* flags and
+/// autoplay policy must be restated.
+const WINDOWS_WEBVIEW_BROWSER_ARGS: &str = concat!(
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,WebHID,WebUSB ",
+    "--autoplay-policy=no-user-gesture-required",
+);
+
+fn harden_webview<R: Runtime>(builder: WebviewBuilder<R>) -> WebviewBuilder<R> {
+    builder.additional_browser_args(WINDOWS_WEBVIEW_BROWSER_ARGS)
+}
+
+fn harden_window<'a, R: Runtime, M: Manager<R>>(
+    builder: tauri::WebviewWindowBuilder<'a, R, M>,
+) -> tauri::WebviewWindowBuilder<'a, R, M> {
+    builder.additional_browser_args(WINDOWS_WEBVIEW_BROWSER_ARGS)
+}
+
 /// Create a tab webview (remote, untrusted) as a child of the main window, with
 /// the EIP-1193 provider injected. capabilities/dapp.json (`webviews: ["dapp-*"]`)
 /// grants it ONLY allow-wallet-request.
@@ -3101,31 +3128,33 @@ fn create_dapp_webview<R: Runtime>(
     let window = app
         .get_window("main")
         .ok_or("create_dapp_webview: main window not found")?;
-    let builder = WebviewBuilder::new(label, WebviewUrl::External(url))
-        .on_page_load(|webview, payload| {
-            println!(
-                "[AutoDesktop] dapp page-load {:?}  url={}",
-                payload.event(),
-                payload.url()
-            );
-            if payload.event() == PageLoadEvent::Finished {
-                // It has a page to draw now, so it may cover the shell.
-                mark_dapp_loaded(webview.label());
-                let should_show =
-                    active_dapp_label().lock().unwrap().as_deref() == Some(webview.label());
-                if should_show {
-                    let _ = webview.show();
-                }
-                let _ = webview.app_handle().emit(
-                    "dapp-load-finished",
-                    DappNavigationEvent {
-                        label: webview.label().to_string(),
-                        url: payload.url().to_string(),
-                    },
+    let builder = harden_webview(
+        WebviewBuilder::new(label, WebviewUrl::External(url))
+            .on_page_load(|webview, payload| {
+                println!(
+                    "[AutoDesktop] dapp page-load {:?}  url={}",
+                    payload.event(),
+                    payload.url()
                 );
-            }
-        })
-        .initialization_script(INPAGE_PROVIDER);
+                if payload.event() == PageLoadEvent::Finished {
+                    // It has a page to draw now, so it may cover the shell.
+                    mark_dapp_loaded(webview.label());
+                    let should_show =
+                        active_dapp_label().lock().unwrap().as_deref() == Some(webview.label());
+                    if should_show {
+                        let _ = webview.show();
+                    }
+                    let _ = webview.app_handle().emit(
+                        "dapp-load-finished",
+                        DappNavigationEvent {
+                            label: webview.label().to_string(),
+                            url: payload.url().to_string(),
+                        },
+                    );
+                }
+            })
+            .initialization_script(INPAGE_PROVIDER),
+    );
     window
         .add_child(
             builder,
@@ -3276,11 +3305,13 @@ async fn sync_toast_overlay<R: Runtime>(
             wv
         }
         None => {
-            let builder = WebviewBuilder::new(
-                LABEL,
-                WebviewUrl::App("index.html?view=toast-overlay".into()),
-            )
-            .transparent(true);
+            let builder = harden_webview(
+                WebviewBuilder::new(
+                    LABEL,
+                    WebviewUrl::App("index.html?view=toast-overlay".into()),
+                )
+                .transparent(true),
+            );
             window
                 .add_child(builder, LogicalPosition::new(x, y), LogicalSize::new(w, h))
                 .map_err(|e| e.to_string())?
@@ -3344,11 +3375,13 @@ async fn sync_menu_overlay<R: Runtime>(
             wv
         }
         None => {
-            let builder = WebviewBuilder::new(
-                LABEL,
-                WebviewUrl::App("index.html?view=menu-overlay".into()),
-            )
-            .transparent(true);
+            let builder = harden_webview(
+                WebviewBuilder::new(
+                    LABEL,
+                    WebviewUrl::App("index.html?view=menu-overlay".into()),
+                )
+                .transparent(true),
+            );
             window
                 .add_child(builder, LogicalPosition::new(x, y), LogicalSize::new(w, h))
                 .map_err(|e| e.to_string())?
@@ -7876,7 +7909,12 @@ pub fn run() {
             let shell_size = fit_startup_window(&window, startup_size, should_maximize);
 
             // Shell webview (local, trusted): our React UI, fills the whole window.
-            let shell_builder = WebviewBuilder::new("shell", WebviewUrl::App("index.html".into()));
+            // Same WebView2 args as dApp tabs — WebView2 cannot mix browser args
+            // in one user-data directory.
+            let shell_builder = harden_webview(WebviewBuilder::new(
+                "shell",
+                WebviewUrl::App("index.html".into()),
+            ));
             let shell =
                 window.add_child(shell_builder, LogicalPosition::new(0.0, 0.0), shell_size)?;
             window.set_always_on_top(true)?;
@@ -8252,6 +8290,61 @@ mod tests {
         let wallet = derive_wallet(&signing_key);
         assert_eq!(wallet.address, "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
         assert_eq!(wallet.public_key.len(), 2 + 130);
+    }
+
+    /// WebView2 on Windows exposes Chromium WebHID. A dApp page that obtained it
+    /// could race APDUs against a Ledger during on-device review. These flags
+    /// are how we turn that API off; deleting WebHID from the string fails this.
+    #[test]
+    fn windows_webview_args_disable_webhid() {
+        let args = WINDOWS_WEBVIEW_BROWSER_ARGS;
+        assert!(
+            args.split(|c: char| c == '=' || c == ',' || c == ' ')
+                .any(|f| f == "WebHID"),
+            "WebHID must be in --disable-features; got {args}"
+        );
+        assert!(
+            args.split(|c: char| c == '=' || c == ',' || c == ' ')
+                .any(|f| f == "WebUSB"),
+            "WebUSB must be in --disable-features; got {args}"
+        );
+        // additional_browser_args replaces wry's defaults.
+        assert!(args.contains("msWebOOUI"), "{args}");
+        assert!(args.contains("msPdfOOUI"), "{args}");
+        assert!(args.contains("msSmartScreenProtection"), "{args}");
+        assert!(
+            args.contains("autoplay-policy=no-user-gesture-required"),
+            "{args}"
+        );
+    }
+
+    /// WebView2 refuses two webviews in the same user-data dir with different
+    /// additional_browser_args (blank child window). Every production builder
+    /// therefore goes through harden_webview / harden_window.
+    #[test]
+    fn every_production_webview_gets_the_windows_hid_flags() {
+        let src = include_str!("lib.rs");
+        let production = src
+            .split("mod tests {")
+            .next()
+            .expect("lib.rs has a tests module");
+        let builders = production.matches("WebviewBuilder::new").count();
+        let windows = production.matches("WebviewWindowBuilder::new").count();
+        let hardened = production.matches("harden_webview(").count();
+        let window_hardened = production.matches("harden_window(").count();
+        assert_eq!(
+            builders, hardened,
+            "each WebviewBuilder::new must be passed through harden_webview"
+        );
+        assert_eq!(
+            windows, window_hardened,
+            "each WebviewWindowBuilder::new must be passed through harden_window"
+        );
+        assert!(
+            builders >= 4,
+            "expected shell + dapp + toast + menu builders, found {builders}"
+        );
+        assert!(windows >= 1, "expected the approval window builder");
     }
 
     /// The blank-rectangle bug: a child webview renders over the shell, so one
