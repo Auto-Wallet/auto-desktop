@@ -128,6 +128,67 @@ describe("OKX Dual Investment table", () => {
     expect(html).toContain("($79.16)");
   });
 
+  test("shows one USD total for all realized yield next to the per-currency breakdown", () => {
+    const btcOrder = { ...settledOrder, yieldAmount: "0.00508687" };
+    const usdcOrder: OkxDcdOrder = {
+      ...settledOrder,
+      orderId: "usdc-yield",
+      optionType: "put",
+      principal: "60462",
+      principalCurrency: "USDC",
+      yieldAmount: "164.80074235",
+      yieldCurrency: "USDC",
+      settledAmount: "60626.80074235",
+      settledCurrency: "USDC",
+    };
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[btcOrder, usdcOrder]} />);
+
+    expect(html).toContain('class="okx-order-yield-summary-total tnum">+$490.97<');
+    expect(html).toContain("+0.005087 BTC");
+    expect(html).toContain("+164.80 USDC");
+    expect(html).toContain("By currency");
+  });
+
+  test("shows a negative USD total for a net loss", () => {
+    const redeemedOrder: OkxDcdOrder = {
+      ...settledOrder,
+      orderId: "redeemed-btc-penalty",
+      state: "redeemed",
+      settledAmount: "0.9366",
+      settledCurrency: "BTC",
+    };
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[redeemedOrder]} />);
+
+    expect(html).toContain('class="okx-order-yield-summary-total tnum down">-$641.21<');
+  });
+
+  test("shows a dash for the USD total when nothing has been realized", () => {
+    const currentOrder: OkxDcdOrder = {
+      ...settledOrder,
+      state: "live",
+      yieldAmount: null,
+      yieldCurrency: null,
+      settledAmount: null,
+      settledCurrency: null,
+      settlementPrice: null,
+      settledAt: null,
+    };
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[currentOrder]} />);
+
+    expect(html).toContain('class="okx-order-yield-summary-total okx-order-empty">—<');
+    expect(html).not.toContain("By currency");
+  });
+
+  test("keeps the order tabs on one line however wide the yield summary gets", () => {
+    const css = readFileSync(new URL("./OkxPage.css", import.meta.url), "utf8");
+
+    expect(css).toContain(".okx-segmented {\n  flex: none;");
+    expect(css).toContain(".okx-segmented button {\n  white-space: nowrap;");
+    expect(css).toContain(".okx-order-head-actions {\n  display: flex;\n  flex-wrap: wrap;");
+    expect(css).toContain(".okx-order-yield-summary {\n  flex: 1 1 0;\n  min-width: min-content;\n  max-width: max-content;");
+    expect(css).toContain(".okx-order-yield-summary-breakdown {\n  min-width: min-content;");
+  });
+
   test("formats stablecoin totals to two decimals and other totals to six", () => {
     const btcOrder = { ...settledOrder, yieldAmount: "0.00508687" };
     const usdcOrder: OkxDcdOrder = {

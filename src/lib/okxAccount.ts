@@ -499,6 +499,19 @@ export function sumOkxDcdYieldByCurrency(
     }));
 }
 
+export function sumOkxDcdYieldUsd(orders: OkxDcdOrder[]): string | null {
+  const totals = sumOkxDcdYieldByCurrency(orders);
+  if (totals.length === 0) return null;
+  let totalUsd: string | null = null;
+  for (const total of totals) {
+    if (total.usdValue === null) return null;
+    totalUsd = totalUsd === null
+      ? total.usdValue
+      : addDecimalStrings(totalUsd, total.usdValue, "Dual Investment realized USD yield");
+  }
+  return totalUsd;
+}
+
 function okxDcdPrincipalUsdValue(order: OkxDcdOrder): string {
   if (isUsdStablecoin(order.principalCurrency)) return order.principal;
   const [baseCurrency, quoteCurrency] = order.productId.split("-");

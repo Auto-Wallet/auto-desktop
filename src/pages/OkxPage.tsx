@@ -19,6 +19,7 @@ import {
   mergeOkxPortfolioAssets,
   saveOkxCredentials,
   sumOkxDcdYieldByCurrency,
+  sumOkxDcdYieldUsd,
   type OkxAssets,
   type OkxConnectionStatus,
   type OkxCredentialsInput,
@@ -81,6 +82,13 @@ function formatEstimatedUsd(value: string): string {
   const number = Number(value);
   if (Number.isFinite(number) && number < 0) return `(-$${formatMoney((-number).toString())})`;
   return `($${formatMoney(value)})`;
+}
+
+function formatSignedUsd(value: string): string {
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new Error(`Invalid USD amount: ${value}`);
+  if (number < 0) return `-$${formatMoney((-number).toString())}`;
+  return `${number > 0 ? "+" : ""}$${formatMoney(value)}`;
 }
 
 function formatYield(value: string): string {
@@ -408,25 +416,39 @@ function Coin({ currency }: { currency: string }) {
 export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
   const { t } = useT();
   const totals = sumOkxDcdYieldByCurrency(orders);
+  const totalUsd = sumOkxDcdYieldUsd(orders);
   const averageApr = calculateOkxDcdRealizedApr(orders);
   return (
     <div className="okx-order-yield-summary">
       <span className="okx-order-yield-summary-icon"><Icon name="activity" size={16} /></span>
-      <div>
+      <div className="okx-order-yield-summary-usd" title={t("okx.estimatedUsd")}>
         <span className="okx-order-yield-summary-label">{t("okx.totalYield")}</span>
-        <div className="okx-order-yield-summary-values">
-          {totals.length === 0
-            ? <strong className="okx-order-empty">—</strong>
-            : totals.map((total) => (
-              <strong className="tnum" key={total.currency}>
-                {signedAmount(total.amount, formatCurrencyAmount(total.amount, total.currency))} {total.currency}
-                {!isUsdStablecoin(total.currency) && total.usdValue !== null && (
-                  <small title={t("okx.estimatedUsd")}>{formatEstimatedUsd(total.usdValue)}</small>
-                )}
-              </strong>
-            ))}
-          </div>
+        {totalUsd === null
+          ? <strong className="okx-order-yield-summary-total okx-order-empty">—</strong>
+          : (
+            <strong className={`okx-order-yield-summary-total tnum${Number(totalUsd) < 0 ? " down" : ""}`}>
+              {formatSignedUsd(totalUsd)}
+            </strong>
+          )}
       </div>
+      {totals.length > 0 && (
+        <>
+          <span className="okx-order-yield-summary-divider" aria-hidden="true" />
+          <div className="okx-order-yield-summary-breakdown">
+            <span className="okx-order-yield-summary-label">{t("okx.yieldBreakdown")}</span>
+            <div className="okx-order-yield-summary-values">
+              {totals.map((total) => (
+                <strong className="tnum" key={total.currency}>
+                  {signedAmount(total.amount, formatCurrencyAmount(total.amount, total.currency))} {total.currency}
+                  {!isUsdStablecoin(total.currency) && total.usdValue !== null && (
+                    <small title={t("okx.estimatedUsd")}>{formatEstimatedUsd(total.usdValue)}</small>
+                  )}
+                </strong>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
       <span className="okx-order-yield-summary-divider" aria-hidden="true" />
       <div className="okx-order-yield-summary-average" title={t("okx.averageAprHint")}>
         <span className="okx-order-yield-summary-label">{t("okx.averageApr")}</span>

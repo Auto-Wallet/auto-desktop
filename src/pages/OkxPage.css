@@ -384,6 +384,7 @@
 }
 
 .okx-segmented {
+  flex: none;
   display: flex;
   gap: 3px;
   padding: 3px;
@@ -392,6 +393,7 @@
 }
 
 .okx-segmented button {
+  white-space: nowrap;
   padding: 7px 13px;
   border-radius: 8px;
   color: var(--ink-3);
@@ -408,6 +410,8 @@
 
 .okx-order-head-actions {
   display: flex;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
@@ -415,6 +419,9 @@
 }
 
 .okx-order-yield-summary {
+  flex: 1 1 0;
+  min-width: min-content;
+  max-width: max-content;
   min-height: 48px;
   padding: 7px 12px 7px 9px;
   display: flex;
@@ -443,6 +450,23 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+.okx-order-yield-summary-usd {
+  flex: none;
+  padding: 2px 4px 2px 0;
+}
+.okx-order-yield-summary-total {
+  display: block;
+  color: var(--up);
+  font-size: 15px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.okx-order-yield-summary-total.down { color: var(--down); }
+.okx-order-yield-summary-total.okx-order-empty { color: var(--ink-4); }
+.okx-order-yield-summary-breakdown {
+  min-width: min-content;
+  flex: 0 1 auto;
+}
 .okx-order-yield-summary-values {
   display: flex;
   align-items: baseline;
@@ -451,7 +475,7 @@
 }
 .okx-order-yield-summary-values > strong {
   color: var(--up);
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
 }
 .okx-order-yield-summary-values small {
@@ -787,7 +811,7 @@
   .okx-header { align-items: flex-start; flex-direction: column; gap: 18px; }
   .okx-header-actions { width: 100%; }
   .okx-section-head { align-items: flex-start; flex-direction: column; }
-  .okx-order-head-actions { width: 100%; justify-content: space-between; }
+  .okx-order-head-actions { width: 100%; flex: none; justify-content: space-between; }
   .okx-connected { flex: 1; }
   .okx-balance-hero { min-height: 190px; padding: 28px 24px; align-items: stretch; flex-direction: column; }
   .okx-account-overview { width: 100%; }

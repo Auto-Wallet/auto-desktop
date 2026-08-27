@@ -9,6 +9,7 @@ import {
   parseOkxDcdOrders,
   parseOkxIndexPrices,
   sumOkxDcdYieldByCurrency,
+  sumOkxDcdYieldUsd,
   type OkxAssets,
 } from "./okxAccount";
 
@@ -181,6 +182,97 @@ test("all-order yield totals stay exact and keep currencies separate", () => {
     { currency: "BTC", amount: "0.00129121", usdValue: "81.6490665377571751" },
     { currency: "USDC", amount: "12.5", usdValue: "12.50" },
   ]);
+});
+
+test("sums realized yield across currencies into one USD total", () => {
+  const orders = parseOkxDcdOrders({
+    data: [
+      {
+        ordId: "btc",
+        productId: "BTC-USDC-260817-63750-C",
+        state: "SETTLED",
+        strike: "63750",
+        notionalSz: "0.5",
+        annualizedYield: "0.118",
+        yieldSz: "0.001",
+        yieldCcy: "BTC",
+        settlePx: "64000",
+        settleCcy: "BTC",
+        expTime: "1786982400000",
+        settleTime: "1786982400000",
+        cTime: "1786896000000",
+        uTime: "1786982400000",
+      },
+      {
+        ordId: "usdc",
+        productId: "BTC-USDC-260814-60000-P",
+        state: "REDEEMED",
+        strike: "60000",
+        notionalSz: "1000",
+        annualizedYield: "0.15",
+        yieldSz: "12.50",
+        yieldCcy: "USDC",
+        expTime: "1787068800000",
+        settleTime: "1786723200000",
+        cTime: "1786636800000",
+        uTime: "1786723200000",
+      },
+      {
+        ordId: "live",
+        productId: "BTC-USDC-260818-63750-C",
+        state: "LIVE",
+        strike: "63750",
+        notionalSz: "0.9466",
+        annualizedYield: "0.7354",
+        expTime: "1787068800000",
+        settleTime: "",
+        cTime: "1786982400000",
+        uTime: "1787025600000",
+      },
+    ],
+  });
+
+  expect(sumOkxDcdYieldUsd(orders)).toBe("76.5");
+  expect(sumOkxDcdYieldUsd([])).toBeNull();
+});
+
+test("USD total is unknown when any realized yield cannot be priced", () => {
+  const [priced, unpriced] = parseOkxDcdOrders({
+    data: [
+      {
+        ordId: "usdc",
+        productId: "BTC-USDC-260814-60000-P",
+        state: "REDEEMED",
+        strike: "60000",
+        notionalSz: "1000",
+        annualizedYield: "0.15",
+        yieldSz: "12.50",
+        yieldCcy: "USDC",
+        expTime: "1787068800000",
+        settleTime: "1786723200000",
+        cTime: "1786636800000",
+        uTime: "1786723200000",
+      },
+      {
+        ordId: "eth-no-price",
+        productId: "ETH-USDC-260817-3000-C",
+        state: "SETTLED",
+        strike: "3000",
+        notionalSz: "2",
+        annualizedYield: "0.2",
+        yieldSz: "0.01",
+        yieldCcy: "ETH",
+        settleCcy: "ETH",
+        expTime: "1786982400000",
+        settleTime: "1786982400000",
+        cTime: "1786896000000",
+        uTime: "1786982400000",
+      },
+    ],
+  });
+
+  expect(sumOkxDcdYieldUsd([priced])).toBe("12.50");
+  expect(sumOkxDcdYieldUsd([priced, unpriced])).toBeNull();
 });
 
 test("realized APR uses actual yield and held time instead of the quoted APR", () => {
