@@ -546,9 +546,7 @@ export function calculateOkxDcdRealizedApr(orders: OkxDcdOrder[]): string | null
     const realizedYield = getOkxDcdRealizedYield(order);
     if (realizedYield === null) continue;
     const yieldUsd = estimateOkxDcdOrderYieldUsd(order);
-    if (yieldUsd === null) {
-      throw new Error(`Cannot value ${realizedYield.currency} yield for ${order.orderId}`);
-    }
+    if (yieldUsd === null) return null;
     const endedAt = okxDcdRealizedAt(order);
     const heldMilliseconds = endedAt - order.createdAt;
     if (heldMilliseconds <= 0) {

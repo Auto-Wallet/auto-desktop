@@ -128,6 +128,29 @@ describe("OKX Dual Investment table", () => {
     expect(html).toContain("($79.16)");
   });
 
+  test("keeps the yield summary visible when realized crypto yield has no settlement price", () => {
+    const unpricedEthOrder: OkxDcdOrder = {
+      ...settledOrder,
+      orderId: "11052423",
+      productId: "ETH-USDC-260817-3000-C",
+      strike: "3000",
+      principal: "2",
+      principalCurrency: "ETH",
+      yieldAmount: "0.01",
+      yieldCurrency: "ETH",
+      settledAmount: null,
+      settledCurrency: null,
+      settlementPrice: null,
+    };
+
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[unpricedEthOrder]} />);
+
+    expect(html).toContain("okx-order-yield-summary");
+    expect(html).toContain("+0.010000 ETH");
+    const averageStart = html.indexOf('class="okx-order-yield-summary-average"');
+    expect(html.slice(averageStart)).toContain('<strong class="tnum">—</strong>');
+  });
+
   test("shows one USD total for all realized yield next to the per-currency breakdown", () => {
     const btcOrder = { ...settledOrder, yieldAmount: "0.00508687" };
     const usdcOrder: OkxDcdOrder = {
