@@ -456,27 +456,37 @@ export function getOkxDcdRealizedYield(order: OkxDcdOrder): { amount: string; cu
   return { amount: order.yieldAmount, currency: order.yieldCurrency };
 }
 
-export function estimateOkxDcdOrderYieldUsd(order: OkxDcdOrder): string | null {
+export function estimateOkxDcdOrderYieldUsd(
+  order: OkxDcdOrder,
+  indexPrices: OkxIndexPrice[] | null,
+): string | null {
   const realizedYield = getOkxDcdRealizedYield(order);
   if (realizedYield === null) return null;
   if (isUsdStablecoin(realizedYield.currency)) return realizedYield.amount;
-  if (order.settlementPrice === null) return null;
   const [baseCurrency, quoteCurrency] = order.productId.split("-");
   if (baseCurrency === undefined || quoteCurrency === undefined) {
     throw new Error(`OKX Dual Investment product ${order.productId} has no currency pair`);
   }
   if (realizedYield.currency !== baseCurrency || !isUsdStablecoin(quoteCurrency)) return null;
-  return multiplyDecimalStrings(realizedYield.amount, order.settlementPrice, `${realizedYield.currency} yield USD value`);
+  let price = order.settlementPrice;
+  if (price === null && indexPrices !== null) {
+    const instrumentId = getOkxDcdIndexInstrumentId(order.productId);
+    const indexPrice = indexPrices.find((candidate) => candidate.instrumentId === instrumentId);
+    if (indexPrice !== undefined) price = indexPrice.price;
+  }
+  if (price === null) return null;
+  return multiplyDecimalStrings(realizedYield.amount, price, `${realizedYield.currency} yield USD value`);
 }
 
 export function sumOkxDcdYieldByCurrency(
   orders: OkxDcdOrder[],
+  indexPrices: OkxIndexPrice[] | null,
 ): { currency: string; amount: string; usdValue: string | null }[] {
   const totals = new Map<string, { amount: string; usdValue: string | null; allPriced: boolean }>();
   for (const order of orders) {
     const realizedYield = getOkxDcdRealizedYield(order);
     if (realizedYield === null) continue;
-    const usdValue = estimateOkxDcdOrderYieldUsd(order);
+    const usdValue = estimateOkxDcdOrderYieldUsd(order, indexPrices);
     const existing = totals.get(realizedYield.currency);
     totals.set(realizedYield.currency, {
       amount: existing === undefined
@@ -499,8 +509,11 @@ export function sumOkxDcdYieldByCurrency(
     }));
 }
 
-export function sumOkxDcdYieldUsd(orders: OkxDcdOrder[]): string | null {
-  const totals = sumOkxDcdYieldByCurrency(orders);
+export function sumOkxDcdYieldUsd(
+  orders: OkxDcdOrder[],
+  indexPrices: OkxIndexPrice[] | null,
+): string | null {
+  const totals = sumOkxDcdYieldByCurrency(orders, indexPrices);
   if (totals.length === 0) return null;
   let totalUsd: string | null = null;
   for (const total of totals) {
@@ -537,7 +550,10 @@ function okxDcdRealizedAt(order: OkxDcdOrder): number {
   throw new Error(`OKX Dual Investment order ${order.orderId} is not a realized order`);
 }
 
-export function calculateOkxDcdRealizedApr(orders: OkxDcdOrder[]): string | null {
+export function calculateOkxDcdRealizedApr(
+  orders: OkxDcdOrder[],
+  indexPrices: OkxIndexPrice[] | null,
+): string | null {
   let totalYieldUsd = "0";
   let totalPrincipalTime = "0";
   let realizedOrderCount = 0;
@@ -545,7 +561,7 @@ export function calculateOkxDcdRealizedApr(orders: OkxDcdOrder[]): string | null
   for (const order of orders) {
     const realizedYield = getOkxDcdRealizedYield(order);
     if (realizedYield === null) continue;
-    const yieldUsd = estimateOkxDcdOrderYieldUsd(order);
+    const yieldUsd = estimateOkxDcdOrderYieldUsd(order, indexPrices);
     if (yieldUsd === null) return null;
     const endedAt = okxDcdRealizedAt(order);
     const heldMilliseconds = endedAt - order.createdAt;

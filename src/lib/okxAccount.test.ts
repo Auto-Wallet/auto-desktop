@@ -178,7 +178,7 @@ test("all-order yield totals stay exact and keep currencies separate", () => {
     ],
   });
 
-  expect(sumOkxDcdYieldByCurrency(orders)).toEqual([
+  expect(sumOkxDcdYieldByCurrency(orders, null)).toEqual([
     { currency: "BTC", amount: "0.00129121", usdValue: "81.6490665377571751" },
     { currency: "USDC", amount: "12.5", usdValue: "12.50" },
   ]);
@@ -232,8 +232,8 @@ test("sums realized yield across currencies into one USD total", () => {
     ],
   });
 
-  expect(sumOkxDcdYieldUsd(orders)).toBe("76.5");
-  expect(sumOkxDcdYieldUsd([])).toBeNull();
+  expect(sumOkxDcdYieldUsd(orders, null)).toBe("76.5");
+  expect(sumOkxDcdYieldUsd([], null)).toBeNull();
 });
 
 test("USD total is unknown when any realized yield cannot be priced", () => {
@@ -271,8 +271,8 @@ test("USD total is unknown when any realized yield cannot be priced", () => {
     ],
   });
 
-  expect(sumOkxDcdYieldUsd([priced])).toBe("12.50");
-  expect(sumOkxDcdYieldUsd([priced, unpriced])).toBeNull();
+  expect(sumOkxDcdYieldUsd([priced], null)).toBe("12.50");
+  expect(sumOkxDcdYieldUsd([priced, unpriced], null)).toBeNull();
 });
 
 test("realized APR uses actual yield and held time instead of the quoted APR", () => {
@@ -294,9 +294,9 @@ test("realized APR uses actual yield and held time instead of the quoted APR", (
     }],
   });
 
-  expect(calculateOkxDcdRealizedApr([order])).toBe("0.1");
-  expect(calculateOkxDcdRealizedApr([{ ...order, state: "live", annualizedYield: "9.99" }, order])).toBe("0.1");
-  expect(calculateOkxDcdRealizedApr([])).toBeNull();
+  expect(calculateOkxDcdRealizedApr([order], null)).toBe("0.1");
+  expect(calculateOkxDcdRealizedApr([{ ...order, state: "live", annualizedYield: "9.99" }, order], null)).toBe("0.1");
+  expect(calculateOkxDcdRealizedApr([], null)).toBeNull();
 });
 
 test("realized APR includes the net result of an early redemption", () => {
@@ -320,8 +320,8 @@ test("realized APR includes the net result of an early redemption", () => {
     }],
   });
 
-  expect(calculateOkxDcdRealizedApr([order])).toBe("-0.365");
-  expect(sumOkxDcdYieldByCurrency([order])).toEqual([
+  expect(calculateOkxDcdRealizedApr([order], null)).toBe("-0.365");
+  expect(sumOkxDcdYieldByCurrency([order], null)).toEqual([
     { currency: "USDC", amount: "-10", usdValue: "-10" },
   ]);
 });
@@ -347,7 +347,7 @@ test("redeemed APR uses the actual redemption time instead of the scheduled expi
     }],
   });
 
-  expect(calculateOkxDcdRealizedApr([order])).toBe("0.365");
+  expect(calculateOkxDcdRealizedApr([order], null)).toBe("0.365");
 });
 
 test("an empty OKX available amount does not crash portfolio rendering", () => {

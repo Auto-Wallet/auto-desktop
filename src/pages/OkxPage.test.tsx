@@ -69,6 +69,7 @@ describe("OKX Dual Investment table", () => {
     const html = renderToStaticMarkup(
       <OrderHeadActions
         allOrders={[currentOrder, settledOrder]}
+        indexPrices={null}
         showAllOrders={false}
         onShowAllOrders={() => {}}
       />,
@@ -118,7 +119,7 @@ describe("OKX Dual Investment table", () => {
   });
 
   test("renders the all-order yield summary above the table", () => {
-    const html = renderToStaticMarkup(<OrderYieldSummary orders={[settledOrder]} />);
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[settledOrder]} indexPrices={null} />);
 
     expect(html).toContain("okx-order-yield-summary");
     expect(html).toContain("Total yield");
@@ -128,7 +129,7 @@ describe("OKX Dual Investment table", () => {
     expect(html).toContain("($79.16)");
   });
 
-  test("keeps the yield summary visible when realized crypto yield has no settlement price", () => {
+  test("uses the current index price when realized crypto yield has no settlement price", () => {
     const unpricedEthOrder: OkxDcdOrder = {
       ...settledOrder,
       orderId: "11052423",
@@ -142,13 +143,20 @@ describe("OKX Dual Investment table", () => {
       settledCurrency: null,
       settlementPrice: null,
     };
+    const ethUsdcIndexPrice: OkxIndexPrice = {
+      instrumentId: "ETH-USDC",
+      price: "2412.38",
+      updatedAt: 1787100000123,
+    };
 
-    const html = renderToStaticMarkup(<OrderYieldSummary orders={[unpricedEthOrder]} />);
+    const html = renderToStaticMarkup(
+      <OrderYieldSummary orders={[unpricedEthOrder]} indexPrices={[ethUsdcIndexPrice]} />,
+    );
 
     expect(html).toContain("okx-order-yield-summary");
     expect(html).toContain("+0.010000 ETH");
-    const averageStart = html.indexOf('class="okx-order-yield-summary-average"');
-    expect(html.slice(averageStart)).toContain('<strong class="tnum">—</strong>');
+    expect(html).toContain("($24.12)");
+    expect(html).toContain("146.75%");
   });
 
   test("shows one USD total for all realized yield next to the per-currency breakdown", () => {
@@ -164,7 +172,7 @@ describe("OKX Dual Investment table", () => {
       settledAmount: "60626.80074235",
       settledCurrency: "USDC",
     };
-    const html = renderToStaticMarkup(<OrderYieldSummary orders={[btcOrder, usdcOrder]} />);
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[btcOrder, usdcOrder]} indexPrices={null} />);
 
     expect(html).toContain('class="okx-order-yield-summary-total tnum">+$490.97<');
     expect(html).toContain("+0.005087 BTC");
@@ -180,7 +188,7 @@ describe("OKX Dual Investment table", () => {
       settledAmount: "0.9366",
       settledCurrency: "BTC",
     };
-    const html = renderToStaticMarkup(<OrderYieldSummary orders={[redeemedOrder]} />);
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[redeemedOrder]} indexPrices={null} />);
 
     expect(html).toContain('class="okx-order-yield-summary-total tnum down">-$641.21<');
   });
@@ -196,7 +204,7 @@ describe("OKX Dual Investment table", () => {
       settlementPrice: null,
       settledAt: null,
     };
-    const html = renderToStaticMarkup(<OrderYieldSummary orders={[currentOrder]} />);
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[currentOrder]} indexPrices={null} />);
 
     expect(html).toContain('class="okx-order-yield-summary-total okx-order-empty">—<');
     expect(html).not.toContain("By currency");
@@ -225,7 +233,7 @@ describe("OKX Dual Investment table", () => {
       settledAmount: "60626.80074235",
       settledCurrency: "USDC",
     };
-    const html = renderToStaticMarkup(<OrderYieldSummary orders={[btcOrder, usdcOrder]} />);
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[btcOrder, usdcOrder]} indexPrices={null} />);
 
     expect(html).toContain("+0.005087 BTC");
     expect(html).toContain("+164.80 USDC");
@@ -265,7 +273,7 @@ describe("OKX Dual Investment table", () => {
     const listHtml = renderToStaticMarkup(
       <OrderList orders={[redeemedOrder]} indexPrices={[btcUsdcIndexPrice]} priceError={null} />,
     );
-    const summaryHtml = renderToStaticMarkup(<OrderYieldSummary orders={[redeemedOrder]} />);
+    const summaryHtml = renderToStaticMarkup(<OrderYieldSummary orders={[redeemedOrder]} indexPrices={null} />);
 
     expect(listHtml).toContain("-10.00 USDC");
     expect(listHtml).not.toContain("+-10.00 USDC");
@@ -324,7 +332,7 @@ describe("OKX Dual Investment table", () => {
       settledCurrency: "BTC",
     };
 
-    const html = renderToStaticMarkup(<OrderYieldSummary orders={[redeemedOrder]} />);
+    const html = renderToStaticMarkup(<OrderYieldSummary orders={[redeemedOrder]} indexPrices={null} />);
 
     expect(html).toContain("-0.010000 BTC");
     expect(html).toContain("(-$641.21)");

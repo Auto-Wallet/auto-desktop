@@ -285,6 +285,7 @@ export default function OkxPage() {
           </div>
           <OrderHeadActions
             allOrders={ordersError === null ? orders : null}
+            indexPrices={indexPrices}
             showAllOrders={showAllOrders}
             onShowAllOrders={setShowAllOrders}
           />
@@ -413,11 +414,17 @@ function Coin({ currency }: { currency: string }) {
   );
 }
 
-export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
+export function OrderYieldSummary({
+  orders,
+  indexPrices,
+}: {
+  orders: OkxDcdOrder[];
+  indexPrices: OkxIndexPrice[] | null;
+}) {
   const { t } = useT();
-  const totals = sumOkxDcdYieldByCurrency(orders);
-  const totalUsd = sumOkxDcdYieldUsd(orders);
-  const averageApr = calculateOkxDcdRealizedApr(orders);
+  const totals = sumOkxDcdYieldByCurrency(orders, indexPrices);
+  const totalUsd = sumOkxDcdYieldUsd(orders, indexPrices);
+  const averageApr = calculateOkxDcdRealizedApr(orders, indexPrices);
   return (
     <div className="okx-order-yield-summary">
       <span className="okx-order-yield-summary-icon"><Icon name="activity" size={16} /></span>
@@ -460,17 +467,19 @@ export function OrderYieldSummary({ orders }: { orders: OkxDcdOrder[] }) {
 
 export function OrderHeadActions({
   allOrders,
+  indexPrices,
   showAllOrders,
   onShowAllOrders,
 }: {
   allOrders: OkxDcdOrder[] | null;
+  indexPrices: OkxIndexPrice[] | null;
   showAllOrders: boolean;
   onShowAllOrders: (showAll: boolean) => void;
 }) {
   const { t } = useT();
   return (
     <div className="okx-order-head-actions">
-      {allOrders !== null && <OrderYieldSummary orders={allOrders} />}
+      {allOrders !== null && <OrderYieldSummary orders={allOrders} indexPrices={indexPrices} />}
       <div className="okx-segmented">
         <button className={!showAllOrders ? "on" : ""} onClick={() => onShowAllOrders(false)}>{t("okx.current")}</button>
         <button className={showAllOrders ? "on" : ""} onClick={() => onShowAllOrders(true)}>{t("okx.all")}</button>
@@ -511,7 +520,7 @@ export function OrderList({
             throw new Error(`OKX Dual Investment product ${order.productId} has no currency pair`);
           }
           const realizedYield = getOkxDcdRealizedYield(order);
-          const yieldUsdValue = estimateOkxDcdOrderYieldUsd(order);
+          const yieldUsdValue = estimateOkxDcdOrderYieldUsd(order, indexPrices);
           const indexInstrumentId = getOkxDcdIndexInstrumentId(order.productId);
           const indexPrice = indexPrices?.find((price) => price.instrumentId === indexInstrumentId);
           const eventTime = order.state === "redeemed" || order.state === "rejected"
