@@ -51,6 +51,7 @@
     "allow-okx-get-assets",
     "allow-okx-get-dcd-index-prices",
     "allow-okx-get-dcd-orders",
+    "allow-okx-save-dcd-csv",
     "allow-get-chains",
     "allow-add-chain",
     "allow-update-chain",

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import "./OkxPage.css";
+import { saveOkxDcdCsv } from "../lib/okxCsv";
 import { askConfirm } from "../lib/confirm";
 import { Icon } from "../lib/icons";
 import { useT } from "../lib/i18n";
@@ -476,7 +477,24 @@ export function OrderHeadActions({
   showAllOrders: boolean;
   onShowAllOrders: (showAll: boolean) => void;
 }) {
-  const { t } = useT();
+  const { t, lang } = useT();
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  async function exportCsv() {
+    if (allOrders === null || allOrders.length === 0 || exporting) return;
+    setExporting(true);
+    setExportMessage(null);
+    setExportError(null);
+    try {
+      const path = await saveOkxDcdCsv(allOrders, lang === "zh");
+      setExportMessage(`${t("okx.csvSaved")} ${path}${allOrders.length >= 100 ? ` · ${t("okx.csvLimit")}` : ""}`);
+    } catch (error) {
+      setExportError(errorMessage(error));
+    } finally {
+      setExporting(false);
+    }
+  }
   return (
     <div className="okx-order-head-actions">
       {allOrders !== null && <OrderYieldSummary orders={allOrders} indexPrices={indexPrices} />}
@@ -484,6 +502,14 @@ export function OrderHeadActions({
         <button className={!showAllOrders ? "on" : ""} onClick={() => onShowAllOrders(false)}>{t("okx.current")}</button>
         <button className={showAllOrders ? "on" : ""} onClick={() => onShowAllOrders(true)}>{t("okx.all")}</button>
       </div>
+      <button className="okx-csv-button" onClick={() => void exportCsv()}
+        disabled={exporting || allOrders === null || allOrders.length === 0}
+        title={t("okx.csvHint")}>
+        <Icon name="download" size={16} />
+        {t(exporting ? "okx.csvSaving" : "okx.csvDownload")}
+      </button>
+      {exportMessage !== null && <p className="okx-csv-message" role="status">{exportMessage}</p>}
+      {exportError !== null && <p className="okx-csv-message" role="alert">{exportError}</p>}
     </div>
   );
 }

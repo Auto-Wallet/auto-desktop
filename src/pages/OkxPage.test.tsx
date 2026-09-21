@@ -42,6 +42,15 @@ const btcUsdcIndexPrice: OkxIndexPrice = {
 };
 
 describe("OKX Dual Investment table", () => {
+  test("offers CSV export for current holdings and disables export without orders", () => {
+    const renderActions = (allOrders: OkxDcdOrder[] | null) => renderToStaticMarkup(
+      <OrderHeadActions allOrders={allOrders} indexPrices={null} showAllOrders={false} onShowAllOrders={() => {}} />,
+    );
+    expect(renderActions([settledOrder])).toContain('class="okx-csv-button" title=');
+    expect(renderActions([settledOrder])).toContain("Download CSV");
+    expect(renderActions(null)).toContain('class="okx-csv-button" disabled=""');
+    expect(renderActions([])).toContain('class="okx-csv-button" disabled=""');
+  });
   test("shows the OKX index price used by Dual Investment instead of a spot price", () => {
     const html = renderToStaticMarkup(
       <OrderList orders={[settledOrder]} indexPrices={[btcUsdcIndexPrice]} priceError={null} />,

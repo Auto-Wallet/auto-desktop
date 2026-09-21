@@ -394,6 +394,29 @@ pub async fn okx_get_dcd_orders() -> Result<Value, String> {
 }
 
 #[tauri::command]
+pub async fn okx_save_dcd_csv<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    webview: tauri::Webview<R>,
+    csv: String,
+) -> Result<String, String> {
+    use std::io::Write;
+    use tauri::Manager;
+    if webview.label() != "shell" {
+        return Err("CSV export is only available in the trusted shell".into());
+    }
+    if csv.len() > 10_000_000 || !csv.starts_with('\u{feff}') {
+        return Err("Invalid CSV export".into());
+    }
+    let directory = app.path().download_dir().map_err(|e| e.to_string())?;
+    let filename = format!("okx-dual-investment-{}.csv", OffsetDateTime::now_utc().unix_timestamp_nanos());
+    let path = directory.join(filename);
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+        .open(&path).map_err(|e| format!("Saving CSV: {e}"))?;
+    file.write_all(csv.as_bytes()).map_err(|e| format!("Writing CSV: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 pub async fn okx_get_dcd_index_prices(instrument_ids: Vec<String>) -> Result<Value, String> {
     const MAX_INDEX_INSTRUMENTS: usize = 20;
 

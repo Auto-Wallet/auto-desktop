@@ -43,7 +43,7 @@ mod touch_id;
 use native_menu::{DEBUG_DAPP_CONSOLE_MENU_ID, DEBUG_SHELL_CONSOLE_MENU_ID};
 use okx_account::{
     okx_connection_status, okx_delete_credentials, okx_get_assets, okx_get_dcd_index_prices,
-    okx_get_dcd_orders, okx_save_credentials,
+    okx_get_dcd_orders, okx_save_credentials, okx_save_dcd_csv,
 };
 
 const DEFI_PROVIDER_TIMEOUT: Duration = Duration::from_secs(12);
@@ -7856,6 +7856,7 @@ pub fn run() {
             okx_get_assets,
             okx_get_dcd_index_prices,
             okx_get_dcd_orders,
+            okx_save_dcd_csv,
             get_chains,
             add_chain,
             update_chain,
@@ -9693,6 +9694,7 @@ mod e2e {
                 okx_delete_credentials,
                 okx_get_assets,
                 okx_get_dcd_orders,
+            okx_save_dcd_csv,
                 set_active_chain,
                 get_active_chain,
                 get_chains,
