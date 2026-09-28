@@ -1,6 +1,6 @@
 [package]
 name = "auto-desktop"
-version = "0.2.70"
+version = "0.2.71"
 description = "AutoDesktop — a lightweight desktop wallet & dApp browser"
 authors = ["you"]
 edition = "2021"
@@ -58,13 +58,19 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 hidapi = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# LocalAuthentication gates retrieval; the credential itself stays in the
-# non-synchronizing macOS login Keychain so unsigned `tauri dev` builds work too.
+# Touch ID unlock: the vault password lives in the data-protection keychain behind
+# a biometry-current-set access control, so macOS itself demands a fingerprint to
+# release it. That keychain needs the `keychain-access-groups` entitlement (and a
+# provisioning profile), which only the signed local release build carries — an
+# unsigned `tauri dev` build gets -34018 and Touch ID stays unavailable there.
+# OSX_10_15 exposes kSecUseDataProtectionKeychain (macOS 10.15+, Tauri 2's floor).
 block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", features = ["NSError", "NSString"] }
 objc2-local-authentication = { version = "0.3.2", features = ["block2", "LAContext"] }
-security-framework = "3.7.0"
+security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
+security-framework-sys = { version = "2.17.0", features = ["OSX_10_15"] }
+core-foundation = "0.10.1"
 
 [dev-dependencies]
 # The `test` feature exposes tauri::test's in-process mock runtime. That is the

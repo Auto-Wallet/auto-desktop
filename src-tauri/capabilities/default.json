@@ -75,6 +75,11 @@
     "allow-add-account",
     "allow-rename-wallet",
     "allow-delete-wallet",
+    "allow-get-connected-sites",
+    "allow-disconnect-connected-site",
+    "allow-note-user-activity",
+    "allow-get-auto-lock-minutes",
+    "allow-set-auto-lock-minutes",
     "allow-set-app-menu-language"
   ]
 }

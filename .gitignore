@@ -37,6 +37,9 @@ vault*.json
 secrets*.json
 mnemonic*.txt
 *.seed
+# Apple provisioning profiles stay local (build:macos:local reads the path from
+# APPLE_PROVISIONING_PROFILE in .env.local).
+*.provisionprofile
 
 # Local-only artifacts
 /tmp-shots

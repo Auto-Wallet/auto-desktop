@@ -39,6 +39,10 @@ import { askConfirm } from "../lib/confirm";
 import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
 import { filterSettingsChains } from "./networkSettings";
+import { listen } from "@tauri-apps/api/event";
+import { AUTO_LOCK_CHOICES, getAutoLockMinutes, setAutoLockMinutes } from "../lib/autoLock";
+import { disconnectSite, loadConnectedSites } from "../lib/connectedSites";
+import { isTauri } from "../lib/platform";
 
 const APP_VERSION = __APP_VERSION__;
 
@@ -80,6 +84,8 @@ export default function SettingsPage() {
     null,
   );
   const [editing, setEditing] = useState<Chain | "new" | null>(null);
+  const [autoLockMinutes, setAutoLockState] = useState<number | null>(null);
+  const [connectedSites, setConnectedSites] = useState<string[]>([]);
   const [networkQuery, setNetworkQuery] = useState("");
   const visibleChains = useMemo(
     () => filterSettingsChains(chains, networkQuery),
@@ -112,6 +118,38 @@ export default function SettingsPage() {
       active = false;
     };
   }, [t]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    void getAutoLockMinutes()
+      .then((m) => {
+        if (active) setAutoLockState(m);
+      })
+      .catch((error) => toast(errText(error), "warn"));
+    const reload = () =>
+      void loadConnectedSites()
+        .then((list) => {
+          if (active) setConnectedSites(list);
+        })
+        .catch((error) => toast(errText(error), "warn"));
+    reload();
+    // A dApp connecting (approval window) or revoking itself changes the list.
+    let unlisten: (() => void) | null = null;
+    void listen("connected-sites-changed", reload).then((fn) => {
+      if (active) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  function autoLockLabel(m: number): string {
+    if (m === 0) return t("settings.autoLockNever");
+    return m >= 60 ? t("settings.autoLockHours", { n: m / 60 }) : t("settings.autoLockMinutes", { n: m });
+  }
 
   async function handleTouchIdToggle() {
     if (touchIdStatus === null || touchIdBusy) return;
@@ -520,6 +558,73 @@ export default function SettingsPage() {
                     </button>
                   </div>
                 )}
+              {vault.hasPassword && autoLockMinutes !== null && (
+                <div className="set-row">
+                  <span className="row-ic">
+                    <Icon name="lock" size={17} />
+                  </span>
+                  <div className="gr">
+                    <div className="rl">{t("settings.autoLock")}</div>
+                    <div className="rs">{t("settings.autoLockHint")}</div>
+                  </div>
+                  <select
+                    className="input auto-lock-select"
+                    aria-label={t("settings.autoLock")}
+                    value={autoLockMinutes}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      void setAutoLockMinutes(next)
+                        .then(setAutoLockState)
+                        .catch((error) => toast(errText(error), "warn"));
+                    }}
+                  >
+                    {AUTO_LOCK_CHOICES.map((m) => (
+                      <option key={m} value={m}>
+                        {autoLockLabel(m)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Connected sites */}
+          <div className="set-group">
+            <div className="set-group-head">
+              <h2>
+                <Icon name="globe" size={16} /> {t("settings.connectedSites")}
+              </h2>
+              <p>{t("settings.connectedSitesHint")}</p>
+            </div>
+            <div className="set-card">
+              {connectedSites.length === 0 ? (
+                <div className="set-row">
+                  <div className="gr">
+                    <div className="rs">{t("settings.connectedSitesEmpty")}</div>
+                  </div>
+                </div>
+              ) : (
+                connectedSites.map((origin) => (
+                  <div className="set-row" key={origin}>
+                    <div className="gr">
+                      <div className="rl connected-site" title={origin}>
+                        {origin.replace(/^https?:\/\//, "")}
+                      </div>
+                    </div>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() =>
+                        void disconnectSite(origin)
+                          .then(setConnectedSites)
+                          .catch((error) => toast(errText(error), "warn"))
+                      }
+                    >
+                      {t("settings.disconnect")}
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 

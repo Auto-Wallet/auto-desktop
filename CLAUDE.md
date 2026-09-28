@@ -155,6 +155,23 @@ Three things keep that cheap, and breaking any one turns a one-off lookup back i
 
 Verify against the real APIs with `cargo test --lib uniswap_v4_live -- --ignored` (spends units; needs `ZERION_API_KEY` + `DEBANK_APIKEY` in `.env.local`).
 
+### Touch ID unlock (keychain entitlement + provisioning profile)
+The vault password for Touch ID lives in the **data-protection keychain** behind a
+`BiometryCurrentSet` + `WhenPasscodeSetThisDeviceOnly` access control (`touch_id.rs`),
+so macOS itself demands the fingerprint — an in-app `LAContext` check alone would
+leave a plain login-keychain item any same-user process could ask for. That keychain
+needs the restricted `keychain-access-groups` entitlement, which macOS honors only
+with a matching embedded provisioning profile:
+- Only `bun run build:macos:local` signs with `src-tauri/Entitlements.keychain.plist`
+  and embeds the Developer ID profile from `APPLE_PROVISIONING_PROFILE` (path in
+  `.env.local`; `*.provisionprofile` is git-ignored). It checks the profile (team,
+  app id, keychain group, expiry) before building and the signed app after.
+- Everything else (CI release, `tauri dev`, `cargo test`) uses `Entitlements.plist`.
+  Never add the keychain entitlements there without a profile: macOS kills an app
+  that claims restricted entitlements without one.
+- Unsigned builds get `-34018` when enabling Touch ID. That is intended — there is
+  deliberately no fallback to the unprotected login keychain.
+
 ## Platform constraints (macOS / WKWebView)
 - **No WebHID/WebUSB** in WKWebView → Ledger/hardware support must go through a Rust `hidapi` transport behind `HidTransport`, not `@ledgerhq/hw-transport-webhid`.
 - **Custom URI schemes are one-way from remote pages**: a remote https page can hit a registered scheme via subresource load (`new Image().src=...`) but `fetch()` to it is blocked by WebKit. The wallet bridge therefore uses `invoke`, not the `adipc://` scheme (which remains only as a diagnostic beacon endpoint in `lib.rs`).

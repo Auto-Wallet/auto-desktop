@@ -81,13 +81,28 @@ mod platform {
     use objc2::runtime::Bool;
     use objc2_foundation::{NSError, NSString};
     use objc2_local_authentication::{LAContext, LAPolicy};
+    use core_foundation::base::{CFType, CFTypeRef, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::data::CFData;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    use objc2::rc::Retained;
+    use security_framework::access_control::{ProtectionMode, SecAccessControl};
     use security_framework::passwords::{
-        delete_generic_password, get_generic_password, set_generic_password,
+        delete_generic_password, delete_generic_password_options,
+        set_generic_password_options,
     };
+    use security_framework::passwords_options::{AccessControlOptions, PasswordOptions};
+    use security_framework_sys::item::{
+        kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecReturnData,
+        kSecUseAuthenticationContext, kSecUseDataProtectionKeychain,
+    };
+    use security_framework_sys::keychain_item::SecItemCopyMatching;
     use std::sync::mpsc;
 
     const SERVICE: &str = "com.autowallet.desktop.touch-id";
     const ACCOUNT: &str = "vault-password";
+    const ERR_SEC_SUCCESS: i32 = 0;
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
     fn authentication_error(error: &NSError) -> String {
@@ -136,31 +151,134 @@ mod platform {
             .map_err(|_| "Touch ID authentication ended without a result".to_string())?
     }
 
+    fn protected_options(service: &str, account: &str) -> PasswordOptions {
+        let mut options = PasswordOptions::new_generic_password(service, account);
+        options.use_protected_keychain();
+        options
+    }
+
+    /// Store the vault password so that only a Touch ID match with the CURRENT
+    /// enrolled fingers releases it, on this Mac only (never synced, gone if the
+    /// login password is removed). macOS enforces this, not our code. Needs the
+    /// keychain entitlement: an unsigned build fails with -34018 and stores
+    /// nothing — there is deliberately no weaker fallback.
     fn save_password_at(service: &str, account: &str, password: &str) -> Result<(), String> {
-        set_generic_password(service, account, password.as_bytes())
-            .map_err(|error| format!("saving Touch ID unlock credential: {error}"))
+        let access = SecAccessControl::create_with_protection(
+            Some(ProtectionMode::AccessibleWhenPasscodeSetThisDeviceOnly),
+            AccessControlOptions::BIOMETRY_CURRENT_SET.bits(),
+        )
+        .map_err(|error| format!("creating the Touch ID access control: {error}"))?;
+        // Replace, never update: an existing item may carry an older policy.
+        match delete_generic_password_options(protected_options(service, account)) {
+            Ok(()) => {}
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+            Err(error) => return Err(keychain_error("replacing the Touch ID unlock credential", error.code(), &error.to_string())),
+        }
+        let mut options = protected_options(service, account);
+        options.set_access_control(access);
+        set_generic_password_options(password.as_bytes(), options).map_err(|error| {
+            keychain_error("saving the Touch ID unlock credential", error.code(), &error.to_string())
+        })
+    }
+
+    fn keychain_error(action: &str, code: i32, message: &str) -> String {
+        if code == -34018 {
+            format!(
+                "{action}: this build is not signed with the keychain entitlement (-34018: {message}). Touch ID unlock works only in the signed release build."
+            )
+        } else {
+            format!("{action}: {message} ({code})")
+        }
     }
 
     pub fn save_password(password: &str) -> Result<(), String> {
-        save_password_at(SERVICE, ACCOUNT, password)
+        save_password_at(SERVICE, ACCOUNT, password)?;
+        // Older versions kept the password as a plain login-keychain
+        // item; never leave that copy behind next to the protected one.
+        delete_legacy_password()
     }
 
-    pub fn load_password() -> Result<Zeroizing<String>, String> {
-        let bytes = Zeroizing::new(
-            get_generic_password(SERVICE, ACCOUNT)
-                .map_err(|error| format!("Touch ID authentication failed: {error}"))?,
-        );
+    /// Read the password. macOS shows ONE Touch ID prompt, with `reason`, and
+    /// hands the item over only on a match. `Ok(None)` means there is no
+    /// protected item — e.g. Touch ID was enabled by a version that used the
+    /// plain login keychain, so it must be turned on again.
+    pub fn load_password(reason: &str) -> Result<Option<Zeroizing<String>>, String> {
+        if reason.trim().is_empty() {
+            return Err("Touch ID reason must not be empty".to_string());
+        }
+        let context: Retained<LAContext> = unsafe { LAContext::new() };
+        unsafe { context.setLocalizedReason(&NSString::from_str(reason)) };
+        let context_ref = Retained::as_ptr(&context) as CFTypeRef;
+
+        let query = unsafe {
+            CFDictionary::<CFType, CFType>::from_CFType_pairs(&[
+                (
+                    CFString::wrap_under_get_rule(kSecClass).as_CFType(),
+                    CFString::wrap_under_get_rule(kSecClassGenericPassword).as_CFType(),
+                ),
+                (
+                    CFString::wrap_under_get_rule(kSecAttrService).as_CFType(),
+                    CFString::new(SERVICE).as_CFType(),
+                ),
+                (
+                    CFString::wrap_under_get_rule(kSecAttrAccount).as_CFType(),
+                    CFString::new(ACCOUNT).as_CFType(),
+                ),
+                (
+                    CFString::wrap_under_get_rule(kSecReturnData).as_CFType(),
+                    CFBoolean::true_value().as_CFType(),
+                ),
+                (
+                    CFString::wrap_under_get_rule(kSecUseDataProtectionKeychain).as_CFType(),
+                    CFBoolean::true_value().as_CFType(),
+                ),
+                (
+                    CFString::wrap_under_get_rule(kSecUseAuthenticationContext).as_CFType(),
+                    CFType::wrap_under_get_rule(context_ref),
+                ),
+            ])
+        };
+        let mut result: CFTypeRef = std::ptr::null();
+        let status = unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), &mut result) };
+        match status {
+            ERR_SEC_SUCCESS => {}
+            ERR_SEC_ITEM_NOT_FOUND => return Ok(None),
+            code => {
+                let message = security_framework::base::Error::from_code(code).to_string();
+                return Err(keychain_error("Touch ID unlock", code, &message));
+            }
+        }
+        if result.is_null() {
+            return Err("Touch ID unlock: the keychain returned no data".to_string());
+        }
+        let data = unsafe { CFData::wrap_under_create_rule(result as _) };
+        let bytes = Zeroizing::new(data.bytes().to_vec());
         let password = String::from_utf8(bytes.to_vec())
             .map_err(|_| "Touch ID credential is not valid UTF-8".to_string())?;
-        Ok(Zeroizing::new(password))
+        Ok(Some(Zeroizing::new(password)))
     }
 
-    pub fn delete_password() -> Result<(), String> {
+    fn delete_legacy_password() -> Result<(), String> {
         match delete_generic_password(SERVICE, ACCOUNT) {
             Ok(()) => Ok(()),
             Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
-            Err(error) => Err(format!("removing Touch ID unlock credential: {error}")),
+            Err(error) => Err(format!("removing the old Touch ID unlock credential: {error}")),
         }
+    }
+
+    /// Remove both the protected item and any plain one an older version left.
+    pub fn delete_password() -> Result<(), String> {
+        match delete_generic_password_options(protected_options(SERVICE, ACCOUNT)) {
+            Ok(()) => {}
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+            // Unsigned builds cannot reach the protected keychain, so there is
+            // nothing of ours there to remove.
+            Err(error) if error.code() == -34018 => {}
+            Err(error) => {
+                return Err(format!("removing the Touch ID unlock credential: {error}"))
+            }
+        }
+        delete_legacy_password()
     }
 
     #[cfg(test)]
@@ -177,9 +295,13 @@ mod platform {
             );
         }
 
+        /// SECURITY: the vault password may only ever be stored behind Touch ID
+        /// in the data-protection keychain. An unsigned process (this test
+        /// binary, `tauri dev`) lacks the keychain entitlement, so saving must
+        /// FAIL with the entitlement error — never fall back to a plain
+        /// login-keychain item that any same-user process can ask for.
         #[test]
-        #[ignore = "writes and removes a temporary item in the local macOS Keychain"]
-        fn unsigned_debug_process_can_save_the_unlock_credential() {
+        fn unsigned_process_cannot_store_the_password_without_biometric_protection() {
             let nonce = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -187,9 +309,14 @@ mod platform {
             let service = format!("com.autowallet.desktop.touch-id-test-{nonce}");
             let account = "temporary-test-password";
 
-            save_password_at(&service, account, "not-a-real-wallet-password")
-                .expect("unsigned debug process should save local Keychain item");
-            delete_generic_password(&service, account).expect("remove temporary protected item");
+            let result = save_password_at(&service, account, "not-a-real-wallet-password");
+            // Clean up in case an unprotected item was written.
+            let _ = delete_generic_password(&service, account);
+            let error = result.expect_err("must not store without biometric protection");
+            assert!(
+                error.contains("entitlement"),
+                "expected the missing-entitlement error, got: {error}"
+            );
         }
     }
 }
@@ -210,7 +337,7 @@ mod platform {
         Err("Touch ID is only available on macOS".to_string())
     }
 
-    pub fn load_password() -> Result<Zeroizing<String>, String> {
+    pub fn load_password(_reason: &str) -> Result<Option<Zeroizing<String>>, String> {
         Err("Touch ID is only available on macOS".to_string())
     }
 

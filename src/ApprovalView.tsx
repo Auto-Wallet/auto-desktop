@@ -11,6 +11,7 @@ import { rpc } from "./lib/rpc";
 import { simulateTx, type SimulationPreview } from "./lib/simulation";
 import {
   detectPermit,
+  isSafeDelegateCall,
   encodeErc20Approve,
   parseApprovalDetails,
   parseTransferDetails,
@@ -69,6 +70,8 @@ function kindMeta(method: string, t: TFn): { title: string; icon: IconName; cora
       return { title: t("approval.sendTx"), icon: "send", coral: true };
     case "wallet_addEthereumChain":
       return { title: t("approval.addNetwork"), icon: "globe", coral: false };
+    case "eth_requestAccounts":
+      return { title: t("approval.connect"), icon: "globe", coral: false };
     case "safe_confirmTransaction":
       return { title: t("approval.confirmSafe"), icon: "shield", coral: false };
     default:
@@ -384,7 +387,7 @@ function ApprovalView() {
           </>
         ) : current.typed_data ? (
           <TypedDataDetails data={current.typed_data} t={t} />
-        ) : (
+        ) : current.method === "eth_requestAccounts" ? null : (
           <div>
             <div className="field-label" style={{ padding: "0 2px 7px" }}>
               {t("approval.message")}
@@ -396,7 +399,11 @@ function ApprovalView() {
         {requestSignerAddress && (
           <div className="apv-signer">
             <Avatar address={requestSignerAddress} size={20} />
-            <span className="sl">{t("approval.signingWith")}</span>
+            <span className="sl">
+              {current.method === "eth_requestAccounts"
+                ? t("approval.connectAccount")
+                : t("approval.signingWith")}
+            </span>
             <span className="sn">{shortAddress(requestSignerAddress, 8, 6)}</span>
             {isLedger && (
               <span className="badge ledger">
@@ -408,7 +415,11 @@ function ApprovalView() {
 
         <div className="apv-warn">
           <Icon name="alert" size={16} />
-          {current.method === "wallet_addEthereumChain" ? t("approval.addNetworkWarn") : t("approval.warn")}
+          {current.method === "wallet_addEthereumChain"
+            ? t("approval.addNetworkWarn")
+            : current.method === "eth_requestAccounts"
+              ? t("approval.connectWarn")
+              : t("approval.warn")}
         </div>
 
         {isLedger && busy && (
@@ -746,6 +757,7 @@ function formatDeadline(deadline: bigint | null, t: TFn): string {
 // message. A summary line alone would be blind signing.
 function TypedDataDetails({ data, t }: { data: TypedDataPayload; t: TFn }) {
   const permit = useMemo(() => detectPermit(data), [data]);
+  const delegateCall = useMemo(() => isSafeDelegateCall(data), [data]);
   const [tokenMeta, setTokenMeta] = useState<{ symbol: string; decimals: number } | null>(null);
 
   useEffect(() => {
@@ -780,6 +792,14 @@ function TypedDataDetails({ data, t }: { data: TypedDataPayload; t: TFn }) {
 
   return (
     <div className="apv-typed">
+      {delegateCall && (
+        <div className="apv-permit">
+          <div className="apv-permit-title">
+            <Icon name="alert" size={15} /> {t("approval.safeDelegateTitle")}
+          </div>
+          <div className="apv-permit-body">{t("approval.safeDelegateBody")}</div>
+        </div>
+      )}
       {permit && (
         <div className="apv-permit">
           <div className="apv-permit-title">

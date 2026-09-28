@@ -433,6 +433,16 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.lockNow": "Lock now",
     "settings.lockNowHint":
       "Drop keys from memory; require the password to unlock again.",
+    "settings.autoLock": "Auto-lock",
+    "settings.autoLockHint": "Lock after this long with no activity in the app or a dApp.",
+    "settings.autoLockNever": "Never",
+    "settings.autoLockMinutes": "{n} min",
+    "settings.autoLockHours": "{n} h",
+    "settings.connectedSites": "Connected sites",
+    "settings.connectedSitesHint":
+      "These sites can see your address and ask you to sign.",
+    "settings.connectedSitesEmpty": "No site is connected.",
+    "settings.disconnect": "Disconnect",
     "settings.touchId": "Touch ID unlock",
     "settings.touchIdHint":
       "Use this Mac's enrolled fingerprints to unlock AutoDesktop.",
@@ -476,6 +486,13 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Signing proves you control this account. Only approve requests from sites you trust.",
     "approval.addNetworkWarn":
       "Only add networks from sites you trust. A malicious RPC can lie about balances and transactions.",
+    "approval.connect": "Connect to site",
+    "approval.connectAccount": "Account the site will see",
+    "approval.connectWarn":
+      "The site will see this address and can ask you to sign. It can never sign without your approval. Disconnect it any time in Settings.",
+    "approval.safeDelegateTitle": "DELEGATECALL — this can take over the Safe",
+    "approval.safeDelegateBody":
+      "The target's code runs as the Safe itself. It can change owners or move every asset. Approve only if you know exactly what the target contract does.",
     "approval.ledgerConfirm": "Confirm on your Ledger device…",
     "approval.waiting": "Waiting…",
     "approval.queue": "{i} of {n}",
@@ -1026,6 +1043,15 @@ const DICT: Record<Lang, Record<string, string>> = {
     "settings.security": "安全",
     "settings.lockNow": "立即锁定",
     "settings.lockNowHint": "从内存清除密钥；需重新输入密码解锁。",
+    "settings.autoLock": "自动锁定",
+    "settings.autoLockHint": "应用和 dApp 均无操作达到该时长后自动锁定。",
+    "settings.autoLockNever": "从不",
+    "settings.autoLockMinutes": "{n} 分钟",
+    "settings.autoLockHours": "{n} 小时",
+    "settings.connectedSites": "已连接站点",
+    "settings.connectedSitesHint": "这些站点可以看到你的地址并请求签名。",
+    "settings.connectedSitesEmpty": "暂无已连接站点。",
+    "settings.disconnect": "断开",
     "settings.touchId": "Touch ID 解锁",
     "settings.touchIdHint": "使用这台 Mac 已录入的指纹解锁 AutoDesktop。",
     "settings.touchIdConfirmTitle": "启用 Touch ID 解锁？",
@@ -1066,6 +1092,13 @@ const DICT: Record<Lang, Record<string, string>> = {
     "approval.warn": "签名即证明你控制此账户。仅批准来自你信任站点的请求。",
     "approval.addNetworkWarn":
       "仅添加来自可信站点的网络。恶意 RPC 可能伪造余额和交易信息。",
+    "approval.connect": "连接站点",
+    "approval.connectAccount": "站点将看到的账户",
+    "approval.connectWarn":
+      "站点将看到此地址，并可请求你签名；未经你批准它无法签名。可随时在设置中断开。",
+    "approval.safeDelegateTitle": "DELEGATECALL —— 可接管整个 Safe",
+    "approval.safeDelegateBody":
+      "目标合约的代码将以 Safe 自身身份执行，可更换所有者或转走全部资产。除非你清楚目标合约的行为，否则不要批准。",
     "approval.ledgerConfirm": "请在 Ledger 设备上确认…",
     "approval.waiting": "等待中…",
     "approval.queue": "第 {i} / {n} 个",

@@ -5,6 +5,7 @@ import {
   chainIdToHex,
   detectPermit,
   encodeErc20Approve,
+  isSafeDelegateCall,
   parseApprovalDetails,
   parseTransferDetails,
 } from "./decode";
@@ -161,5 +162,29 @@ describe("chainIdToHex", () => {
     expect(chainIdToHex("0x38")).toBe("0x38");
     expect(chainIdToHex("garbage")).toBeNull();
     expect(chainIdToHex(0)).toBeNull();
+  });
+});
+
+describe("isSafeDelegateCall", () => {
+  const safeTx = (operation: unknown) => ({
+
+    primaryType: "SafeTx",
+    domain: { chainId: 1, verifyingContract: TOKEN },
+    message: { to: TOKEN, value: "0", data: "0x", operation, nonce: 7 },
+  });
+
+  test("flags operation 1 (number or string) on a SafeTx", () => {
+    expect(isSafeDelegateCall(safeTx(1))).toBe(true);
+    expect(isSafeDelegateCall(safeTx("1"))).toBe(true);
+  });
+
+  test("a plain CALL is not flagged", () => {
+    expect(isSafeDelegateCall(safeTx(0))).toBe(false);
+    expect(isSafeDelegateCall(safeTx("0"))).toBe(false);
+  });
+
+  test("only SafeTx typed data is considered", () => {
+    expect(isSafeDelegateCall({ ...safeTx(1), primaryType: "Permit" })).toBe(false);
+    expect(isSafeDelegateCall({ primaryType: "SafeTx", domain: {} })).toBe(false);
   });
 });

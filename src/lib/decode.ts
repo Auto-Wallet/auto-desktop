@@ -144,3 +144,17 @@ export function detectPermit(data: TypedDataPayload): PermitInfo | null {
     amountRaw === MAX_UINT96;
   return { spender, token, amountRaw, unlimited, deadline, chainHex: chainIdToHex(domain.chainId) };
 }
+
+/**
+ * A Safe transaction (EIP-712 `SafeTx`) with `operation` 1 is a DELEGATECALL:
+ * the target's code runs AS the Safe and can swap its owners or drain every
+ * asset in one step — the usual shape of Safe thefts. The approval UI must say
+ * so in plain words instead of leaving it as a digit inside the JSON.
+ */
+export function isSafeDelegateCall(data: TypedDataPayload): boolean {
+  if (data.primaryType !== "SafeTx") return false;
+  const msg = data.message;
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return false;
+  const operation = (msg as Record<string, unknown>).operation;
+  return operation === 1 || operation === "1";
+}

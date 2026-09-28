@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the signed LOCAL release (scripts/build-macos-local.ts) only.
+  Same as Entitlements.plist plus the keychain entitlements Touch ID unlock needs
+  (data-protection keychain + biometry access control). These are restricted:
+  macOS kills an app that claims them without a matching embedded provisioning
+  profile, so builds without one (CI, tauri dev) keep using Entitlements.plist.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.application-identifier</key>
+  <string>9V2W2U87ZG.com.autowallet.desktop</string>
+  <key>com.apple.developer.team-identifier</key>
+  <string>9V2W2U87ZG</string>
+  <key>keychain-access-groups</key>
+  <array>
+    <string>9V2W2U87ZG.com.autowallet.desktop</string>
+  </array>
+</dict>
+</plist>

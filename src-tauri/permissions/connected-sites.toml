@@ -1,0 +1,12 @@
+# Connected-site management. Granted ONLY to the trusted shell (Settings). A dApp
+# connects through the approval window and disconnects itself through
+# wallet_revokePermissions; it can never list or drop other sites.
+[[permission]]
+identifier = "allow-get-connected-sites"
+description = "Allow the shell to list the sites connected to the wallet."
+commands.allow = ["get_connected_sites"]
+
+[[permission]]
+identifier = "allow-disconnect-connected-site"
+description = "Allow the shell to disconnect a site from the wallet."
+commands.allow = ["disconnect_connected_site"]

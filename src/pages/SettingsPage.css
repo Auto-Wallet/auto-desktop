@@ -470,3 +470,17 @@ button.set-row:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Auto-lock timeout picker: sized to its longest label, not the row. */
+.auto-lock-select {
+  width: auto;
+  min-width: 108px;
+  flex: none;
+}
+
+/* Connected-site origins: labels may be trimmed; the full origin is in the title. */
+.connected-site {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

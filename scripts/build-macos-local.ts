@@ -51,6 +51,90 @@ export function prepareReleaseEnv(source: ReleaseEnvSource): Record<string, stri
   return env;
 }
 
+/** The fields of a decoded provisioning profile the release check relies on. */
+export type ProvisioningProfile = {
+  TeamIdentifier?: unknown;
+  ExpirationDate?: unknown;
+  Entitlements?: Record<string, unknown>;
+};
+
+/**
+ * Touch ID unlock keeps the vault password in the data-protection keychain,
+ * which needs `keychain-access-groups` — a restricted entitlement macOS honors
+ * only with a matching provisioning profile embedded in the app. A wrong,
+ * expired, or incomplete profile does not fail the build: it produces an app
+ * macOS refuses to launch. So check it before spending a build on it.
+ */
+export function checkProvisioningProfile(
+  profile: ProvisioningProfile,
+  want: { teamId: string; bundleId: string; now: Date },
+): void {
+  const teams = Array.isArray(profile.TeamIdentifier) ? profile.TeamIdentifier : [];
+  if (!teams.includes(want.teamId)) {
+    throw new Error(
+      `Provisioning profile is for team ${teams.join(", ") || "(none)"}, not ${want.teamId}`,
+    );
+  }
+  const entitlements = profile.Entitlements ?? {};
+  const appId = entitlements["com.apple.application-identifier"];
+  const wantAppId = `${want.teamId}.${want.bundleId}`;
+  if (appId !== wantAppId) {
+    throw new Error(`Provisioning profile is for ${String(appId)}, not ${wantAppId}`);
+  }
+  const groups = entitlements["keychain-access-groups"];
+  if (!Array.isArray(groups) || groups.length === 0) {
+    throw new Error("Provisioning profile does not grant keychain-access-groups");
+  }
+  const expires = new Date(String(profile.ExpirationDate));
+  if (Number.isNaN(expires.getTime())) {
+    throw new Error(`Provisioning profile has no readable ExpirationDate`);
+  }
+  if (expires <= want.now) {
+    throw new Error(`Provisioning profile expired on ${expires.toISOString()}`);
+  }
+}
+
+/** `tauri build --config` override for the signed local release. */
+export function buildConfigOverride(profilePath: string, entitlementsPath: string): string {
+  return JSON.stringify({
+    bundle: {
+      createUpdaterArtifacts: false,
+      macOS: {
+        entitlements: entitlementsPath,
+        files: { "embedded.provisionprofile": profilePath },
+      },
+    },
+  });
+}
+
+async function output(command: string[], stdin?: string): Promise<string> {
+  const child = Bun.spawn(command, {
+    stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [text, err, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (code !== 0) {
+    throw new Error(`${command.join(" ")} failed (${code}): ${err.trim()}`);
+  }
+  return text;
+}
+
+/** Decode a .provisionprofile (CMS-signed plist) into JSON. */
+export async function readProvisioningProfile(path: string): Promise<ProvisioningProfile> {
+  const xml = await output(["security", "cms", "-D", "-i", path]);
+  // plutil's JSON writer rejects <date> and <data>; the check needs only the
+  // date's text, and none of the <data> blobs (certificates).
+  const jsonSafe = xml
+    .replace(/<date>([^<]*)<\/date>/g, "<string>$1</string>")
+    .replace(/<data>[^<]*<\/data>/g, "<string></string>");
+  return JSON.parse(await output(["plutil", "-convert", "json", "-o", "-", "-"], jsonSafe));
+}
+
 async function run(
   label: string,
   command: string[],
@@ -103,6 +187,23 @@ async function main(): Promise<void> {
   const env = prepareReleaseEnv(process.env);
   const config = await Bun.file(join(root, "src-tauri/tauri.conf.json")).json();
   const version = String(config.version);
+  const profilePath = nonEmpty(env.APPLE_PROVISIONING_PROFILE);
+  if (!profilePath) {
+    throw new Error(
+      "Missing release environment: APPLE_PROVISIONING_PROFILE (path to the Developer ID .provisionprofile)",
+    );
+  }
+  const absoluteProfile = resolve(profilePath);
+  if (!existsSync(absoluteProfile)) {
+    throw new Error(`Provisioning profile not found: ${absoluteProfile}`);
+  }
+  checkProvisioningProfile(await readProvisioningProfile(absoluteProfile), {
+    teamId: env.APPLE_TEAM_ID,
+    bundleId: String(config.identifier),
+    now: new Date(),
+  });
+  console.log("Provisioning profile check=OK");
+  const keychainEntitlements = join(root, "src-tauri/Entitlements.keychain.plist");
   const appPath = join(
     root,
     "src-tauri/target/release/bundle/macos/AutoDesktop.app",
@@ -149,7 +250,7 @@ async function main(): Promise<void> {
       "--bundles",
       "app,dmg",
       "--config",
-      '{"bundle":{"createUpdaterArtifacts":false}}',
+      buildConfigOverride(absoluteProfile, keychainEntitlements),
     ],
     env,
   );
@@ -161,6 +262,21 @@ async function main(): Promise<void> {
     throw new Error("The built app does not contain the configured DeBank key");
   }
   console.log("DeBank compile-time key check=OK (value not printed)");
+
+  if (!existsSync(join(appPath, "Contents/embedded.provisionprofile"))) {
+    throw new Error("The built app has no embedded.provisionprofile");
+  }
+  const signedEntitlements = await output([
+    "codesign",
+    "-d",
+    "--entitlements",
+    ":-",
+    appPath,
+  ]);
+  if (!signedEntitlements.includes("keychain-access-groups")) {
+    throw new Error("The built app is not signed with keychain-access-groups");
+  }
+  console.log("Keychain entitlement + embedded profile check=OK");
 
   const dmgPath = newestDmg(dmgDir, version);
   await run(

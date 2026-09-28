@@ -218,6 +218,10 @@ fn dapp_account_address() -> Option<String> {
 /// Run `f` with the active account's *software* signing key. Errors clearly when
 /// locked or when the active account is a Ledger (use the device path instead),
 /// rather than silently falling back to any default key.
+// Test-only: production signing looks the key up by the address the approval
+// window showed (`with_key_for` / `signer_kind_for`), never by "whatever is
+// active now" — that is how a switch mid-approval once signed with another key.
+#[cfg(test)]
 fn with_active_key<T>(f: impl FnOnce(&SigningKey) -> T) -> Result<T, String> {
     let guard = store_state().lock().unwrap();
     let s = guard.as_ref().ok_or("wallet is locked")?;
@@ -255,6 +259,10 @@ fn with_key_for<T>(address: &str, f: impl FnOnce(&SigningKey) -> T) -> Result<T,
 
 /// Snapshot the active account's signing kind (and Ledger path) without holding the
 /// store lock during the (slow) device round-trip.
+// Test-only: production signing looks the key up by the address the approval
+// window showed (`with_key_for` / `signer_kind_for`), never by "whatever is
+// active now" — that is how a switch mid-approval once signed with another key.
+#[cfg(test)]
 fn active_signer_kind() -> Result<ActiveKind, String> {
     let guard = store_state().lock().unwrap();
     let s = guard.as_ref().ok_or("wallet is locked")?;
@@ -415,6 +423,7 @@ fn store_push_wallet(wallet: UnlockedWallet, password: Option<Zeroizing<String>>
         .first()
         .map(|a| a.address.clone())
         .unwrap_or_default();
+    note_activity();
     let mut guard = store_state().lock().unwrap();
     match guard.as_mut() {
         Some(store) => {
@@ -528,15 +537,19 @@ fn decode_message_param(param: &Value) -> Result<Vec<u8>, String> {
 /// EIP-191 `personal_sign`. A software account signs keccak256("\x19Ethereum
 /// Signed Message:\n" || len || msg) locally; a Ledger applies the EIP-191 prefix
 /// itself, so it gets the raw message. Returns 65-byte r‖s‖v hex (v = 27/28).
-fn personal_sign(message: &[u8]) -> Result<Value, String> {
-    let sig = match active_signer_kind()? {
+///
+/// `address` is the signer the approval window showed; the key is looked up by
+/// it, so switching the active account while the prompt is open cannot change
+/// which key signs.
+fn personal_sign_for(address: &str, message: &[u8]) -> Result<Value, String> {
+    let sig = match signer_kind_for(address)? {
         ActiveKind::Local => {
             let mut preimage =
                 format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
             preimage.extend_from_slice(message);
             let digest = Keccak256::digest(&preimage);
             let (signature, recovery_id) =
-                with_active_key(|k| k.sign_prehash_recoverable(&digest))?
+                with_key_for(address, |k| k.sign_prehash_recoverable(&digest))?
                     .map_err(|e| format!("personal_sign: signing failed: {e}"))?;
             let mut sig = signature.to_bytes().to_vec(); // 64 bytes: r ‖ s
             sig.push(27 + recovery_id.to_byte()); // v
@@ -1078,7 +1091,7 @@ fn ensure_signing_webview_is_active(label: &str) -> Result<(), String> {
     if active.as_deref() == Some(label) {
         Ok(())
     } else {
-        Err("Signing request blocked because this dApp is not the active tab".to_string())
+        Err("Request blocked because this dApp is not the active tab".to_string())
     }
 }
 
@@ -1404,6 +1417,56 @@ async fn forward_to_node(method: &str, params: &[Value]) -> Result<Value, String
     let chain =
         find_chain(&chain_id).ok_or_else(|| format!("no RPC configured for chain {chain_id}"))?;
     node_rpc_call(&chain, method, params).await
+}
+
+/// Methods a dApp may have forwarded to the selected chain's node: the standard
+/// read/filter methods plus `eth_sendRawTransaction` (the page signed it itself).
+/// Everything else — `anvil_*`, `hardhat_*`, `personal_*`, `debug_*`, `admin_*`,
+/// `eth_signTransaction` — is refused: on a local dev node the user registered,
+/// those would let a web page mint balances or use node-held accounts.
+fn is_forwardable_method(method: &str) -> bool {
+    matches!(
+        method,
+        "eth_blockNumber"
+            | "eth_call"
+            | "eth_estimateGas"
+            | "eth_feeHistory"
+            | "eth_gasPrice"
+            | "eth_maxPriorityFeePerGas"
+            | "eth_blobBaseFee"
+            | "eth_getBalance"
+            | "eth_getBlockByHash"
+            | "eth_getBlockByNumber"
+            | "eth_getBlockReceipts"
+            | "eth_getBlockTransactionCountByHash"
+            | "eth_getBlockTransactionCountByNumber"
+            | "eth_getCode"
+            | "eth_getFilterChanges"
+            | "eth_getFilterLogs"
+            | "eth_getLogs"
+            | "eth_getProof"
+            | "eth_getStorageAt"
+            | "eth_getTransactionByBlockHashAndIndex"
+            | "eth_getTransactionByBlockNumberAndIndex"
+            | "eth_getTransactionByHash"
+            | "eth_getTransactionCount"
+            | "eth_getTransactionReceipt"
+            | "eth_getUncleByBlockHashAndIndex"
+            | "eth_getUncleByBlockNumberAndIndex"
+            | "eth_getUncleCountByBlockHash"
+            | "eth_getUncleCountByBlockNumber"
+            | "eth_newBlockFilter"
+            | "eth_newFilter"
+            | "eth_newPendingTransactionFilter"
+            | "eth_uninstallFilter"
+            | "eth_protocolVersion"
+            | "eth_syncing"
+            | "eth_sendRawTransaction"
+            | "net_listening"
+            | "net_peerCount"
+            | "web3_clientVersion"
+            | "web3_sha3"
+    )
 }
 
 /// Read-only methods the trusted shell may forward to a node. Keeps `node_rpc` a
@@ -2173,6 +2236,43 @@ fn emit_request_phase<R: Runtime>(app: &AppHandle<R>, id: Option<&str>, phase: &
     let _ = app.emit("wallet-request-phase", json!({ "id": id, "phase": phase }));
 }
 
+fn is_evm_address(s: &str) -> bool {
+    normalize_evm_address(s).is_ok() && s.trim().len() == 42
+}
+
+/// Split personal_sign params into (message, named account). The standard order
+/// is [message, address]; some older dApps send [address, message], which we
+/// accept only when exactly the first param is an address.
+fn personal_sign_params(params: &[Value]) -> Result<(&Value, Option<&str>), String> {
+    let first = params.first().ok_or("personal_sign: missing message param")?;
+    let second = params.get(1);
+    match (first.as_str(), second.and_then(Value::as_str)) {
+        (Some(a), Some(b)) if is_evm_address(a) && !is_evm_address(b) => {
+            Ok((second.expect("matched Some above"), Some(a)))
+        }
+        _ => match second {
+            None | Some(Value::Null) => Ok((first, None)),
+            Some(v) => {
+                let named = v
+                    .as_str()
+                    .ok_or("personal_sign: the address param must be a string")?;
+                Ok((first, Some(named)))
+            }
+        },
+    }
+}
+
+/// The account a dApp names in a signing request must be the one that signs.
+fn ensure_named_account(method: &str, named: &str, signer: &str) -> Result<(), String> {
+    let named = normalize_evm_address(named)?;
+    if named != signer {
+        return Err(format!(
+            "{method}: {named} is not the selected account ({signer}) (code 4100)"
+        ));
+    }
+    Ok(())
+}
+
 /// Drive a signing method through the approval flow. `personal_sign` and
 /// `eth_sendTransaction` are wired; other signing methods are rejected up-front
 /// (no point opening an approval window for something we can't yet fulfill).
@@ -2200,18 +2300,21 @@ async fn handle_signing<R: Runtime>(
 
     match method {
         "personal_sign" => {
-            let message = decode_message_param(
-                params
-                    .first()
-                    .ok_or("personal_sign: missing message param")?,
-            )?;
+            let (message_param, named) = personal_sign_params(params)?;
+            let message = decode_message_param(message_param)?;
             ensure_signing_webview_is_active(webview_label)?;
+            // Pin the signer now: this is the account the approval window shows,
+            // and the one that signs, whatever is active when the user approves.
+            let signer = active_account_address().ok_or("wallet is locked")?;
+            if let Some(named) = named {
+                ensure_named_account(method, named, &signer)?;
+            }
             let req = PendingRequest {
                 id: next_request_id(),
                 method: method.to_string(),
                 origin: origin.to_string(),
-                signer_address: active_account_address(),
-                signer_kind: active_signer_kind()
+                signer_address: Some(signer.clone()),
+                signer_kind: signer_kind_for(&signer)
                     .ok()
                     .map(|kind| signer_kind_name(&kind).to_string()),
                 summary: preview_message(&message),
@@ -2219,7 +2322,7 @@ async fn handle_signing<R: Runtime>(
                 typed_data: None,
             };
             if request_approval(app, req).await?.approved {
-                personal_sign(&message)
+                personal_sign_for(&signer, &message)
             } else {
                 Err("User rejected the request (4001)".to_string())
             }
@@ -2236,6 +2339,12 @@ async fn handle_signing<R: Runtime>(
         "eth_signTypedData_v4" => {
             // Params are [address, typedData]; the typed data is usually a JSON
             // string, occasionally an object.
+            let signer = active_account_address().ok_or("wallet is locked")?;
+            let named = params
+                .first()
+                .and_then(Value::as_str)
+                .ok_or("eth_signTypedData_v4: missing address param")?;
+            ensure_named_account(method, named, &signer)?;
             let raw = params
                 .get(1)
                 .ok_or("eth_signTypedData_v4: missing typed-data param")?;
@@ -2251,8 +2360,8 @@ async fn handle_signing<R: Runtime>(
                 id: next_request_id(),
                 method: method.to_string(),
                 origin: origin.to_string(),
-                signer_address: active_account_address(),
-                signer_kind: active_signer_kind()
+                signer_address: Some(signer.clone()),
+                signer_kind: signer_kind_for(&signer)
                     .ok()
                     .map(|kind| signer_kind_name(&kind).to_string()),
                 summary: preview_typed_data(&typed),
@@ -2260,7 +2369,7 @@ async fn handle_signing<R: Runtime>(
                 typed_data: Some(typed.clone()),
             };
             if request_approval(app, req).await?.approved {
-                sign_typed_data(&typed)
+                sign_typed_data_for(&signer, &typed).map(Value::String)
             } else {
                 Err("User rejected the request (4001)".to_string())
             }
@@ -2271,37 +2380,17 @@ async fn handle_signing<R: Runtime>(
     }
 }
 
-/// Sign EIP-712 typed data → 65-byte r‖s‖v hex. A software account signs the
-/// 0x1901 digest locally; a Ledger is sent the domain separator + message hash and
-/// signs on the device.
-fn sign_typed_data(typed: &Value) -> Result<Value, String> {
-    let sig = match active_signer_kind()? {
-        ActiveKind::Local => {
-            let digest = eip712::signing_hash(typed)?;
-            let (signature, recovery_id) =
-                with_active_key(|k| k.sign_prehash_recoverable(&digest))?
-                    .map_err(|e| format!("eth_signTypedData_v4: signing failed: {e}"))?;
-            let mut sig = signature.to_bytes().to_vec(); // 64 bytes: r ‖ s
-            sig.push(27 + recovery_id.to_byte()); // v
-            sig
-        }
-        ActiveKind::Ledger(path) => {
-            let (domain_separator, message_hash) = eip712::domain_and_message_hash(typed)?;
-            ledger::sign_eip712(&path, &domain_separator, &message_hash)?.to_vec()
-        }
-    };
-    Ok(json!(format!("0x{}", hex::encode(sig))))
-}
-
-/// Sign EIP-712 typed data with a specific local account without changing the
-/// app's active/dApp-visible account. This is the Safe owner signing primitive.
+/// Sign EIP-712 typed data with a specific account → 65-byte r‖s‖v hex, without
+/// touching the app's active/dApp-visible account. A software account signs the
+/// 0x1901 digest locally; a Ledger is sent the domain separator + message hash.
+/// Used for dApp typed data (signer pinned at request time) and Safe owners.
 fn sign_typed_data_for(address: &str, typed: &Value) -> Result<String, String> {
     let sig = match signer_kind_for(address)? {
         ActiveKind::Local => {
             let digest = eip712::signing_hash(typed)?;
             let (signature, recovery_id) =
                 with_key_for(address, |k| k.sign_prehash_recoverable(&digest))?
-                    .map_err(|e| format!("Safe transaction signing failed: {e}"))?;
+                    .map_err(|e| format!("typed-data signing failed: {e}"))?;
             let mut sig = signature.to_bytes().to_vec();
             sig.push(27 + recovery_id.to_byte());
             sig
@@ -2330,6 +2419,45 @@ fn preview_typed_data(typed: &Value) -> String {
     } else {
         format!("Sign {primary} for {domain}")
     }
+}
+
+/// Every transaction field we read must be a string when present. `tx_field`
+/// reads only strings, so a number or array would otherwise be taken as absent
+/// and replaced by its default — `value: 1000` becoming 0, or a non-string `to`
+/// turning a transfer into a contract deployment. `to: null` is the one allowed
+/// non-string: it is how a deployment is spelled.
+fn validate_tx_field_types(tx: &Value) -> Result<(), String> {
+    let obj = tx
+        .as_object()
+        .ok_or("eth_sendTransaction: the transaction must be an object")?;
+    for field in [
+        "from",
+        "to",
+        "value",
+        "data",
+        "input",
+        "gas",
+        "nonce",
+        "gasPrice",
+        "maxFeePerGas",
+        "maxPriorityFeePerGas",
+    ] {
+        match obj.get(field) {
+            None | Some(Value::String(_)) => {}
+            Some(Value::Null) if field == "to" => {}
+            Some(other) => {
+                return Err(format!(
+                    "eth_sendTransaction: '{field}' must be a 0x-hex string, got {other}"
+                ))
+            }
+        }
+    }
+    if let Some(to) = obj.get("to").and_then(Value::as_str) {
+        if !to.is_empty() && to != "0x" && !is_evm_address(to) {
+            return Err(format!("eth_sendTransaction: 'to' is not an address: {to}"));
+        }
+    }
+    Ok(())
 }
 
 /// Pull a string field from the dApp's transaction object.
@@ -2376,21 +2504,21 @@ fn bump_estimated_gas(gas: &str) -> Result<String, String> {
 
 /// A human-readable summary of a transaction for the approval window. Display
 /// only — `prepare_tx` resolves the real fields and `finalize_tx` signs them.
-fn preview_tx(tx: &Value) -> String {
+fn preview_tx(tx: &Value, symbol: &str) -> String {
     let to = tx_field(tx, "to").unwrap_or("new contract");
     let short_to = if to.len() > 12 {
         format!("{}…{}", &to[..6], &to[to.len() - 4..])
     } else {
         to.to_string()
     };
-    let eth = hex_to_u128(tx_field(tx, "value").unwrap_or("0x0")).unwrap_or(0) as f64 / 1e18;
+    let amount = hex_to_u128(tx_field(tx, "value").unwrap_or("0x0")).unwrap_or(0) as f64 / 1e18;
     let has_data = tx_field(tx, "data")
         .or_else(|| tx_field(tx, "input"))
         .map_or(false, |d| d.len() > 2);
     if has_data {
-        format!("Contract interaction → {short_to} ({eth:.4} ETH)")
+        format!("Contract interaction → {short_to} ({amount:.4} {symbol})")
     } else {
-        format!("Send {eth:.4} ETH → {short_to}")
+        format!("Send {amount:.4} {symbol} → {short_to}")
     }
 }
 
@@ -2568,8 +2696,10 @@ async fn finalize_tx_within(p: &PreparedTx, budget: Duration) -> Result<Broadcas
     };
 
     // Sign Rust-side (software) or on the device (Ledger) — never in a webview.
-    let (raw_tx, local_hash) = match active_signer_kind()? {
-        ActiveKind::Local => with_active_key(|k| tx1559.sign(k))??,
+    // The key is looked up by `p.from` — the account the approval window showed
+    // and whose nonce was prepared — never by whatever is active right now.
+    let (raw_tx, local_hash) = match signer_kind_for(&p.from)? {
+        ActiveKind::Local => with_key_for(&p.from, |k| tx1559.sign(k))??,
         ActiveKind::Ledger(path) => {
             let (r, s, y_parity) = ledger::sign_transaction(&path, &tx1559.unsigned_payload())?;
             tx1559.into_signed(&r, &s, y_parity)
@@ -2607,6 +2737,7 @@ async fn approve_and_send<R: Runtime>(
     origin: &str,
     tx: &Value,
 ) -> Result<Value, String> {
+    validate_tx_field_types(tx)?;
     ensure_tx_chain_id_matches(tx, chain_id)?;
     emit_request_phase(app, None, "preparing");
     let prepared = prepare_tx(chain_id, tx).await.inspect_err(|e| {
@@ -2616,11 +2747,11 @@ async fn approve_and_send<R: Runtime>(
         id: next_request_id(),
         method: "eth_sendTransaction".to_string(),
         origin: origin.to_string(),
-        signer_address: active_account_address(),
-        signer_kind: active_signer_kind()
+        signer_address: Some(prepared.from.clone()),
+        signer_kind: signer_kind_for(&prepared.from)
             .ok()
             .map(|kind| signer_kind_name(&kind).to_string()),
-        summary: preview_tx(tx),
+        summary: preview_tx(tx, &prepared.symbol),
         tx: Some(prepared.clone()),
         typed_data: None,
     };
@@ -2685,6 +2816,173 @@ async fn wallet_send<R: Runtime>(
     approve_and_send(&app, &chain_id, "AutoDesktop Wallet", &tx).await
 }
 
+// ---------------------------------------------------------------------------
+// Connected sites (EIP-2255 `eth_accounts` permission, per origin).
+//
+// A site learns the address, may ask for signatures, and may switch the wallet's
+// network ONLY after the user approved a connection for its origin. Origins come
+// from the engine-set webview URL (see `wallet_request`), never from the page.
+// ---------------------------------------------------------------------------
+
+const CONNECTED_SITES_FILE: &str = "connected-sites.json";
+
+fn connected_sites() -> &'static Mutex<HashSet<String>> {
+    static SITES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SITES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Origins with a connection prompt already on screen. A dApp that asks twice
+/// gets -32002 (as MetaMask answers) instead of a second prompt.
+fn connecting_sites() -> &'static Mutex<HashSet<String>> {
+    static SITES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SITES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn is_site_connected(origin: &str) -> bool {
+    connected_sites().lock().unwrap().contains(origin)
+}
+
+fn ensure_site_connected(origin: &str) -> Result<(), String> {
+    if is_site_connected(origin) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{origin} is not connected to AutoDesktop — call eth_requestAccounts first (4100)"
+        ))
+    }
+}
+
+fn connected_sites_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    // Tests must never write into the real user's app data dir.
+    #[cfg(test)]
+    {
+        let _ = app;
+        return Ok(std::env::temp_dir().join(format!(
+            "autodesktop-test-{}-{CONNECTED_SITES_FILE}",
+            std::process::id()
+        )));
+    }
+    #[cfg(not(test))]
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(CONNECTED_SITES_FILE))
+}
+
+/// Load the persisted connections at startup. A missing file means nothing is
+/// connected; an unreadable one is logged and also treated as nothing connected
+/// (the safe side: sites simply ask again).
+fn load_connected_sites<R: Runtime>(app: &AppHandle<R>) {
+    let path = match connected_sites_path(app) {
+        Ok(path) => path,
+        Err(e) => {
+            log_diagnostic(app, format!("connected sites path unavailable: {e}"));
+            return;
+        }
+    };
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            log_diagnostic(app, format!("reading {}: {e}", path.display()));
+            return;
+        }
+    };
+    match serde_json::from_slice::<Vec<String>>(&bytes) {
+        Ok(list) => *connected_sites().lock().unwrap() = list.into_iter().collect(),
+        Err(e) => log_diagnostic(app, format!("parsing {}: {e}", path.display())),
+    }
+}
+
+fn save_connected_sites<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let path = connected_sites_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut list: Vec<String> = connected_sites().lock().unwrap().iter().cloned().collect();
+    list.sort();
+    let json = serde_json::to_vec_pretty(&list).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("writing connected sites: {e}"))
+}
+
+fn connect_site<R: Runtime>(app: &AppHandle<R>, origin: &str) -> Result<(), String> {
+    connected_sites().lock().unwrap().insert(origin.to_string());
+    save_connected_sites(app)?;
+    let _ = app.emit("connected-sites-changed", ());
+    Ok(())
+}
+
+/// Forget a site's connection and tell its open tabs they no longer see an account.
+fn disconnect_site<R: Runtime>(app: &AppHandle<R>, origin: &str) -> Result<(), String> {
+    connected_sites().lock().unwrap().remove(origin);
+    save_connected_sites(app)?;
+    let js = "window.__autoWalletPush && window.__autoWalletPush('accountsChanged', []);";
+    for (label, webview) in app.webviews() {
+        if label.starts_with("dapp-") && webview_origin(&webview).as_deref() == Some(origin) {
+            let _ = webview.eval(js);
+        }
+    }
+    let _ = app.emit("connected-sites-changed", ());
+    Ok(())
+}
+
+fn webview_origin<R: Runtime>(webview: &tauri::Webview<R>) -> Option<String> {
+    webview
+        .url()
+        .ok()
+        .map(|url| url.origin().ascii_serialization())
+}
+
+/// Ask the user to connect `origin`. Only the active tab may ask, and only while
+/// an account is available to show.
+async fn request_site_connection<R: Runtime>(
+    app: &AppHandle<R>,
+    origin: &str,
+    webview_label: &str,
+) -> Result<(), String> {
+    ensure_signing_webview_is_active(webview_label)?;
+    let account = dapp_account_address()
+        .ok_or("the wallet is locked — unlock AutoDesktop, then connect again (4100)")?;
+    if !connecting_sites().lock().unwrap().insert(origin.to_string()) {
+        return Err(format!(
+            "a connection request from {origin} is already pending (code -32002)"
+        ));
+    }
+    let req = PendingRequest {
+        id: next_request_id(),
+        method: "eth_requestAccounts".to_string(),
+        origin: origin.to_string(),
+        signer_address: Some(account.clone()),
+        signer_kind: signer_kind_for(&account)
+            .ok()
+            .map(|kind| signer_kind_name(&kind).to_string()),
+        summary: format!("{origin} wants to see your address {account}"),
+        tx: None,
+        typed_data: None,
+    };
+    let decision = request_approval(app, req).await;
+    connecting_sites().lock().unwrap().remove(origin);
+    if !decision?.approved {
+        return Err("User rejected the connection request (4001)".to_string());
+    }
+    connect_site(app, origin)
+}
+
+/// Connected sites, sorted, for Settings. Shell-only.
+#[tauri::command]
+fn get_connected_sites() -> Vec<String> {
+    let mut list: Vec<String> = connected_sites().lock().unwrap().iter().cloned().collect();
+    list.sort();
+    list
+}
+
+/// Disconnect a site from Settings. Shell-only.
+#[tauri::command]
+fn disconnect_connected_site<R: Runtime>(app: AppHandle<R>, origin: String) -> Result<(), String> {
+    disconnect_site(&app, &origin)
+}
+
 /// The single wallet backend entry point. `origin` is the trustworthy caller
 /// origin derived from the webview context (see `wallet_request`).
 async fn handle_rpc<R: Runtime>(
@@ -2697,8 +2995,32 @@ async fn handle_rpc<R: Runtime>(
     println!("[AutoDesktop] rpc  method={method}  origin={origin}");
     match route_method(method) {
         Route::Wallet => {
+            match method {
+                "eth_requestAccounts" | "wallet_requestPermissions"
+                    if !is_site_connected(origin) =>
+                {
+                    request_site_connection(app, origin, webview_label).await?;
+                }
+                // Switching is global: it moves the wallet UI and every other tab.
+                "wallet_switchEthereumChain" | "wallet_addEthereumChain" => {
+                    ensure_site_connected(origin)?;
+                    ensure_signing_webview_is_active(webview_label)?;
+                }
+                "wallet_getPermissions" if !is_site_connected(origin) => {
+                    return Ok(json!([]));
+                }
+                "wallet_revokePermissions" => {
+                    disconnect_site(app, origin)?;
+                    return Ok(Value::Null);
+                }
+                _ => {}
+            }
             let current = current_chain().lock().unwrap().clone();
-            let account = dapp_account_address();
+            let account = if is_site_connected(origin) {
+                dapp_account_address()
+            } else {
+                None
+            };
             match handle_wallet_method(method, params, &current, account.as_deref())? {
                 WalletOutcome::Reply(v) => Ok(v),
                 WalletOutcome::SwitchChain(new_id) => {
@@ -2747,8 +3069,18 @@ async fn handle_rpc<R: Runtime>(
                 }
             }
         }
-        Route::Signing => handle_signing(app, method, params, origin, webview_label).await,
-        Route::Forward => forward_to_node(method, params).await,
+        Route::Signing => {
+            ensure_site_connected(origin)?;
+            handle_signing(app, method, params, origin, webview_label).await
+        }
+        Route::Forward => {
+            if !is_forwardable_method(method) {
+                return Err(format!(
+                    "The method \"{method}\" is not supported by AutoDesktop (code 4200)"
+                ));
+            }
+            forward_to_node(method, params).await
+        }
     }
 }
 
@@ -2816,6 +3148,7 @@ async fn wallet_request<R: tauri::Runtime>(
     method: String,
     params: Option<Vec<Value>>,
 ) -> Result<Value, String> {
+    note_activity(); // a dApp in use keeps the wallet unlocked
     let origin = match webview.url() {
         Ok(url) => url.origin().ascii_serialization(),
         // No page URL yet — fall back to the (still engine-set) webview label,
@@ -2865,6 +3198,12 @@ fn dapp_dialog_pending(
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Labels of dApp tabs that have a dialog on screen — one per tab at a time.
+fn dapp_dialog_owners() -> &'static Mutex<HashSet<String>> {
+    static OWNERS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    OWNERS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
 fn next_dapp_dialog_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     format!("dlg-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
@@ -2880,6 +3219,24 @@ async fn dapp_dialog<R: tauri::Runtime>(
     if !matches!(kind.as_str(), "alert" | "confirm" | "prompt" | "print") {
         return Err(format!("dapp_dialog: unsupported kind {kind:?}"));
     }
+    // A background tab's dialog would sit over the visible site and look as if
+    // it came from there.
+    ensure_signing_webview_is_active(webview.label())?;
+    let label = webview.label().to_string();
+    if !dapp_dialog_owners().lock().unwrap().insert(label.clone()) {
+        return Err("dapp_dialog: a dialog from this page is already open".to_string());
+    }
+    let result = show_dapp_dialog(&webview, kind, message, default_value).await;
+    dapp_dialog_owners().lock().unwrap().remove(&label);
+    result
+}
+
+async fn show_dapp_dialog<R: tauri::Runtime>(
+    webview: &tauri::Webview<R>,
+    kind: String,
+    message: String,
+    default_value: Option<String>,
+) -> Result<DappDialogResult, String> {
     let origin = match webview.url() {
         Ok(url) => url.origin().ascii_serialization(),
         Err(_) => format!("webview://{}", webview.label()),
@@ -3522,6 +3879,8 @@ fn open_external_url<R: Runtime>(
 
     let label = webview.label().to_string();
     if label.starts_with("dapp-") {
+        // Only the tab the user is looking at may open links.
+        ensure_signing_webview_is_active(&label)?;
         if let Ok(current) = webview.url() {
             if is_same_registrable_site(&current, &u) {
                 let target = u.to_string();
@@ -3632,12 +3991,17 @@ enum CloseBehavior {
 #[serde(default)]
 struct AppPrefs {
     close_behavior: CloseBehavior,
+    /// Lock the wallet after this many idle minutes; 0 = never.
+    auto_lock_minutes: u32,
 }
+
+const DEFAULT_AUTO_LOCK_MINUTES: u32 = 15;
 
 impl Default for AppPrefs {
     fn default() -> Self {
         Self {
             close_behavior: default_close_behavior(),
+            auto_lock_minutes: DEFAULT_AUTO_LOCK_MINUTES,
         }
     }
 }
@@ -4150,8 +4514,8 @@ async fn replace_activity_transaction<R: Runtime>(
         id: next_request_id(),
         method: "eth_sendTransaction".to_string(),
         origin: "AutoDesktop Wallet".to_string(),
-        signer_address: active_account_address(),
-        signer_kind: active_signer_kind()
+        signer_address: Some(prepared.from.clone()),
+        signer_kind: signer_kind_for(&prepared.from)
             .ok()
             .map(|kind| signer_kind_name(&kind).to_string()),
         summary: if is_cancel {
@@ -4227,9 +4591,84 @@ fn set_close_behavior<R: Runtime>(
         let _ = close_behavior;
         return Ok(CloseBehavior::Quit);
     }
-    let prefs = AppPrefs { close_behavior };
+    let prefs = AppPrefs {
+        close_behavior,
+        ..load_app_prefs(&app)
+    };
     save_app_prefs(&app, &prefs)?;
     Ok(close_behavior)
+}
+
+// ---------------------------------------------------------------------------
+// Auto-lock: drop the keys after a stretch with no user or dApp activity.
+// ---------------------------------------------------------------------------
+
+static LAST_ACTIVITY_MS: AtomicU64 = AtomicU64::new(0);
+
+fn last_activity_ms() -> u64 {
+    LAST_ACTIVITY_MS.load(Ordering::Relaxed)
+}
+
+fn note_activity_at(ms: u64) {
+    LAST_ACTIVITY_MS.store(ms, Ordering::Relaxed);
+}
+
+fn note_activity() {
+    note_activity_at(unix_time_ms());
+}
+
+/// Whether an idle wallet should lock now. Only a wallet unlocked with a password
+/// is lockable (a Ledger-only setup holds no secret). A clock that went
+/// backwards (`now < last`) never counts as idle time.
+fn auto_lock_due(now_ms: u64, last_ms: u64, minutes: u32, lockable: bool) -> bool {
+    lockable
+        && minutes > 0
+        && now_ms >= last_ms
+        && now_ms - last_ms >= u64::from(minutes) * 60_000
+}
+
+/// One check of the idle timer at `now_ms`. An open approval counts as activity:
+/// the user is looking at it, and locking would fail the request they are reading.
+fn auto_lock_tick_at<R: Runtime>(app: &AppHandle<R>, minutes: u32, now_ms: u64) {
+    if !pending().lock().unwrap().is_empty() {
+        return;
+    }
+    let lockable = store_state()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|s| s.password.is_some());
+    if auto_lock_due(now_ms, last_activity_ms(), minutes, lockable) {
+        log_diagnostic(app, format!("auto-lock after {minutes} idle minutes"));
+        lock_vault(app.clone());
+        let _ = app.emit("vault-locked", ());
+    }
+}
+
+/// The shell reports user input (throttled on its side) so reading the wallet
+/// keeps it unlocked.
+#[tauri::command]
+fn note_user_activity() {
+    note_activity();
+}
+
+#[tauri::command]
+fn get_auto_lock_minutes<R: Runtime>(app: AppHandle<R>) -> u32 {
+    load_app_prefs(&app).auto_lock_minutes
+}
+
+#[tauri::command]
+fn set_auto_lock_minutes<R: Runtime>(app: AppHandle<R>, minutes: u32) -> Result<u32, String> {
+    if minutes > 24 * 60 {
+        return Err(format!("auto-lock must be at most 1440 minutes, got {minutes}"));
+    }
+    let prefs = AppPrefs {
+        auto_lock_minutes: minutes,
+        ..load_app_prefs(&app)
+    };
+    save_app_prefs(&app, &prefs)?;
+    note_activity(); // changing the setting is activity; don't lock mid-click
+    Ok(minutes)
 }
 
 fn version_parts(version: &str) -> Vec<u64> {
@@ -7287,6 +7726,7 @@ fn unlock_vault_with_password<R: Runtime>(
         .map(|a| a.address.clone())
         .unwrap_or_default();
     let password = used_password.then_some(password);
+    note_activity(); // a fresh unlock starts a fresh idle window
     *store_state().lock().unwrap() = Some(WalletStore {
         password,
         wallets,
@@ -7359,20 +7799,30 @@ async fn unlock_vault_with_touch_id<R: Runtime>(
     if !touch_id::read_enabled_marker(&touch_id_marker_file(&app)?)? {
         return Err("Touch ID unlock is not enabled".to_string());
     }
-    let password = tauri::async_runtime::spawn_blocking(move || {
-        touch_id::authenticate(&reason)?;
-        touch_id::load_password()
-    })
-    .await
-    .map_err(|error| format!("running Touch ID unlock: {error}"))??;
+    // One prompt: the keychain read itself asks for the fingerprint.
+    let password = tauri::async_runtime::spawn_blocking(move || touch_id::load_password(&reason))
+        .await
+        .map_err(|error| format!("running Touch ID unlock: {error}"))??;
+    let Some(password) = password else {
+        // Enabled by an older version that kept the password unprotected: drop
+        // that copy and the marker, and have the user turn Touch ID on again.
+        disable_touch_id(app.clone())?;
+        return Err(
+            "Touch ID unlock was upgraded and must be turned on again: unlock with your password, then enable Touch ID in Settings"
+                .to_string(),
+        );
+    };
     unlock_vault_with_password(&app, password)
 }
 
 /// Lock the wallet: drop all decrypted key material (and the app password) from
 /// memory.
 #[tauri::command]
-fn lock_vault() {
+fn lock_vault<R: Runtime>(app: AppHandle<R>) {
     *store_state().lock().unwrap() = None;
+    // Connected tabs learn the account is gone (or see the watch-only address
+    // that stays exposed without keys).
+    push_accounts_changed(&app, dapp_account_address().as_deref());
 }
 
 /// Reset EVERYTHING: drop in-memory keys AND delete every keystore, so the app
@@ -7384,7 +7834,7 @@ fn lock_vault() {
 #[tauri::command]
 fn reset_vault<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     disable_touch_id(app.clone())?;
-    *store_state().lock().unwrap() = None;
+    lock_vault(app.clone());
     let dir = wallets_dir(&app)?;
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {}
@@ -7626,16 +8076,35 @@ fn delete_wallet<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String
 
 /// Push an EIP-1193 `accountsChanged` to every open dApp tab (same eval-push
 /// mechanism as `chainChanged`, so dApps keep ONLY allow-wallet-request).
+/// Which dApp tabs get an `accountsChanged`, and with what. Only connected sites
+/// may learn the address; the rest are told nothing. Sorted by label.
+fn accounts_changed_targets<R: Runtime>(
+    app: &AppHandle<R>,
+    address: Option<&str>,
+) -> Vec<(String, Vec<String>)> {
+    let accounts: Vec<String> = address.map(|a| vec![a.to_string()]).unwrap_or_default();
+    let mut targets: Vec<(String, Vec<String>)> = app
+        .webviews()
+        .into_iter()
+        .filter(|(label, webview)| {
+            label.starts_with("dapp-")
+                && webview_origin(webview).is_some_and(|o| is_site_connected(&o))
+        })
+        .map(|(label, _)| (label, accounts.clone()))
+        .collect();
+    targets.sort();
+    targets
+}
+
 fn push_accounts_changed<R: Runtime>(app: &AppHandle<R>, address: Option<&str>) {
-    let accounts = address.map(|a| vec![a]).unwrap_or_default();
-    let payload = serde_json::to_string(&accounts).unwrap_or_else(|_| "[]".into());
-    let js = format!(
-        "window.__autoWalletPush && window.__autoWalletPush('accountsChanged', {payload});"
-    );
-    for (label, webview) in app.webviews() {
-        if label.starts_with("dapp-") {
-            let _ = webview.eval(js.clone());
-        }
+    for (label, accounts) in accounts_changed_targets(app, address) {
+        let Some(webview) = app.get_webview(&label) else {
+            continue;
+        };
+        let payload = serde_json::to_string(&accounts).expect("a string list serializes");
+        let _ = webview.eval(format!(
+            "window.__autoWalletPush && window.__autoWalletPush('accountsChanged', {payload});"
+        ));
     }
 }
 
@@ -7880,11 +8349,25 @@ pub fn run() {
             add_account,
             rename_wallet,
             delete_wallet,
+            get_connected_sites,
+            disconnect_connected_site,
+            note_user_activity,
+            get_auto_lock_minutes,
+            set_auto_lock_minutes,
             set_app_menu_language
         ])
         .setup(|app| {
             // Load any persisted custom networks / RPC overrides before the UI asks.
             load_chains(app.handle());
+            load_connected_sites(app.handle());
+            let idle_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(20)).await;
+                    let minutes = load_app_prefs(&idle_handle).auto_lock_minutes;
+                    auto_lock_tick_at(&idle_handle, minutes, unix_time_ms());
+                }
+            });
             // A Ledger-only setup has no secret at rest, so load it on boot (paths +
             // addresses are public) — it boots straight to the wallet, no password.
             // (Migrates a legacy vault.json into wallets/ as a side effect.)
@@ -8834,17 +9317,20 @@ mod tests {
             "to": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
             "value": "0xde0b6b3a7640000" // 1e18 wei = 1 ETH
         });
-        let s = preview_tx(&send);
+        let s = preview_tx(&send, "ETH");
         assert!(s.contains("Send"), "got: {s}");
         assert!(s.contains("1.0000 ETH"), "got: {s}");
         assert!(s.contains("0x7099…79c8"), "got: {s}");
+        // The native symbol is the chain's, not always ETH.
+        let s = preview_tx(&send, "BNB");
+        assert!(s.contains("1.0000 BNB") && !s.contains("ETH"), "got: {s}");
 
         // A call with data reads as a contract interaction.
         let call = json!({
             "to": "0x1111111111111111111111111111111111111111",
             "data": "0xa9059cbb"
         });
-        assert!(preview_tx(&call).contains("Contract interaction"));
+        assert!(preview_tx(&call, "ETH").contains("Contract interaction"));
     }
 
     #[test]
@@ -9720,6 +10206,11 @@ mod e2e {
                 add_account,
                 rename_wallet,
                 delete_wallet,
+                get_connected_sites,
+                disconnect_connected_site,
+                note_user_activity,
+                get_auto_lock_minutes,
+                set_auto_lock_minutes,
                 set_app_menu_language
             ])
             .build(build_context())
@@ -9799,6 +10290,10 @@ mod e2e {
         *active_dapp_label().lock().unwrap() = None;
         *exposed_account_state().lock().unwrap() = None;
         *current_chain().lock().unwrap() = "0x1".into();
+        // dapp-0's origin counts as connected; other origins start disconnected.
+        *connected_sites().lock().unwrap() =
+            HashSet::from(["https://metamask.github.io".to_string()]);
+        connecting_sites().lock().unwrap().clear();
         super::install_unlocked_vault(TEST_MNEMONIC, 2).expect("unlock test vault");
         g
     }
@@ -9919,7 +10414,9 @@ mod e2e {
     #[test]
     fn e2e_pipeline_offline() {
         let _guard = wallet_guard(); // unlocked vault + chain=0x1, serialized
-        let wv = dapp_webview(build_app());
+        let app = build_app();
+        let wv = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0"); // only the active tab may switch chains
 
         // Wallet-routed reads come back through the full invoke→command→handler path.
         // eth_accounts now returns the UNLOCKED vault's active account (Anvil #0).
@@ -9976,8 +10473,9 @@ mod e2e {
     #[test]
     fn e2e_locked_wallet_has_no_account_and_refuses_signing() {
         let _guard = wallet_guard();
-        super::lock_vault(); // drop all decrypted keys from memory
-        let wv = dapp_webview(build_app());
+        let app = build_app();
+        super::lock_vault(app.handle().clone()); // drop all decrypted keys from memory
+        let wv = dapp_webview(app);
 
         // No account is exposed to dApps when locked.
         assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([]));
@@ -10137,7 +10635,7 @@ mod e2e {
             "expected unlocked watch-only signing to be blocked, got: {err}"
         );
 
-        super::lock_vault();
+        super::lock_vault(app.handle().clone());
         assert_eq!(
             call(&wv, "eth_accounts", json!([])).unwrap(),
             json!([watch])
@@ -10272,6 +10770,423 @@ mod e2e {
             account.to_lowercase(),
             "signature must recover to the signing account"
         );
+    }
+
+    /// SECURITY: the approval window shows the signer captured when the request
+    /// arrived. If the user switches account while the prompt is open, approving
+    /// must still sign with THAT account — never with whatever is active at the
+    /// moment the button is pressed.
+    #[test]
+    fn e2e_personal_sign_uses_the_account_shown_at_request_time() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
+        let approval = approval_webview(app);
+        let (_, second) = super::vault::derive_account(TEST_MNEMONIC, 1).unwrap();
+        assert_ne!(second, SPIKE_ACCOUNT);
+
+        let message_text = "pin the signer";
+        let message_hex = format!("0x{}", hex::encode(message_text));
+        let dapp_for_thread = dapp.clone();
+        let signer = std::thread::spawn(move || {
+            call(
+                &dapp_for_thread,
+                "personal_sign",
+                json!([message_hex, SPIKE_ACCOUNT]),
+            )
+        });
+
+        let id = wait_for_pending_id();
+        let shown = invoke(&approval, "get_pending_requests", json!({})).unwrap();
+        assert_eq!(shown[0]["signer_address"], json!(SPIKE_ACCOUNT));
+        super::select_account(app.handle().clone(), second.clone()).unwrap();
+        invoke(&approval, "approve_request", json!({ "id": id })).expect("approve ok");
+
+        let sig = signer.join().unwrap().expect("signature returned");
+        let raw = hex::decode(sig.as_str().unwrap().trim_start_matches("0x")).unwrap();
+        assert_eq!(
+            recover_personal_sign(message_text.as_bytes(), &raw),
+            SPIKE_ACCOUNT,
+            "must sign with the account the approval window showed"
+        );
+    }
+
+    /// Same rule for EIP-712: the signature must come from the account shown.
+    #[test]
+    fn e2e_sign_typed_data_uses_the_account_shown_at_request_time() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
+        let approval = approval_webview(app);
+        let (_, second) = super::vault::derive_account(TEST_MNEMONIC, 1).unwrap();
+
+        let typed = json!({
+            "types": {
+                "EIP712Domain": [{"name": "name", "type": "string"}],
+                "Note": [{"name": "text", "type": "string"}]
+            },
+            "primaryType": "Note",
+            "domain": { "name": "Pin" },
+            "message": { "text": "signer must not move" }
+        });
+        let typed_str = serde_json::to_string(&typed).unwrap();
+        let dapp_for_thread = dapp.clone();
+        let signer = std::thread::spawn(move || {
+            call(
+                &dapp_for_thread,
+                "eth_signTypedData_v4",
+                json!([SPIKE_ACCOUNT, typed_str]),
+            )
+        });
+
+        let id = wait_for_pending_id();
+        super::select_account(app.handle().clone(), second).unwrap();
+        invoke(&approval, "approve_request", json!({ "id": id })).expect("approve ok");
+
+        let sig = signer.join().unwrap().expect("signature returned");
+        let raw = hex::decode(sig.as_str().unwrap().trim_start_matches("0x")).unwrap();
+        let digest = eip712::signing_hash(&typed).unwrap();
+        let signature = k256::ecdsa::Signature::from_slice(&raw[..64]).unwrap();
+        let recid = k256::ecdsa::RecoveryId::from_byte(raw[64] - 27).unwrap();
+        let vk = VerifyingKey::recover_from_prehash(&digest, &signature, recid).unwrap();
+        assert_eq!(address_from_verifying_key(&vk), SPIKE_ACCOUNT);
+    }
+
+    /// A prepared transaction carries its `from` (and that account's nonce). The
+    /// signature must come from that account even if another one is active now.
+    #[test]
+    fn a_prepared_transaction_is_signed_by_its_from_account() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let chain = super::tests::stalled_node_chain();
+        let chain_id = chain.id.clone();
+        let restore = chains_state().lock().unwrap().clone();
+        chains_state().lock().unwrap().push(chain);
+        let resolved = find_chain(&chain_id).map(|c| c.rpc);
+        if resolved.as_deref().map(|rpc| rpc.contains("127.0.0.1")) != Some(true) {
+            *chains_state().lock().unwrap() = restore;
+            panic!("test chain must resolve to the loopback stub, got {resolved:?}");
+        }
+
+        let prepared = PreparedTx {
+            chain_id: chain_id.clone(),
+            chain_name: "Stalled".into(),
+            symbol: "ETH".into(),
+            from: SPIKE_ACCOUNT.into(),
+            to: SPIKE_ACCOUNT.into(),
+            value: "0x2".into(),
+            data: "0x".into(),
+            gas: "0x5208".into(),
+            nonce: "0x7".into(),
+            max_priority_fee_per_gas: "0x1".into(),
+            max_fee_per_gas: "0x3b9aca00".into(),
+        };
+        let (second, _) = super::vault::derive_account(TEST_MNEMONIC, 1)
+            .map(|(_, a)| (a, ()))
+            .unwrap();
+        super::select_account(app.handle().clone(), second).unwrap();
+
+        let sent = tauri::async_runtime::block_on(finalize_tx_within(
+            &prepared,
+            Duration::from_millis(300),
+        ));
+        *chains_state().lock().unwrap() = restore;
+        let sent = sent.expect("unreachable node still yields the local hash");
+
+        use eth_tx::{parse_address, parse_data, parse_quantity, Eip1559Tx};
+        let (spike_key, _) = super::vault::derive_account(TEST_MNEMONIC, 0).unwrap();
+        let expected = Eip1559Tx {
+            chain_id: parse_quantity(&prepared.chain_id).unwrap(),
+            nonce: parse_quantity(&prepared.nonce).unwrap(),
+            max_priority_fee_per_gas: parse_quantity(&prepared.max_priority_fee_per_gas).unwrap(),
+            max_fee_per_gas: parse_quantity(&prepared.max_fee_per_gas).unwrap(),
+            gas_limit: parse_quantity(&prepared.gas).unwrap(),
+            to: parse_address(&prepared.to).unwrap(),
+            value: parse_quantity(&prepared.value).unwrap(),
+            data: parse_data(&prepared.data).unwrap(),
+        }
+        .sign(&spike_key)
+        .unwrap();
+        assert_eq!(
+            sent.hash, expected.1,
+            "the tx must be signed by prepared.from, not the currently active account"
+        );
+    }
+
+    /// SECURITY: only standard read methods (plus eth_sendRawTransaction) reach the
+    /// node. Node-admin / account methods — anvil_*, personal_*, debug_*,
+    /// eth_signTransaction — would act on a local dev node the user registered.
+    /// The refusal happens before any network I/O, so this test is offline.
+    #[test]
+    fn e2e_dapp_cannot_forward_node_admin_methods() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let wv = dapp_webview(app);
+        for method in [
+            "anvil_setBalance",
+            "hardhat_impersonateAccount",
+            "personal_unlockAccount",
+            "personal_sendTransaction",
+            "eth_signTransaction",
+            "debug_traceTransaction",
+            "admin_addPeer",
+            "miner_start",
+        ] {
+            let err = call(&wv, method, json!([])).unwrap_err();
+            assert!(
+                err.as_str().unwrap_or_default().contains("4200"),
+                "{method} must be refused as unsupported (4200), got: {err}"
+            );
+        }
+        assert!(route_method("eth_getLogs") == Route::Forward);
+        assert!(is_forwardable_method("eth_getLogs"));
+        assert!(is_forwardable_method("eth_sendRawTransaction"));
+        assert!(!is_forwardable_method("anvil_mine"));
+    }
+
+    /// A dApp that names an account in a signing request must name the one that
+    /// will sign; otherwise the page believes it holds a signature from X while
+    /// it got one from Y. Refused before any approval window opens.
+    #[test]
+    fn e2e_signing_refuses_a_different_named_account() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let wv = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
+        let other = "0x3333333333333333333333333333333333333333";
+
+        let err = call(&wv, "personal_sign", json!(["0x48656c6c6f", other])).unwrap_err();
+        assert!(
+            err.as_str().unwrap_or_default().contains("is not the selected account"),
+            "got: {err}"
+        );
+        let err = call(&wv, "eth_signTypedData_v4", json!([other, "{}"])).unwrap_err();
+        assert!(
+            err.as_str().unwrap_or_default().contains("is not the selected account"),
+            "got: {err}"
+        );
+        assert!(pending().lock().unwrap().is_empty(), "no approval may open");
+    }
+
+    /// Some older dApps send personal_sign params as [address, message]. The
+    /// wallet must sign the message, not the 20 address bytes.
+    #[test]
+    fn e2e_personal_sign_accepts_legacy_param_order() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
+        let approval = approval_webview(app);
+        let message_text = "legacy order";
+        let message_hex = format!("0x{}", hex::encode(message_text));
+
+        let dapp_for_thread = dapp.clone();
+        let signer = std::thread::spawn(move || {
+            call(
+                &dapp_for_thread,
+                "personal_sign",
+                json!([SPIKE_ACCOUNT, message_hex]),
+            )
+        });
+        let id = wait_for_pending_id();
+        let shown = invoke(&approval, "get_pending_requests", json!({})).unwrap();
+        assert_eq!(shown[0]["summary"], json!(message_text));
+        invoke(&approval, "approve_request", json!({ "id": id })).expect("approve ok");
+
+        let sig = signer.join().unwrap().expect("signature returned");
+        let raw = hex::decode(sig.as_str().unwrap().trim_start_matches("0x")).unwrap();
+        assert_eq!(
+            recover_personal_sign(message_text.as_bytes(), &raw),
+            SPIKE_ACCOUNT
+        );
+    }
+
+    /// A transaction field of the wrong type must be refused, never read as its
+    /// default: `value: 1000` (a number) used to become 0, and a non-string `to`
+    /// used to turn a transfer into a contract deployment.
+    #[test]
+    fn transaction_fields_of_the_wrong_type_are_refused() {
+        for (tx, field) in [
+            (json!({ "to": SPIKE_ACCOUNT, "value": 1000 }), "value"),
+            (json!({ "to": 42, "value": "0x1" }), "to"),
+            (json!({ "to": SPIKE_ACCOUNT, "data": ["0x"] }), "data"),
+            (json!({ "to": SPIKE_ACCOUNT, "gas": 21000 }), "gas"),
+            (json!({ "to": SPIKE_ACCOUNT, "nonce": 3 }), "nonce"),
+            (json!({ "to": SPIKE_ACCOUNT, "maxFeePerGas": 1 }), "maxFeePerGas"),
+            // Not an address: must not reach the byte-sliced summary (would panic).
+            (json!({ "to": "0xéééééééééééééééééééé" }), "to"),
+            (json!({ "to": "0x1234" }), "to"),
+        ] {
+            let err = validate_tx_field_types(&tx).unwrap_err();
+            assert!(err.contains(field), "{tx}: error must name {field}, got {err}");
+        }
+        // Absent fields, and `to: null` (contract creation), stay valid.
+        validate_tx_field_types(&json!({ "to": null, "data": "0x60" })).unwrap();
+        validate_tx_field_types(&json!({ "to": SPIKE_ACCOUNT, "value": "0x1" })).unwrap();
+        // Not a transaction object at all.
+        assert!(validate_tx_field_types(&json!("0xdead")).is_err());
+    }
+
+    /// End to end: a wrong-typed value is refused before any approval opens.
+    #[test]
+    fn e2e_send_transaction_with_numeric_value_is_refused() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let wv = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
+        let err = call(
+            &wv,
+            "eth_sendTransaction",
+            json!([{ "from": SPIKE_ACCOUNT, "to": SPIKE_ACCOUNT, "value": 1000 }]),
+        )
+        .unwrap_err();
+        assert!(err.as_str().unwrap_or_default().contains("value"), "got: {err}");
+        assert!(pending().lock().unwrap().is_empty());
+    }
+
+    /// A dApp on an origin the user has never connected. dapp-0 (metamask.github.io)
+    /// is treated as already connected by `wallet_guard`.
+    fn stranger_dapp(app: &'static tauri::App<MockRuntime>) -> WebviewWindow<MockRuntime> {
+        webview(
+            app,
+            "dapp-1",
+            tauri::WebviewUrl::External("https://stranger.example/app".parse().unwrap()),
+        )
+    }
+
+    /// PRIVACY: a site the user never connected must not learn the address, and
+    /// must not be able to sign or switch the wallet's network.
+    #[test]
+    fn e2e_unconnected_site_sees_no_account_and_cannot_act() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let wv = stranger_dapp(app);
+        activate_dapp_tab(app, "dapp-1");
+
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([]));
+        assert_eq!(call(&wv, "eth_coinbase", json!([])).unwrap(), Value::Null);
+        assert_eq!(
+            call(&wv, "wallet_getPermissions", json!([])).unwrap(),
+            json!([])
+        );
+
+        let err = call(&wv, "personal_sign", json!(["0x48656c6c6f", SPIKE_ACCOUNT])).unwrap_err();
+        assert!(
+            err.as_str().unwrap_or_default().contains("4100"),
+            "unconnected signing must be refused as unauthorized (4100), got: {err}"
+        );
+        assert!(pending().lock().unwrap().is_empty(), "no approval may open");
+
+        let err = call(
+            &wv,
+            "wallet_switchEthereumChain",
+            json!([{ "chainId": "0x2105" }]),
+        )
+        .unwrap_err();
+        assert!(err.as_str().unwrap_or_default().contains("4100"), "got: {err}");
+        assert_eq!(*current_chain().lock().unwrap(), "0x1");
+    }
+
+    /// eth_requestAccounts from an unconnected site asks the user first; approving
+    /// connects the origin, after which eth_accounts answers.
+    #[test]
+    fn e2e_request_accounts_asks_then_connects() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let wv = stranger_dapp(app);
+        activate_dapp_tab(app, "dapp-1");
+        let approval = approval_webview(app);
+
+        let wv_thread = wv.clone();
+        let asker = std::thread::spawn(move || call(&wv_thread, "eth_requestAccounts", json!([])));
+        let id = wait_for_pending_id();
+        let shown = invoke(&approval, "get_pending_requests", json!({})).unwrap();
+        assert_eq!(shown[0]["method"], json!("eth_requestAccounts"));
+        assert_eq!(shown[0]["origin"], json!("https://stranger.example"));
+        assert_eq!(shown[0]["signer_address"], json!(SPIKE_ACCOUNT));
+        invoke(&approval, "approve_request", json!({ "id": id })).expect("approve ok");
+
+        assert_eq!(asker.join().unwrap().unwrap(), json!([SPIKE_ACCOUNT]));
+        assert_eq!(
+            call(&wv, "eth_accounts", json!([])).unwrap(),
+            json!([SPIKE_ACCOUNT])
+        );
+
+        // Revoking disconnects the site again.
+        assert_eq!(
+            call(&wv, "wallet_revokePermissions", json!([{ "eth_accounts": {} }])).unwrap(),
+            Value::Null
+        );
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([]));
+    }
+
+    /// Connections survive a restart: what `connect_site` saves, a fresh load
+    /// reads back, and a disconnect is saved too.
+    #[test]
+    fn connected_sites_persist_across_a_restart() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        connect_site(app.handle(), "https://kept.example").unwrap();
+        connected_sites().lock().unwrap().clear(); // "restart": memory is empty
+        load_connected_sites(app.handle());
+        assert!(is_site_connected("https://kept.example"));
+        assert!(is_site_connected("https://metamask.github.io"));
+
+        disconnect_site(app.handle(), "https://kept.example").unwrap();
+        connected_sites().lock().unwrap().clear();
+        load_connected_sites(app.handle());
+        assert!(!is_site_connected("https://kept.example"));
+        assert!(is_site_connected("https://metamask.github.io"));
+    }
+
+    /// Rejecting the connection answers 4001 and leaves the site disconnected.
+    #[test]
+    fn e2e_request_accounts_reject_stays_disconnected() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let wv = stranger_dapp(app);
+        activate_dapp_tab(app, "dapp-1");
+        let approval = approval_webview(app);
+
+        let wv_thread = wv.clone();
+        let asker = std::thread::spawn(move || call(&wv_thread, "eth_requestAccounts", json!([])));
+        let id = wait_for_pending_id();
+        invoke(&approval, "reject_request", json!({ "id": id })).expect("reject ok");
+
+        let err = asker.join().unwrap().unwrap_err();
+        assert!(err.as_str().unwrap_or_default().contains("4001"), "got: {err}");
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([]));
+    }
+
+    /// A connected dApp in a background tab must not move the whole wallet (and
+    /// every other tab) to another network.
+    #[test]
+    fn e2e_background_tab_cannot_switch_chain() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let wv = dapp_webview(app);
+        let shell = shell_webview(app);
+        invoke(
+            &shell,
+            "open_dapp",
+            json!({ "label": "dapp-0", "url": "https://metamask.github.io/test-dapp/", "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }),
+        )
+        .expect("shell can activate dapp tab");
+        invoke(&shell, "hide_dapp", json!({ "label": "dapp-0" })).expect("hide");
+
+        let err = call(
+            &wv,
+            "wallet_switchEthereumChain",
+            json!([{ "chainId": "0x2105" }]),
+        )
+        .unwrap_err();
+        assert!(
+            err.as_str().unwrap_or_default().contains("not the active tab"),
+            "got: {err}"
+        );
+        assert_eq!(*current_chain().lock().unwrap(), "0x1");
     }
 
     /// Rejecting yields the EIP-1193 user-rejected (4001) error to the dApp.
@@ -10508,6 +11423,169 @@ mod e2e {
                 .contains("unsupported kind"),
             "expected dapp_dialog to reach the narrow handler, got: {err}"
         );
+    }
+
+    #[test]
+    fn auto_lock_is_due_only_after_the_idle_window() {
+        let min = 60_000;
+        // Never when disabled, when nothing is unlocked with a password, or early.
+        assert!(!auto_lock_due(100 * min, 0, 0, true));
+        assert!(!auto_lock_due(100 * min, 0, 15, false));
+        assert!(!auto_lock_due(20 * min, 6 * min, 15, true));
+        // Exactly at, and past, the window.
+        assert!(auto_lock_due(21 * min, 6 * min, 15, true));
+        assert!(auto_lock_due(60 * min, 6 * min, 15, true));
+        // A clock that went backwards never locks by accident.
+        assert!(!auto_lock_due(1 * min, 6 * min, 15, true));
+    }
+
+    /// The idle timer drops the keys, but never under an open approval (the user
+    /// is looking at it), and dApp traffic counts as activity.
+    #[test]
+    fn e2e_auto_lock_drops_keys_after_idle() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let wv = dapp_webview(app);
+        // The test vault has no password; give it one so it is lockable.
+        store_state().lock().unwrap().as_mut().unwrap().password =
+            Some(Zeroizing::new("hunter22".to_string()));
+        let min = 60_000;
+
+        note_activity_at(10 * min);
+        auto_lock_tick_at(app.handle(), 15, 20 * min);
+        assert!(active_account_address().is_some(), "not idle long enough yet");
+
+        // A dApp call is activity: it resets the timer.
+        call(&wv, "eth_chainId", json!([])).unwrap();
+        assert!(last_activity_ms() > 20 * min);
+
+        note_activity_at(10 * min);
+        auto_lock_tick_at(app.handle(), 15, 30 * min);
+        assert!(active_account_address().is_none(), "idle 20 min > 15 min: locked");
+        assert_eq!(call(&wv, "eth_accounts", json!([])).unwrap(), json!([]));
+    }
+
+    #[test]
+    fn e2e_auto_lock_waits_while_an_approval_is_open() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        store_state().lock().unwrap().as_mut().unwrap().password =
+            Some(Zeroizing::new("hunter22".to_string()));
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        pending().lock().unwrap().insert(
+            "req-open".into(),
+            PendingEntry {
+                req: PendingRequest {
+                    id: "req-open".into(),
+                    method: "personal_sign".into(),
+                    origin: "https://metamask.github.io".into(),
+                    signer_address: None,
+                    signer_kind: None,
+                    summary: String::new(),
+                    tx: None,
+                    typed_data: None,
+                },
+                responder: tx,
+            },
+        );
+        note_activity_at(0);
+        auto_lock_tick_at(app.handle(), 15, 600 * 60_000);
+        assert!(active_account_address().is_some());
+        pending().lock().unwrap().clear();
+    }
+
+    /// Locking tells connected tabs their account is gone; unconnected tabs are
+    /// never told anything (not even that there was an account).
+    #[test]
+    fn e2e_lock_announces_no_account_to_connected_tabs_only() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let _connected = dapp_webview(app);
+        let _stranger = stranger_dapp(app);
+
+        let before = accounts_changed_targets(app.handle(), dapp_account_address().as_deref());
+        assert_eq!(before, vec![("dapp-0".to_string(), vec![SPIKE_ACCOUNT.to_string()])]);
+
+        lock_vault(app.handle().clone());
+        let after = accounts_changed_targets(app.handle(), dapp_account_address().as_deref());
+        assert_eq!(after, vec![("dapp-0".to_string(), Vec::<String>::new())]);
+    }
+
+    /// A background tab must not put a dialog over the tab the user is looking at
+    /// (it would appear to come from the visible site), nor open browser tabs.
+    #[test]
+    fn e2e_background_dapp_cannot_pop_dialogs_or_open_urls() {
+        let _guard = wallet_guard();
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        let shell = shell_webview(app);
+        invoke(
+            &shell,
+            "open_dapp",
+            json!({ "label": "dapp-0", "url": "https://metamask.github.io/test-dapp/", "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }),
+        )
+        .expect("activate");
+        invoke(&shell, "hide_dapp", json!({ "label": "dapp-0" })).expect("hide");
+
+        let err = invoke(
+            &dapp,
+            "dapp_dialog",
+            json!({ "kind": "prompt", "message": "Enter your recovery phrase", "defaultValue": null }),
+        )
+        .unwrap_err();
+        assert!(err.as_str().unwrap_or_default().contains("not the active tab"), "got: {err}");
+        assert!(dapp_dialog_pending().lock().unwrap().is_empty());
+
+        let err = invoke(
+            &dapp,
+            "open_external_url",
+            json!({ "url": "https://phish.example/" }),
+        )
+        .unwrap_err();
+        assert!(err.as_str().unwrap_or_default().contains("not the active tab"), "got: {err}");
+    }
+
+    /// One dialog per tab at a time: a page looping on alert() must not stack
+    /// prompts (the shell shows only one; the rest would hang for 300s).
+    #[test]
+    fn e2e_dapp_dialogs_do_not_stack() {
+        let _guard = wallet_guard();
+        dapp_dialog_pending().lock().unwrap().clear();
+        dapp_dialog_owners().lock().unwrap().clear();
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        activate_dapp_tab(app, "dapp-0");
+
+        let first = dapp.clone();
+        let opener = std::thread::spawn(move || {
+            invoke(
+                &first,
+                "dapp_dialog",
+                json!({ "kind": "alert", "message": "one", "defaultValue": null }),
+            )
+        });
+        let mut id = None;
+        for _ in 0..300 {
+            id = dapp_dialog_pending().lock().unwrap().keys().next().cloned();
+            if id.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let id = id.expect("first dialog registered");
+
+        let err = invoke(
+            &dapp,
+            "dapp_dialog",
+            json!({ "kind": "alert", "message": "two", "defaultValue": null }),
+        )
+        .unwrap_err();
+        assert!(err.as_str().unwrap_or_default().contains("already open"), "got: {err}");
+
+        resolve_dapp_dialog(id, "ok".into(), None).unwrap();
+        let res = opener.join().unwrap().expect("first dialog resolves");
+        assert_eq!(res["action"], json!("ok"));
+        assert!(dapp_dialog_owners().lock().unwrap().is_empty(), "slot freed");
     }
 
     /// The trusted *shell* webview (local). As a local webview it may call bare

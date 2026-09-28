@@ -23,6 +23,8 @@ import {
   syncToastOverlay,
 } from "./lib/platform";
 import { refreshVaultStatus, useVault } from "./lib/vault";
+import { createActivityReporter } from "./lib/autoLock";
+import { invoke } from "@tauri-apps/api/core";
 import { useActiveAccountSync } from "./lib/accounts";
 import { findChain, loadChains } from "./lib/chains";
 import { useT } from "./lib/i18n";
@@ -197,6 +199,31 @@ function App() {
   }, [activity, showTxToast]);
 
   const [page, setPage] = useState<Page>("wallet");
+
+  // Auto-lock: user input in the shell restarts the backend idle timer (dApp
+  // calls restart it on the Rust side), and an idle lock sends the UI to the
+  // lock screen.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const report = createActivityReporter(30_000, Date.now, () => {
+      invoke("note_user_activity").catch((e) =>
+        console.error("[AutoDesktop] note_user_activity failed", e),
+      );
+    });
+    const events = ["pointerdown", "keydown", "wheel"] as const;
+    for (const ev of events) window.addEventListener(ev, report, { passive: true });
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen("vault-locked", () => void refreshVaultStatus()).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+      for (const ev of events) window.removeEventListener(ev, report);
+    };
+  }, []);
   const [dappDialog, setDappDialog] =
     useState<Extract<MenuOverlayPayload, { kind: "dialog" }> | null>(null);
   useEffect(() => {

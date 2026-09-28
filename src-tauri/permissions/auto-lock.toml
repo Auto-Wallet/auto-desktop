@@ -1,0 +1,15 @@
+# Auto-lock settings and the shell's activity heartbeat. Shell-only.
+[[permission]]
+identifier = "allow-note-user-activity"
+description = "Allow the shell to report user input so the idle auto-lock timer restarts."
+commands.allow = ["note_user_activity"]
+
+[[permission]]
+identifier = "allow-get-auto-lock-minutes"
+description = "Allow the shell to read the auto-lock idle timeout."
+commands.allow = ["get_auto_lock_minutes"]
+
+[[permission]]
+identifier = "allow-set-auto-lock-minutes"
+description = "Allow the shell to change the auto-lock idle timeout."
+commands.allow = ["set_auto_lock_minutes"]
