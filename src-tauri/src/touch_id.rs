@@ -23,6 +23,41 @@ mod tests {
         assert!(!read_enabled_marker(&path).expect("removed marker"));
     }
 
+    /// Models what a signed build showed on macOS: deleting the old plain item
+    /// (a query without kSecUseDataProtectionKeychain) ALSO matches and deletes
+    /// the protected item. Saving must therefore clear the plain copy first —
+    /// clearing it after the save deleted the password it had just stored, and
+    /// every Touch ID unlock then found nothing.
+    #[test]
+    fn replacing_the_password_leaves_the_protected_item_in_place() {
+        use super::{replace_password, CredentialStore};
+
+        #[derive(Default)]
+        struct Keychain {
+            plain: Option<String>,
+            protected: Option<String>,
+        }
+        impl CredentialStore for Keychain {
+            fn delete_plain(&mut self) -> Result<(), String> {
+                self.plain = None;
+                self.protected = None; // the query matches both keychains
+                Ok(())
+            }
+            fn save_protected(&mut self, password: &str) -> Result<(), String> {
+                self.protected = Some(password.to_string());
+                Ok(())
+            }
+        }
+
+        let mut keychain = Keychain {
+            plain: Some("old".into()),
+            protected: None,
+        };
+        replace_password(&mut keychain, "new-password").unwrap();
+        assert_eq!(keychain.protected.as_deref(), Some("new-password"));
+        assert_eq!(keychain.plain, None, "the unprotected copy is gone");
+    }
+
     #[test]
     fn malformed_marker_is_reported_instead_of_silently_enabling_touch_id() {
         let path = marker_path();
@@ -72,6 +107,21 @@ pub fn remove_enabled_marker(path: &Path) -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("removing Touch ID marker: {error}")),
     }
+}
+
+/// The two keychain operations a save needs, split out so their order is testable.
+pub(crate) trait CredentialStore {
+    /// Remove the plain login-keychain item older versions wrote.
+    fn delete_plain(&mut self) -> Result<(), String>;
+    /// Store the password behind the Touch ID access control.
+    fn save_protected(&mut self, password: &str) -> Result<(), String>;
+}
+
+/// Clear the plain copy FIRST. On macOS that delete also matches the protected
+/// item, so running it after the save wiped the password just stored.
+pub(crate) fn replace_password(store: &mut impl CredentialStore, password: &str) -> Result<(), String> {
+    store.delete_plain()?;
+    store.save_protected(password)
 }
 
 #[cfg(target_os = "macos")]
@@ -191,11 +241,21 @@ mod platform {
         }
     }
 
+    struct SystemKeychain;
+
+    impl CredentialStore for SystemKeychain {
+        // Older versions kept the password as a plain login-keychain item;
+        // never leave that copy behind next to the protected one.
+        fn delete_plain(&mut self) -> Result<(), String> {
+            delete_legacy_password()
+        }
+        fn save_protected(&mut self, password: &str) -> Result<(), String> {
+            save_password_at(SERVICE, ACCOUNT, password)
+        }
+    }
+
     pub fn save_password(password: &str) -> Result<(), String> {
-        save_password_at(SERVICE, ACCOUNT, password)?;
-        // Older versions kept the password as a plain login-keychain
-        // item; never leave that copy behind next to the protected one.
-        delete_legacy_password()
+        replace_password(&mut SystemKeychain, password)
     }
 
     /// Read the password. macOS shows ONE Touch ID prompt, with `reason`, and

@@ -16,7 +16,8 @@ export function isProviderInjectionAllowed(rawUrl: string): boolean {
   return !BLOCKED_PROVIDER_HOSTS.has(url.hostname.toLowerCase());
 }
 
-// Compact placeholder brand icon (swap for the real Auto Wallet PNG later).
+// Neutral fallback icon. Hosts pass their own via `installProvider(…, { info: { icon } })`
+// (AutoDesktop does, in src/injected/inpage.tauri.ts).
 const DEFAULT_ICON =
   'data:image/svg+xml;base64,' +
   btoaSafe(

@@ -4,6 +4,10 @@
 // to AutoDesktop's EIP-1193/6963 provider.
 
 import { installProvider, type ProviderTransport } from '../wallet-core';
+// The AutoDesktop app icon (src/injected/auto-wallet-icon.png, 96px — EIP-6963's
+// minimum) as a data URI, defined by scripts/build-injected.ts. dApps show it in
+// their "connect wallet" list.
+declare const __AUTO_WALLET_ICON__: string;
 
 type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -78,7 +82,7 @@ const transport: ProviderTransport = {
 
 // lockEthereum: the dapp webview is guaranteed sole-provider, so pin
 // window.ethereum and freeze the provider prototype against page hijacking.
-installProvider(transport, { forceInject: true, lockEthereum: true });
+installProvider(transport, { forceInject: true, lockEthereum: true, info: { icon: __AUTO_WALLET_ICON__ } });
 console.log('[AutoDesktop] Auto Wallet provider injected');
 
 // Route "open in a new window" intents (window.open / <a target="_blank">) to the
