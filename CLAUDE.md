@@ -162,11 +162,18 @@ so macOS itself demands the fingerprint — an in-app `LAContext` check alone wo
 leave a plain login-keychain item any same-user process could ask for. That keychain
 needs the restricted `keychain-access-groups` entitlement, which macOS honors only
 with a matching embedded provisioning profile:
-- Only `bun run build:macos:local` signs with `src-tauri/Entitlements.keychain.plist`
-  and embeds the Developer ID profile from `APPLE_PROVISIONING_PROFILE` (path in
-  `.env.local`; `*.provisionprofile` is git-ignored). It checks the profile (team,
-  app id, keychain group, expiry) before building and the signed app after.
-- Everything else (CI release, `tauri dev`, `cargo test`) uses `Entitlements.plist`.
+- Release builds sign with `src-tauri/Entitlements.keychain.plist` and embed the
+  Developer ID profile (`*.provisionprofile` is git-ignored):
+  - `bun run build:macos:local` reads the profile path from `APPLE_PROVISIONING_PROFILE`
+    in `.env.local`.
+  - `release.yml` decodes the `APPLE_PROVISIONING_PROFILE` secret (base64 of the
+    file). `scripts/prepare-keychain-signing.ts` checks it and prints the
+    `tauri build --config` that embeds it. Both signing passes — `tauri build`
+    (the updater `.app.tar.gz`) and the DMG re-sign — must use the keychain
+    entitlements; the verify step checks both apps.
+  - Both paths check the profile (team, app id, keychain group, expiry) before
+    building.
+- Everything else (`ci.yml`, `tauri dev`, `cargo test`) uses `Entitlements.plist`.
   Never add the keychain entitlements there without a profile: macOS kills an app
   that claims restricted entitlements without one.
 - Unsigned builds get `-34018` when enabling Touch ID. That is intended — there is

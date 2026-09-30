@@ -135,6 +135,26 @@ jobs:
           esac
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
+      # Touch ID unlock keeps the vault password in the data-protection keychain,
+      # which needs the restricted keychain-access-groups entitlement. macOS honors
+      # it only with the Developer ID provisioning profile embedded in the app (and
+      # refuses to launch an app that claims it without one), so check the profile
+      # here — before a long build — and hand `tauri build` the config that embeds it.
+      - name: Prepare Touch ID keychain signing
+        env:
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APPLE_PROVISIONING_PROFILE" ]; then
+            echo "::error::Missing the APPLE_PROVISIONING_PROFILE secret (base64 of the Developer ID .provisionprofile)."
+            exit 1
+          fi
+          PROFILE="$RUNNER_TEMP/AutoDesktop.provisionprofile"
+          echo "$APPLE_PROVISIONING_PROFILE" | base64 --decode > "$PROFILE"
+          CONFIG=$(bun scripts/prepare-keychain-signing.ts "$PROFILE")
+          echo "KEYCHAIN_BUILD_CONFIG=$CONFIG" >> "$GITHUB_ENV"
+
       - name: Build signed + notarized macOS bundles
         env:
           # Signing identity exported above; notarization creds from repo secrets.
@@ -156,7 +176,9 @@ jobs:
           security unlock-keychain -p "ci" "$APPLE_KEYCHAIN"
           # The updater plugin creates macOS update artifacts only for the
           # `app` bundle target; `dmg` is still built for manual installs.
-          bun run tauri build --target ${{ matrix.target }} --bundles app,dmg -v
+          # KEYCHAIN_BUILD_CONFIG embeds the profile and signs with the keychain
+          # entitlements; this pass also produces the updater .app.tar.gz.
+          bun run tauri build --target ${{ matrix.target }} --bundles app,dmg --config "$KEYCHAIN_BUILD_CONFIG" -v
 
       - name: Re-sign and repackage macOS app
         env:
@@ -182,10 +204,12 @@ jobs:
           trap - EXIT
 
           # Drop Tauri's stapled ticket and produce a fresh system-codesign signature.
+          # Same keychain entitlements as the build: signing with the plain set
+          # here would break Touch ID for DMG installs only.
           rm -f "$APP_DIR/AutoDesktop.app/Contents/CodeResources"
           codesign --force --deep --options runtime --timestamp \
             --sign "$APPLE_SIGNING_IDENTITY" \
-            --entitlements src-tauri/Entitlements.plist \
+            --entitlements src-tauri/Entitlements.keychain.plist \
             "$APP_DIR/AutoDesktop.app"
 
           ditto -c -k --keepParent "$APP_DIR/AutoDesktop.app" "$APP_ZIP"
@@ -237,6 +261,29 @@ jobs:
 
           spctl -a -vvv -t execute "$INSTALL_COPY"
           xcrun stapler validate "$INSTALL_COPY"
+
+          # Touch ID: both install paths — the DMG app and the app inside the
+          # updater .app.tar.gz — must carry the profile and the entitlement.
+          check_keychain_signing() {
+            local app="$1"
+            if [ ! -f "$app/Contents/embedded.provisionprofile" ]; then
+              echo "::error::$app has no embedded.provisionprofile"
+              exit 1
+            fi
+            codesign -d --entitlements :- "$app" > "$RUNNER_TEMP/entitlements.plist" 2>/dev/null
+            if ! grep -q "keychain-access-groups" "$RUNNER_TEMP/entitlements.plist"; then
+              echo "::error::$app is not signed with keychain-access-groups"
+              exit 1
+            fi
+          }
+          check_keychain_signing "$INSTALL_COPY"
+
+          UPDATER=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -type f -name "*.app.tar.gz" | sort | head -1)
+          UPDATER_DIR="$RUNNER_TEMP/updater-check-${{ matrix.arch }}"
+          rm -rf "$UPDATER_DIR"
+          mkdir -p "$UPDATER_DIR"
+          tar -xzf "$UPDATER" -C "$UPDATER_DIR"
+          check_keychain_signing "$UPDATER_DIR/AutoDesktop.app"
 
       - name: Stage artifact
         run: |

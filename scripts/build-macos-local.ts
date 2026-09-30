@@ -94,16 +94,27 @@ export function checkProvisioningProfile(
   }
 }
 
-/** `tauri build --config` override for the signed local release. */
-export function buildConfigOverride(profilePath: string, entitlementsPath: string): string {
-  return JSON.stringify({
+/**
+ * The `tauri build --config` part that makes Touch ID work: sign with the
+ * keychain entitlements and embed the provisioning profile that permits them.
+ * Shared by this script and CI (scripts/prepare-keychain-signing.ts).
+ */
+export function keychainConfig(profilePath: string, entitlementsPath: string) {
+  return {
     bundle: {
-      createUpdaterArtifacts: false,
       macOS: {
         entitlements: entitlementsPath,
         files: { "embedded.provisionprofile": profilePath },
       },
     },
+  };
+}
+
+/** `tauri build --config` override for the signed local release. */
+export function buildConfigOverride(profilePath: string, entitlementsPath: string): string {
+  const config = keychainConfig(profilePath, entitlementsPath);
+  return JSON.stringify({
+    bundle: { createUpdaterArtifacts: false, ...config.bundle },
   });
 }
 
