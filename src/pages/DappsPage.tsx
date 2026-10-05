@@ -6,6 +6,7 @@ import {
   faviconOf,
   hostOf,
   isDappUrlInput,
+  markDappIconFailed,
   refreshDappIcon,
   removeDapp,
   togglePin,
@@ -300,11 +301,17 @@ function Favicon({
 }) {
   // Same chain the sidebar and URL bar walk (bundled icon, site favicon, letter
   // avatar); the card adds the refresh button's success/failure reporting.
-  const sources = dappIconSources(dapp.url, dapp.iconRefreshAt);
+  // A failed source is dropped from dappIconSources for the whole session, so
+  // the first remaining one is always the next to try.
   const remote = faviconOf(dapp.url, dapp.iconRefreshAt);
-  const [index, setIndex] = useState(0);
-  const source = sources[index];
+  const [, setFailures] = useState(0);
+  const source = dappIconSources(dapp.url, dapp.iconRefreshAt)[0];
   const settled = useRef(false);
+
+  function failSource(src: string) {
+    markDappIconFailed(src);
+    setFailures((n) => n + 1);
+  }
 
   function finishRefresh(loaded: boolean) {
     if (!refreshing || settled.current) return;
@@ -315,7 +322,7 @@ function Favicon({
   useEffect(() => {
     if (!refreshing || source === undefined) return undefined;
     const timeout = window.setTimeout(() => {
-      setIndex(index + 1);
+      failSource(source);
       finishRefresh(false);
     }, 10_000);
     return () => window.clearTimeout(timeout);
@@ -335,7 +342,7 @@ function Favicon({
       }}
       onError={() => {
         if (source === remote) finishRefresh(false);
-        setIndex(index + 1);
+        failSource(source);
       }}
     />
   );

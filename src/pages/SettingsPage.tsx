@@ -39,6 +39,7 @@ import { askConfirm } from "../lib/confirm";
 import { toast } from "../lib/toast";
 import { ChainIcon } from "../lib/ChainIcon";
 import { filterSettingsChains } from "./networkSettings";
+import { securityRows } from "./securityRows";
 import { listen } from "@tauri-apps/api/event";
 import { AUTO_LOCK_CHOICES, getAutoLockMinutes, setAutoLockMinutes } from "../lib/autoLock";
 import { disconnectSite, loadConnectedSites } from "../lib/connectedSites";
@@ -70,6 +71,10 @@ export default function SettingsPage() {
   const closeToggle = useToggleInit(closeBehavior === "hide");
   const vault = useVault();
   const activeWallet = useActiveWallet();
+  const security = securityRows({
+    hasPassword: vault.hasPassword,
+    activeKind: activeWallet?.kind,
+  });
   const [touchIdStatus, setTouchIdStatus] = useState<TouchIdStatus | null>(null);
   const [touchIdBusy, setTouchIdBusy] = useState(false);
   const touchIdEnabled = touchIdStatus !== null && touchIdStatus.enabled;
@@ -466,7 +471,7 @@ export default function SettingsPage() {
               </h2>
             </div>
             <div className="set-card">
-              {activeWallet?.kind === "ledger" ? (
+              {security.ledgerNote && (
                 <div className="set-row">
                   <span className="row-ic">
                     <Icon name="ledger" size={17} />
@@ -476,62 +481,63 @@ export default function SettingsPage() {
                     <div className="rs">{t("lock.optLedgerDesc")}</div>
                   </div>
                 </div>
-              ) : (
-                <>
-                  <button className="set-row" onClick={() => void lockVault()}>
-                    <span className="row-ic">
-                      <Icon name="lock" size={17} />
-                    </span>
-                    <div className="gr">
-                      <div className="rl">{t("settings.lockNow")}</div>
-                      <div className="rs">{t("settings.lockNowHint")}</div>
+              )}
+              {security.lockNow && (
+                <button className="set-row" onClick={() => void lockVault()}>
+                  <span className="row-ic">
+                    <Icon name="lock" size={17} />
+                  </span>
+                  <div className="gr">
+                    <div className="rl">{t("settings.lockNow")}</div>
+                    <div className="rs">{t("settings.lockNowHint")}</div>
+                  </div>
+                  <Icon name="chevronR" size={16} />
+                </button>
+              )}
+              {(activeWallet?.kind === "hd" ||
+                activeWallet?.kind === "privkey") && (
+                <button
+                  className="set-row"
+                  onClick={() => setExportingWallet(activeWallet)}
+                >
+                  <span className="row-ic">
+                    <Icon name="key" size={17} />
+                  </span>
+                  <div className="gr">
+                    <div className="rl">
+                      {t(
+                        activeWallet.kind === "hd"
+                          ? "settings.revealPhrase"
+                          : "settings.revealPrivateKey",
+                      )}
                     </div>
-                    <Icon name="chevronR" size={16} />
-                  </button>
-                  {(activeWallet?.kind === "hd" ||
-                    activeWallet?.kind === "privkey") && (
-                    <button
-                      className="set-row"
-                      onClick={() => setExportingWallet(activeWallet)}
-                    >
-                      <span className="row-ic">
-                        <Icon name="key" size={17} />
-                      </span>
-                      <div className="gr">
-                        <div className="rl">
-                          {t(
-                            activeWallet.kind === "hd"
-                              ? "settings.revealPhrase"
-                              : "settings.revealPrivateKey",
-                          )}
-                        </div>
-                        <div className="rs">
-                          {t(
-                            activeWallet.kind === "hd"
-                              ? "settings.revealPhraseHint"
-                              : "settings.revealPrivateKeyHint",
-                          )}
-                        </div>
-                      </div>
-                      <Icon name="chevronR" size={16} />
-                    </button>
-                  )}
-                  <button
-                    className="set-row"
-                    onClick={() => toast(t("settings.soon"), "info")}
-                  >
-                    <span className="row-ic">
-                      <Icon name="edit" size={17} />
-                    </span>
-                    <div className="gr">
-                      <div className="rl">{t("settings.changePassword")}</div>
-                      <div className="rs">
-                        {t("settings.changePasswordHint")}
-                      </div>
+                    <div className="rs">
+                      {t(
+                        activeWallet.kind === "hd"
+                          ? "settings.revealPhraseHint"
+                          : "settings.revealPrivateKeyHint",
+                      )}
                     </div>
-                    <span className="badge neutral">{t("settings.soon")}</span>
-                  </button>
-                </>
+                  </div>
+                  <Icon name="chevronR" size={16} />
+                </button>
+              )}
+              {security.changePassword && (
+                <button
+                  className="set-row"
+                  onClick={() => toast(t("settings.soon"), "info")}
+                >
+                  <span className="row-ic">
+                    <Icon name="edit" size={17} />
+                  </span>
+                  <div className="gr">
+                    <div className="rl">{t("settings.changePassword")}</div>
+                    <div className="rs">
+                      {t("settings.changePasswordHint")}
+                    </div>
+                  </div>
+                  <span className="badge neutral">{t("settings.soon")}</span>
+                </button>
               )}
               {vault.hasPassword &&
                 touchIdStatus !== null &&

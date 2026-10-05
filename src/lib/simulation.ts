@@ -175,7 +175,7 @@ function extractSignerChanges(data: any, signer: string, nativeSymbolRaw: string
     if (raw === null || raw === 0n) continue;
     const address = typeof td?.token === "string" ? td.token : undefined;
     const symbol =
-      typeof td?.symbol === "string" && td.symbol.length > 0 ? td.symbol.toUpperCase() : "TOKEN";
+      typeof td?.symbol === "string" && td.symbol.length > 0 ? td.symbol : "TOKEN";
     const name = typeof td?.name === "string" ? td.name : undefined;
     const decimals = typeof td?.decimals === "number" ? td.decimals : 18;
     out.push({

@@ -676,6 +676,11 @@ body.menu-overlay-body #root {
   outline: 1px solid var(--img-outline);
   outline-offset: -1px;
 }
+/* Some chain marks (World Chain, Linea) are dark glyphs on transparency and
+   vanish on the dark theme; a white backing keeps them readable. */
+[data-theme="dark"] .chain-icon img {
+  background: #fff;
+}
 .chain-icon-fallback {
   display: grid;
   place-items: center;

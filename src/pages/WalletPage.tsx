@@ -49,6 +49,7 @@ import {
   useModalExit,
   useSegPill,
   useSpin,
+  useToggleInit,
 } from "../lib/transitions";
 import {
   addWatchAccount,
@@ -112,6 +113,7 @@ import { QrCode } from "../lib/qr";
 import { toast } from "../lib/toast";
 import { rpc } from "../lib/rpc";
 import { SwapFeeBreakdown } from "./SwapFeeBreakdown";
+import { accountMenuClosesOnKey } from "./accountMenuKeys";
 import { SafeQueue } from "../SafeQueue";
 import {
   addSafeAccount,
@@ -687,39 +689,17 @@ export default function WalletPage() {
                             autoFocus
                           />
                         </label>
-                        <button
-                          className={`cf-item${filter === "all" ? " on" : ""}`}
-                          onClick={() => {
-                            setFilter("all");
+                        <ChainFilterOptions
+                          t={t}
+                          chains={chainMenuChains}
+                          query={chainQuery}
+                          filter={filter}
+                          highlightedChainIds={highlightedChainIds}
+                          onPick={(id) => {
+                            setFilter(id);
                             setChainMenuOpen(false);
                           }}
-                        >
-                          <span className="cf-item-ic">
-                            <Icon name="globe" size={15} />
-                          </span>
-                          <span className="cf-item-name">
-                            {t("wallet.allNetworks")}
-                          </span>
-                          {filter === "all" && <Icon name="check" size={15} />}
-                        </button>
-                        {chainMenuChains.map((c) => (
-                          <button
-                            key={c.id}
-                            className={`cf-item${filter === c.id ? " on" : ""}${
-                              highlightedChainIds.has(c.id) ? " hl" : ""
-                            }`}
-                            onClick={() => {
-                              setFilter(c.id);
-                              setChainMenuOpen(false);
-                            }}
-                          >
-                            <span className="cf-item-ic">
-                              <ChainIcon chain={c} size={16} />
-                            </span>
-                            <span className="cf-item-name">{c.name}</span>
-                            {filter === c.id && <Icon name="check" size={15} />}
-                          </button>
-                        ))}
+                        />
                       </div>
                     </>
                   )}
@@ -745,6 +725,7 @@ export default function WalletPage() {
                         t={t}
                         canSign={!!active.signer}
                         onOpen={() => setSelectedTokenKey(r.key)}
+                        onRetry={refreshAll}
                         onSend={(assetKey) => {
                           setSendAssetKey(assetKey);
                           setShowSend(true);
@@ -891,7 +872,56 @@ function SectionSearch({
   );
 }
 
-function DefiSection({
+export function ChainFilterOptions({
+  t,
+  chains,
+  query,
+  filter,
+  highlightedChainIds,
+  onPick,
+}: {
+  t: TFn;
+  chains: Chain[];
+  query: string;
+  filter: string;
+  highlightedChainIds: Set<string>;
+  onPick: (id: string) => void;
+}) {
+  return (
+    <>
+      <button
+        className={`cf-item${filter === "all" ? " on" : ""}`}
+        onClick={() => onPick("all")}
+      >
+        <span className="cf-item-ic">
+          <Icon name="globe" size={15} />
+        </span>
+        <span className="cf-item-name">{t("wallet.allNetworks")}</span>
+        {filter === "all" && <Icon name="check" size={15} />}
+      </button>
+      {chains.map((c) => (
+        <button
+          key={c.id}
+          className={`cf-item${filter === c.id ? " on" : ""}${
+            highlightedChainIds.has(c.id) ? " hl" : ""
+          }`}
+          onClick={() => onPick(c.id)}
+        >
+          <span className="cf-item-ic">
+            <ChainIcon chain={c} size={16} />
+          </span>
+          <span className="cf-item-name">{c.name}</span>
+          {filter === c.id && <Icon name="check" size={15} />}
+        </button>
+      ))}
+      {chains.length === 0 && query.trim() !== "" && (
+        <div className="cf-empty">{t("wallet.noNetworkMatches")}</div>
+      )}
+    </>
+  );
+}
+
+export function DefiSection({
   t,
   defi,
   enabled,
@@ -904,6 +934,7 @@ function DefiSection({
 }) {
   const [query, setQuery] = useState("");
   const [showSmallPositions, setShowSmallPositions] = useState(false);
+  const defiToggle = useToggleInit(enabled);
   const positions = useMemo(
     () => filterDefiPositions(defi.positions, query),
     [defi.positions, query],
@@ -936,14 +967,15 @@ function DefiSection({
             <span>{t("wallet.defiEnabled")}</span>
             <button
               type="button"
-              className={`toggle${enabled ? " on" : ""}`}
+              className={`toggle t-toggle${defiToggle.initCls}${enabled ? " on" : ""}`}
+              data-on={defiToggle.dataOn}
               role="switch"
               aria-checked={enabled}
               aria-label={t("wallet.defiEnabled")}
               title={enabled ? t("wallet.defiDisable") : t("wallet.defiEnable")}
               onClick={() => onEnabledChange(!enabled)}
             >
-              <i />
+              <i className="t-toggle-thumb" />
             </button>
           </div>
           {enabled && isRefreshing && (
@@ -1567,13 +1599,14 @@ function Coin({
 
 // Token-first row (#5): the token symbol is the headline, the chain it lives on is
 // the secondary tag. Works for both the native coin and held ERC-20s.
-function HoldingRow({
+export function HoldingRow({
   row,
   t,
   canSign,
   onOpen,
   onSend,
   onSwap,
+  onRetry,
 }: {
   row: DisplayRow;
   t: TFn;
@@ -1581,6 +1614,7 @@ function HoldingRow({
   onOpen: () => void;
   onSend: (assetKey: string) => void;
   onSwap: (assetKey: string) => void;
+  onRetry: () => void;
 }) {
   const usd =
     row.state?.status === "ok" && row.price
@@ -1648,9 +1682,20 @@ function HoldingRow({
         </div>
       ) : row.state.status === "error" ? (
         <div className="token-nums">
-          <span className="token-err" title={row.state.message}>
-            failed
+          <span className="token-err">{t("wallet.balanceFailed")}</span>
+          <span className="token-err-reason" title={row.state.message}>
+            {row.state.message}
           </span>
+          <button
+            type="button"
+            className="token-err-retry"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRetry();
+            }}
+          >
+            {t("wallet.retry")}
+          </button>
         </div>
       ) : (
         <div className="token-nums">
@@ -1678,28 +1723,32 @@ function HoldingRow({
           </div>
         </div>
       )}
-      <div className="token-actions">
-        <button
-          className="token-action send"
-          disabled={!canSend}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSend(sendAssetKey);
-          }}
-        >
-          <Icon name="send" size={12} /> {t("wallet.send")}
-        </button>
-        <button
-          className="token-action"
-          disabled={!canSend}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSwap(sendAssetKey);
-          }}
-        >
-          <Icon name="swap" size={12} /> {t("wallet.swap")}
-        </button>
-      </div>
+      {/* A failed row has nothing to send, and the hover actions would sit on
+          top of its Retry button. */}
+      {row.state?.status !== "error" && (
+        <div className="token-actions">
+          <button
+            className="token-action send"
+            disabled={!canSend}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSend(sendAssetKey);
+            }}
+          >
+            <Icon name="send" size={12} /> {t("wallet.send")}
+          </button>
+          <button
+            className="token-action"
+            disabled={!canSend}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSwap(sendAssetKey);
+            }}
+          >
+            <Icon name="swap" size={12} /> {t("wallet.swap")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2046,9 +2095,13 @@ function ActivityList({
                   {balanceChanges.slice(0, 3).map((change, index) => (
                     <span
                       key={`${change.symbol}:${change.formattedDelta}:${index}`}
-                      className={`activity-change ${change.direction === "in" ? "in" : "out"}`}
+                      className={`activity-change split ${change.direction === "in" ? "in" : "out"}`}
+                      title={`${change.formattedDelta} ${change.symbol}`}
                     >
-                      {change.formattedDelta} {change.symbol}
+                      <span className="activity-change-num">
+                        {change.formattedDelta}
+                      </span>
+                      <span className="activity-change-sym">{change.symbol}</span>
                     </span>
                   ))}
                 </span>
@@ -2281,6 +2334,17 @@ function AccountSwitcher() {
   const [renamingSafe, setRenamingSafe] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [pinned, setPinned] = useState<string[]>(() => loadPinnedAccounts());
+  const renamingAny =
+    renaming !== null || renamingWatch !== null || renamingSafe !== null;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (accountMenuClosesOnKey(e.key, { renaming: renamingAny, adding }))
+        setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, renamingAny, adding]);
 
   const watchAccounts = accounts.filter((a) => a.kind === "watch");
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);

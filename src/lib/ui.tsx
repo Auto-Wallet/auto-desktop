@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveConfirm, useConfirm, type ConfirmRequest } from "./confirm";
-import { dappIconSources } from "./dapps";
+import { dappIconSources, markDappIconFailed } from "./dapps";
 import { Icon } from "./icons";
 import { useT } from "./i18n";
 import { useToasts, type Toast } from "./toast";
@@ -110,12 +110,11 @@ export function DappIcon({
   className?: string;
   style?: React.CSSProperties;
 }) {
-  const sources = dappIconSources(url, refreshAt);
-  // Keyed by url so switching tabs restarts the chain instead of inheriting the
-  // previous dApp's failures.
-  const [tried, setTried] = useState({ url, count: 0 });
-  const count = tried.url === url ? tried.count : 0;
-  const src = sources[count];
+  // A failed source is dropped from dappIconSources for the whole session, so
+  // the first remaining one is always the next to try; the counter only forces
+  // the re-render after a failure.
+  const [, setFailures] = useState(0);
+  const src = dappIconSources(url, refreshAt)[0];
 
   if (src === undefined) {
     return <DappAvatar name={name} size={size} radius={radius} style={style} />;
@@ -127,7 +126,10 @@ export function DappIcon({
       src={src}
       alt=""
       style={style}
-      onError={() => setTried({ url, count: count + 1 })}
+      onError={() => {
+        markDappIconFailed(src);
+        setFailures((n) => n + 1);
+      }}
     />
   );
 }

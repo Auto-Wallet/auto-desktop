@@ -24,7 +24,7 @@ const storage: Storage = {
 };
 Object.defineProperty(globalThis, "localStorage", { value: storage });
 
-const { dappIconSources, faviconOf, refreshDappIcon } = await import("./dapps");
+const { dappIconSources, faviconOf, markDappIconFailed, refreshDappIcon } = await import("./dapps");
 
 test("faviconOf requests the site's own root favicon", () => {
   expect(faviconOf("https://example.com/swap")).toBe(
@@ -67,4 +67,23 @@ test("refreshDappIcon saves a cache-busting timestamp", () => {
   expect(faviconOf("https://app.uniswap.org", uniswap.iconRefreshAt)).toBe(
     "https://app.uniswap.org/favicon.ico?autodesktop-refresh=1234567",
   );
+});
+
+test("an icon that failed once is skipped instead of retried on a new card", () => {
+  // WebKit caches the failed load and a fresh <img> for that URL never reports
+  // an error again, so the Explore card stayed an empty frame.
+  const url = "https://wanlend.finance";
+  expect(dappIconSources(url)).toEqual(["https://wanlend.finance/favicon.ico"]);
+
+  markDappIconFailed("https://wanlend.finance/favicon.ico");
+
+  expect(dappIconSources(url)).toEqual([]);
+  // A manual refresh uses a new URL, so the user can still pull a fixed icon.
+  expect(dappIconSources(url, 7)).toEqual([
+    "https://wanlend.finance/favicon.ico?autodesktop-refresh=7",
+  ]);
+  // Other dApps are untouched.
+  expect(dappIconSources("https://wanswap.finance")).toEqual([
+    "https://wanswap.finance/favicon.ico",
+  ]);
 });

@@ -2248,6 +2248,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.cf-empty {
+  padding: 10px 12px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
 
 .asset-section {
   margin-top: 14px;
@@ -2371,7 +2376,7 @@
    headline) > USD value > @unit price > 24h change (a quiet inline chip). */
 .token-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: 14px;
 }
 .zero-token-toggle {
@@ -3033,6 +3038,7 @@
 /* Amounts must never ellipsize: the number keeps its full width and only the
    symbol beside it is allowed to truncate. */
 .activity-change.split {
+  max-width: 240px;
   display: flex;
   align-items: baseline;
   justify-content: flex-end;
@@ -3157,7 +3163,31 @@
   font-size: 12.5px;
   color: var(--down);
   font-weight: 600;
+}
+.token-err-reason {
+  max-width: 150px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: help;
+}
+.token-err-retry {
+  align-self: flex-end;
+  padding: 2px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  color: var(--ink-2);
+  background: var(--surface);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.token-err-retry:hover {
+  color: var(--brand);
+  border-color: var(--brand);
 }
 
 .add-token {

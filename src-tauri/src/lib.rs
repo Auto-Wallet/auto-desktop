@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -5352,6 +5352,48 @@ async fn fetch_zerion_defi_positions(address: &str) -> Result<(Vec<DefiPosition>
     Ok((positions, app_balance))
 }
 
+type ZerionDefiResult = Result<(Vec<DefiPosition>, f64), String>;
+type ZerionCache = HashMap<String, (Instant, Vec<DefiPosition>, f64)>;
+
+/// How long a good Zerion answer may stand in for a failed one. Zerion's free
+/// tier rate-limits often (429); falling back to DeBank then makes the DeFi
+/// list and total swap between two providers' views of the same positions.
+const ZERION_REUSE_MAX_AGE: Duration = Duration::from_secs(30 * 60);
+
+fn zerion_cache() -> &'static Mutex<ZerionCache> {
+    static C: OnceLock<Mutex<ZerionCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Remember a successful Zerion answer, or replace a failed one with the last
+/// good answer for the same wallet when it is recent enough.
+fn zerion_result_or_cached(
+    cache: &mut ZerionCache,
+    address: &str,
+    result: ZerionDefiResult,
+    now: Instant,
+) -> ZerionDefiResult {
+    let key = address.to_ascii_lowercase();
+    match result {
+        Ok((positions, app_balance)) => {
+            cache.insert(key, (now, positions.clone(), app_balance));
+            Ok((positions, app_balance))
+        }
+        Err(err) => match cache.get(&key) {
+            Some((at, positions, app_balance))
+                if now.saturating_duration_since(*at) <= ZERION_REUSE_MAX_AGE =>
+            {
+                println!(
+                    "[AutoDesktop] defi Zerion reuse address={address} ageSecs={} error={err}",
+                    now.saturating_duration_since(*at).as_secs()
+                );
+                Ok((positions.clone(), *app_balance))
+            }
+            _ => Err(err),
+        },
+    }
+}
+
 fn debank_chain_name(chain: &str) -> String {
     match chain {
         "eth" => "Ethereum",
@@ -6935,7 +6977,13 @@ async fn get_defi_positions<R: Runtime>(
     );
     let price_oracle = PriceOracleStore::from_app(&app);
     let custom = fetch_custom_defi_positions(price_oracle, address).await;
-    let zerion = fetch_zerion_defi_positions(address).await;
+    let fetched = fetch_zerion_defi_positions(address).await;
+    let zerion = zerion_result_or_cached(
+        &mut zerion_cache().lock().unwrap(),
+        address,
+        fetched,
+        Instant::now(),
+    );
     let (zerion_positions, zerion_balance_usd) = match zerion {
         Ok(result) => result,
         Err(err) => {
@@ -7029,6 +7077,13 @@ async fn get_defi_positions<R: Runtime>(
                 }
             }
         }
+        log_defi_diagnostic(
+            &app,
+            format!(
+                "defi response source={source} address={address} positions={}",
+                zerion_positions.len()
+            ),
+        );
         println!(
             "[AutoDesktop] defi response source={source} address={address} positions={}",
             zerion_positions.len()
@@ -9777,6 +9832,97 @@ mod tests {
         assert_eq!(response.positions.len(), 2);
         assert_eq!(response.positions[0].app_name, "XStake Farming");
         assert_eq!(response.positions[1].app_name, "Aave");
+    }
+
+    fn zerion_position(id: &str, balance_usd: f64) -> DefiPosition {
+        DefiPosition {
+            id: id.to_string(),
+            app_name: "GMX".to_string(),
+            app_image_url: None,
+            app_url: None,
+            network_name: "Arbitrum".to_string(),
+            chain_id: "0xa4b1".to_string(),
+            label: "Staked".to_string(),
+            group_label: None,
+            balance_usd,
+            symbols: vec!["GMX".to_string()],
+            tokens: Vec::new(),
+        }
+    }
+
+    const RATE_LIMITED: &str = "querying Zerion: HTTP status client error (429 Too Many Requests)";
+
+    #[test]
+    fn zerion_rate_limit_reuses_last_good_result() {
+        let mut cache = ZerionCache::new();
+        let t0 = Instant::now();
+        let first = zerion_result_or_cached(
+            &mut cache,
+            "0x7521EDA00E2CE05AC4A9D8353D096CCB970D5188",
+            Ok((vec![zerion_position("zerion:gmx:0", 8.37)], 0.0)),
+            t0,
+        )
+        .unwrap();
+        assert_eq!(first.0[0].balance_usd, 8.37);
+
+        // Same wallet, lower-case address, Zerion now rate-limited.
+        let reused = zerion_result_or_cached(
+            &mut cache,
+            "0x7521eda00e2ce05ac4a9d8353d096ccb970d5188",
+            Err(RATE_LIMITED.to_string()),
+            t0 + Duration::from_secs(120),
+        )
+        .unwrap();
+        assert_eq!(reused.0.len(), 1);
+        assert_eq!(reused.0[0].id, "zerion:gmx:0");
+        assert_eq!(reused.0[0].balance_usd, 8.37);
+    }
+
+    #[test]
+    fn zerion_error_without_recent_result_still_fails() {
+        let mut cache = ZerionCache::new();
+        let t0 = Instant::now();
+        let none = zerion_result_or_cached(&mut cache, "0xabc", Err(RATE_LIMITED.to_string()), t0);
+        assert_eq!(none.unwrap_err(), RATE_LIMITED);
+
+        zerion_result_or_cached(
+            &mut cache,
+            "0xabc",
+            Ok((vec![zerion_position("zerion:gmx:0", 5.0)], 0.0)),
+            t0,
+        )
+        .unwrap();
+        let stale = zerion_result_or_cached(
+            &mut cache,
+            "0xabc",
+            Err(RATE_LIMITED.to_string()),
+            t0 + ZERION_REUSE_MAX_AGE + Duration::from_secs(1),
+        );
+        assert_eq!(stale.unwrap_err(), RATE_LIMITED);
+    }
+
+    #[test]
+    fn newer_zerion_result_replaces_the_cached_one() {
+        let mut cache = ZerionCache::new();
+        let t0 = Instant::now();
+        zerion_result_or_cached(&mut cache, "0xabc", Ok((vec![zerion_position("a", 1.0)], 0.0)), t0)
+            .unwrap();
+        zerion_result_or_cached(
+            &mut cache,
+            "0xabc",
+            Ok((vec![zerion_position("b", 2.0), zerion_position("c", 3.0)], 0.0)),
+            t0 + Duration::from_secs(10),
+        )
+        .unwrap();
+        let reused = zerion_result_or_cached(
+            &mut cache,
+            "0xabc",
+            Err(RATE_LIMITED.to_string()),
+            t0 + Duration::from_secs(20),
+        )
+        .unwrap();
+        let ids: Vec<&str> = reused.0.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["b", "c"]);
     }
 
     #[test]

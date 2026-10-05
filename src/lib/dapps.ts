@@ -121,8 +121,22 @@ export function dappIconOf(url: string): string | undefined {
 export function dappIconSources(url: string, refreshAt?: number): string[] {
   const local = dappIconOf(url);
   const remote = faviconOf(url, refreshAt);
-  if (refreshAt !== undefined) return local ? [remote, local] : [remote];
-  return local ? [local, remote] : [remote];
+  const ordered =
+    refreshAt !== undefined
+      ? local ? [remote, local] : [remote]
+      : local ? [local, remote] : [remote];
+  return ordered.filter((src) => !failedIcons.has(src));
+}
+
+/**
+ * Icon URLs that already failed this session. WebKit caches the failed load,
+ * and a new <img> for the same URL never fires onError again, so a card that
+ * mounts later would sit on an empty frame instead of its letter avatar.
+ */
+const failedIcons = new Set<string>();
+
+export function markDappIconFailed(src: string): void {
+  failedIcons.add(src);
 }
 
 // "app.uniswap.org" -> "Uniswap": drop common sub-parts and the TLD, capitalize.
@@ -242,3 +256,4 @@ export function updateDapp(id: string, input: string, name: string): Dapp {
 export function useDapps(): Dapp[] {
   return useSyncExternalStore(subscribe, dapps);
 }
+
