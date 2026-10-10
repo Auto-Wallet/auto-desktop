@@ -319,10 +319,6 @@ function AcctChip() {
   const menu = useDropdown(open);
   const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
   const isActive = (addr: string) => addr.toLowerCase() === active.address.toLowerCase();
-  function copyAddress(address: string) {
-    void navigator.clipboard.writeText(address);
-    toast(t("common.copied"));
-  }
   const payload = useMemo<MenuOverlayPayload | null>(
     () =>
       anchor
@@ -337,8 +333,8 @@ function AcctChip() {
     [anchor, accounts, active.address, t],
   );
   useMenuOverlay(payload, (action) => {
-    if (action.type === "copy-address") {
-      copyAddress(action.address); // keep the menu open, like the in-shell copy
+    if (action.type === "copy-result") {
+      toast(t(action.success ? "common.copied" : "common.copyFailed"), action.success ? "ok" : "warn");
       return;
     }
     if (action.type === "select-account") setActive(action.address);

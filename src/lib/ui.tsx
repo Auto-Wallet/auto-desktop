@@ -5,8 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveConfirm, useConfirm, type ConfirmRequest } from "./confirm";
 import { dappIconSources, markDappIconFailed } from "./dapps";
 import { Icon } from "./icons";
+import { copyText } from "./clipboard";
 import { useT } from "./i18n";
-import { useToasts, type Toast } from "./toast";
+import { toast, useToasts, type Toast } from "./toast";
 import { motionMs, useEnterExit, useIconSwap, useModalExit } from "./transitions";
 
 /** Deterministic gradient from an address — distinct per account, no image/network. */
@@ -147,6 +148,7 @@ export function CopyButton({
   className = "icon-btn",
   size = 16,
   onCopied,
+  onCopyFailed,
   children,
 }: {
   value: string;
@@ -154,18 +156,27 @@ export function CopyButton({
   className?: string;
   size?: number;
   onCopied?: () => void;
+  onCopyFailed?: () => void;
   children?: React.ReactNode;
 }) {
   const { state, fire } = useIconSwap();
+  const { t } = useT();
   return (
     <button
       type="button"
       className={className}
       title={title}
       aria-label={title}
-      onClick={(e) => {
+      onClick={async (e) => {
         e.stopPropagation();
-        void navigator.clipboard.writeText(value);
+        try {
+          await copyText(value);
+        } catch (error) {
+          console.error("[AutoDesktop] Clipboard write failed", error);
+          if (onCopyFailed) onCopyFailed();
+          else toast(t("common.copyFailed"), "warn");
+          return;
+        }
         fire();
         onCopied?.();
       }}

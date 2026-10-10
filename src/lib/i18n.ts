@@ -150,6 +150,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "nav.explore": "Explore",
 
     "common.copied": "Address copied",
+    "common.copyFailed": "Copy failed. Please try again.",
     "common.close": "Close",
     "common.refreshed": "Balances refreshed",
     "common.comingSoon": "Coming soon",
@@ -779,6 +780,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "nav.explore": "探索",
 
     "common.copied": "地址已复制",
+    "common.copyFailed": "复制失败，请重试。",
     "common.close": "关闭",
     "common.refreshed": "余额已刷新",
     "common.comingSoon": "即将推出",

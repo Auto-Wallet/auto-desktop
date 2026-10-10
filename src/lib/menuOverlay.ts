@@ -6,8 +6,8 @@
 // webview and renders the menu there (MenuOverlayView.tsx). State flows
 // shell → overlay over a BroadcastChannel (+ localStorage for the overlay's
 // cold start, same trick as the toast overlay); clicks flow back
-// overlay → shell as actions, and ALL state changes happen shell-side — the
-// overlay webview itself invokes nothing.
+// overlay → shell as actions. Wallet/menu state changes happen shell-side;
+// the overlay writes the native clipboard and sends its completion result.
 
 import { useEffect, useRef } from "react";
 import { isTauri, syncMenuOverlay } from "./platform";
@@ -51,7 +51,7 @@ export type MenuOverlayPayload =
 export type MenuOverlayAction =
   | { type: "dismiss" }
   | { type: "select-account"; address: string }
-  | { type: "copy-address"; address: string }
+  | { type: "copy-result"; success: boolean }
   | { type: "select-chain"; id: string }
   | { type: "resolve-dapp-dialog"; id: string; action: "ok" | "cancel"; value?: string | null };
 

@@ -8306,6 +8306,7 @@ fn should_hide_on_close<R: Runtime>(app: &AppHandle<R>) -> bool {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Diagnostic beacon endpoint only. The wallet bridge does NOT use this
@@ -10299,6 +10300,7 @@ mod e2e {
     /// would reject every command with "Plugin not found".
     fn build_app() -> &'static tauri::App<MockRuntime> {
         let app = mock_builder()
+            .plugin(tauri_plugin_clipboard_manager::init())
             .invoke_handler(tauri::generate_handler![
                 wallet_request,
                 dapp_dialog,
@@ -11798,6 +11800,73 @@ mod e2e {
                 msg.contains("not allowed") || msg.contains("not found"),
                 "expected ACL denial for dapp→{cmd}, got: {err}"
             );
+        }
+    }
+
+    #[test]
+    fn e2e_clipboard_access_is_scoped_to_trusted_copy_buttons() {
+        let app = build_app();
+        let dapp = dapp_webview(app);
+        let shell = shell_webview(app);
+        let menu = webview(
+            app,
+            "menu-overlay",
+            tauri::WebviewUrl::App("index.html?view=menu-overlay".into()),
+        );
+
+        for caller in [&dapp, &shell, &menu] {
+            let err = invoke(caller, "plugin:clipboard-manager|read_text", json!({}))
+                .expect_err("webviews must not read the clipboard");
+            assert!(err.as_str().unwrap().contains("not allowed"), "{err}");
+        }
+        let err = invoke(
+            &dapp,
+            "plugin:clipboard-manager|write_text",
+            json!({ "text": "untrusted replacement" }),
+        )
+        .expect_err("remote pages must not overwrite the clipboard");
+        assert!(err.as_str().unwrap().contains("not allowed"), "{err}");
+    }
+
+    /// Opt-in OS smoke test: preserves the previous clipboard text in memory.
+    #[test]
+    #[ignore = "writes the real OS clipboard; run explicitly on a desktop"]
+    fn e2e_native_clipboard_copy() {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+
+        let app = build_app();
+        let previous = app.clipboard().read_text().expect("read clipboard text");
+        // Restore on success or panic without saving clipboard data to disk.
+        struct RestoreClipboard<'a>(&'a tauri::App<MockRuntime>, String);
+        impl Drop for RestoreClipboard<'_> {
+            fn drop(&mut self) {
+                self.0
+                    .clipboard()
+                    .write_text(&self.1)
+                    .expect("restore clipboard text");
+            }
+        }
+        let _restore = RestoreClipboard(app, previous);
+        let shell = shell_webview(app);
+        let menu = webview(
+            app,
+            "menu-overlay",
+            tauri::WebviewUrl::App("index.html?view=menu-overlay".into()),
+        );
+        for caller in [&shell, &menu] {
+            for text in [
+                "clipboard regression marker",
+                "0x7521ed00000000000000000000000000000d5188",
+            ] {
+                invoke(
+                    caller,
+                    "plugin:clipboard-manager|write_text",
+                    json!({ "text": text }),
+                )
+                .expect("trusted copy completes");
+                // Do not print the user's prior clipboard contents on failure.
+                assert!(app.clipboard().read_text().expect("read copied text") == text);
+            }
         }
     }
 
