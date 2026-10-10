@@ -130,6 +130,14 @@ jobs:
           AUTODESKTOP_TEST_MANIFEST: "1"
         run: cd src-tauri && cargo test --lib
 
+      - name: Build isolated startup probe (macOS)
+        if: runner.os == 'macOS'
+        run: bun run tauri build --debug --no-bundle --ci --config tests/fixtures/startup-smoke.conf.json
+
+      - name: Recover shell after WebContent dies before first page commit (macOS)
+        if: runner.os == 'macOS'
+        run: bun scripts/smoke-shell-startup.ts src-tauri/target/debug/auto-desktop
+
   # ---------------------------------------------------------------------------
   smoke-windows:
     name: WebView2 smoke (Windows)

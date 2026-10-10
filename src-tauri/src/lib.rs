@@ -27,7 +27,11 @@ use zeroize::Zeroizing;
 
 // Encrypted HD key vault (BIP-39/44 + Argon2id/AES-GCM). Pure crypto core; the
 // in-memory unlocked state + file I/O + Tauri commands live below in this file.
+#[cfg(target_os = "macos")]
+mod shell_startup;
 mod smoke;
+#[cfg(all(target_os = "macos", debug_assertions))]
+mod startup_smoke;
 mod vault;
 // EIP-1559 transaction encoding + signing (pure). eth_sendTransaction fills the
 // fields from the node in lib.rs, then builds + signs here.
@@ -8304,7 +8308,12 @@ fn should_hide_on_close<R: Runtime>(app: &AppHandle<R>) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = shell_startup::install(builder);
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    let builder = startup_smoke::install(builder);
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_process::init())
@@ -8455,6 +8464,8 @@ pub fn run() {
                 "shell",
                 WebviewUrl::App("index.html".into()),
             ));
+            #[cfg(target_os = "macos")]
+            let shell_builder = shell_startup::configure(app.handle(), shell_builder);
             let shell =
                 window.add_child(shell_builder, LogicalPosition::new(0.0, 0.0), shell_size)?;
             window.set_always_on_top(true)?;
@@ -8516,6 +8527,8 @@ pub fn run() {
             // loopback-served dApp page in a real dapp-* webview and reports
             // whether the injected provider answered. See src/smoke.rs + ci.yml.
             smoke::maybe_start(app.handle());
+            #[cfg(all(target_os = "macos", debug_assertions))]
+            startup_smoke::start(app.handle());
 
             Ok(())
         })
