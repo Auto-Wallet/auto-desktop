@@ -6,7 +6,7 @@
       "name": "foxy-wallet",
       "dependencies": {
         "@tauri-apps/api": "^2",
-        "@tauri-apps/plugin-clipboard-manager": "^2",
+        "@tauri-apps/plugin-clipboard-manager": "~2.3.0",
         "@tauri-apps/plugin-opener": "^2",
         "@tauri-apps/plugin-process": "^2",
         "@tauri-apps/plugin-updater": "^2",
@@ -203,7 +203,7 @@
 
     "@tauri-apps/cli-win32-x64-msvc": ["@tauri-apps/cli-win32-x64-msvc@2.11.2", "", { "os": "win32", "cpu": "x64" }, "sha512-d2JchlFIpZevZVReyqhQOekJmb1UH3rhZ5VX6sH3ty9ETE0TKQavpihvoScUXfKKpW6HZC0MrFGRU0ZtD+w3gA=="],
 
-    "@tauri-apps/plugin-clipboard-manager": ["@tauri-apps/plugin-clipboard-manager@2.4.1", "", { "dependencies": { "@tauri-apps/api": "^2.12.0" } }, "sha512-5Q9hWWnsE7UF1xABWHpRwqGiyORrP9o/rJift/7V8woP/kSVF21W+bP9G7ch8Qd7pneDWUMk6hkfpLpjcC/4Ag=="],
+    "@tauri-apps/plugin-clipboard-manager": ["@tauri-apps/plugin-clipboard-manager@2.3.3", "", { "dependencies": { "@tauri-apps/api": "^2.11.0" } }, "sha512-KnyoTs9gj1yEgDkSPUNjOIOHjJTr5wk8IWcYMOWxYTIJCip6QwlyPW8u2X+6bd6kHM4fAdZNpxoal0gy/TwJbg=="],
 
     "@tauri-apps/plugin-opener": ["@tauri-apps/plugin-opener@2.5.4", "", { "dependencies": { "@tauri-apps/api": "^2.11.0" } }, "sha512-1HnPkb+AmgO29HBazm4uPLKB+r7zzcTBW1d0fyYp1uP+jwtpoiNDGKMMzz58SFp49nOIrxdE3aUJtT57lfO9CQ=="],
 

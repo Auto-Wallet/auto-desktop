@@ -1,11 +1,11 @@
 {
   "name": "auto-desktop",
   "private": true,
-  "version": "0.2.74",
+  "version": "0.2.75",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "bun test tests/tauri-plugin-versions.test.ts && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "bun test src tests",
@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-clipboard-manager": "^2",
+    "@tauri-apps/plugin-clipboard-manager": "~2.3.0",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-updater": "^2",

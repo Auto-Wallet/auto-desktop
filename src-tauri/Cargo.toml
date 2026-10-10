@@ -1,6 +1,6 @@
 [package]
 name = "auto-desktop"
-version = "0.2.74"
+version = "0.2.75"
 description = "AutoDesktop — a lightweight desktop wallet & dApp browser"
 authors = ["you"]
 edition = "2021"
@@ -56,7 +56,7 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 # device from Rust. Default features build the bundled C hidapi against IOKit on
 # macOS — no system library needed; the C core is tiny (installer-size safe).
 hidapi = "2"
-tauri-plugin-clipboard-manager = "2"
+tauri-plugin-clipboard-manager = "~2.3.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Touch ID unlock: the vault password lives in the data-protection keychain behind
