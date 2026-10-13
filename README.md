@@ -38,6 +38,13 @@ cd src-tauri && cargo check          # fast Rust typecheck
 
 If the dev server is killed, a stray `vite` may hold port 1420 — free it with `lsof -ti tcp:1420 | xargs kill -9`.
 
+Relay swaps need `RELAY_API_KEY` in the root `.env.local` (see `.env.example`).
+Rust sends the key in the `x-api-key` header; the frontend uses shell-only IPC
+commands for quotes, chain metadata, and status. Key lookup uses the process
+environment, then `.env.local`, then the key compiled into the release build.
+The macOS and Windows release jobs receive the `RELAY_API_KEY` GitHub Actions
+secret. Rebuild and restart the app after updating a release key.
+
 ## What's built
 
 - **Encrypted HD key vault** — BIP-39 mnemonic + manual BIP-32/BIP-44 derivation on pure-Rust k256; sealed at rest with Argon2id (64 MiB) + AES-256-GCM. Private keys live only in Rust, only while unlocked, and never cross into any webview.

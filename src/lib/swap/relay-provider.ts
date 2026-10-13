@@ -10,6 +10,7 @@
 //    payloads, so we don't need a separate buildTx call.
 // We extract everything we need from that response.
 
+import { invoke } from '@tauri-apps/api/core';
 import { formatUnits, parseUnits } from '../format';
 import {
   isEvmChainId,
@@ -25,8 +26,6 @@ import {
   type StatusArgs,
   type SwapProvider,
 } from './types';
-
-const BASE = 'https://api.relay.link';
 
 // App-fee config: every quote request adds 0.1% in basis points to the
 // configured recipient. The user explicitly chose these settings.
@@ -122,24 +121,17 @@ interface RelayStatusResponse {
   destinationChainId?: number;
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) throw new Error(`Relay ${path} HTTP ${res.status}`);
-  return (await res.json()) as T;
-}
-
-async function postJson<T>(path: string, body: object): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = (await res.json())?.message ?? ''; } catch { /* body not JSON */ }
-    throw new Error(detail || `Relay ${path} HTTP ${res.status}`);
+// Tauri rejects Rust errors as strings. Normalize at this API boundary so the
+// quote UI displays the cause instead of its generic "Quote failed" message.
+async function invokeRelay<T>(
+  command: 'relay_chains' | 'relay_quote' | 'relay_status',
+  args?: Record<string, unknown>,
+): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
   }
-  return (await res.json()) as T;
 }
 
 export class RelayProvider implements SwapProvider {
@@ -147,7 +139,7 @@ export class RelayProvider implements SwapProvider {
   displayName = 'Relay';
 
   async loadChains(): Promise<ProviderChain[]> {
-    const { chains } = await getJson<{ chains: RelayChain[] }>('/chains');
+    const { chains } = await invokeRelay<{ chains: RelayChain[] }>('relay_chains');
     return chains
       .filter((c) => (c.vmType ?? 'evm') === 'evm' && !c.disabled && isEvmChainId(c.id))
       .map((c) => ({
@@ -161,7 +153,7 @@ export class RelayProvider implements SwapProvider {
   async loadTokensByChain(): Promise<Map<number, ProviderToken[]>> {
     // /chains already includes featuredTokens + erc20Currencies + native — one
     // call gives us a workable token universe without paginating /currencies.
-    const { chains } = await getJson<{ chains: RelayChain[] }>('/chains');
+    const { chains } = await invokeRelay<{ chains: RelayChain[] }>('relay_chains');
     const map = new Map<number, ProviderToken[]>();
     for (const c of chains) {
       if (!isEvmChainId(c.id)) continue;
@@ -216,7 +208,7 @@ export class RelayProvider implements SwapProvider {
       appFees: [{ recipient: APP_FEE_RECIPIENT, fee: APP_FEE_BPS }],
       referrer: 'auto-desktop',
     };
-    const q = await postJson<RelayQuoteResponse>('/quote/v2', body);
+    const q = await invokeRelay<RelayQuoteResponse>('relay_quote', { body });
     return toNeutralQuote(q, params);
   }
 
@@ -251,7 +243,7 @@ export class RelayProvider implements SwapProvider {
         receiveSymbol: params.toToken.symbol,
       };
     }
-    const r = await getJson<RelayStatusResponse>(`/intents/status/v3?requestId=${encodeURIComponent(requestId)}`);
+    const r = await invokeRelay<RelayStatusResponse>('relay_status', { requestId });
     return toNeutralStatus(r, params, sourceHash);
   }
 }

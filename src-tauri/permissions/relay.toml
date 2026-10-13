@@ -1,0 +1,16 @@
+# Only the trusted shell can use the authenticated Relay API. Remote dApps
+# must never receive these permissions or the API key.
+[[permission]]
+identifier = "allow-relay-chains"
+description = "Allow the shell to read Relay chain and token metadata."
+commands.allow = ["relay_chains"]
+
+[[permission]]
+identifier = "allow-relay-quote"
+description = "Allow the shell to get authenticated Relay swap quotes."
+commands.allow = ["relay_quote"]
+
+[[permission]]
+identifier = "allow-relay-status"
+description = "Allow the shell to track Relay swap status."
+commands.allow = ["relay_status"]

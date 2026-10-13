@@ -168,6 +168,7 @@ jobs:
           ZERION_API_KEY: ${{ secrets.ZERION_API_KEY }}
           DEBANK_APIKEY: ${{ secrets.DEBANK_APIKEY }}
           PUBLIC_NODE_KEY: ${{ secrets.PUBLIC_NODE_KEY }}
+          RELAY_API_KEY: ${{ secrets.RELAY_API_KEY }}
           OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
           OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
           OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
@@ -377,6 +378,7 @@ jobs:
           ZERION_API_KEY: ${{ secrets.ZERION_API_KEY }}
           DEBANK_APIKEY: ${{ secrets.DEBANK_APIKEY }}
           PUBLIC_NODE_KEY: ${{ secrets.PUBLIC_NODE_KEY }}
+          RELAY_API_KEY: ${{ secrets.RELAY_API_KEY }}
           OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
           OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
           OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}

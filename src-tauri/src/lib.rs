@@ -42,9 +42,11 @@ mod eip712;
 mod ledger;
 mod native_menu;
 mod okx_account;
+mod relay;
 mod touch_id;
 
 use native_menu::{DEBUG_DAPP_CONSOLE_MENU_ID, DEBUG_SHELL_CONSOLE_MENU_ID};
+use relay::{relay_chains, relay_quote, relay_status};
 use okx_account::{
     okx_connection_status, okx_delete_credentials, okx_get_assets, okx_get_dcd_index_prices,
     okx_get_dcd_orders, okx_save_credentials, okx_save_dcd_csv,
@@ -8378,6 +8380,9 @@ pub fn run() {
             write_diagnostic_log,
             get_price_oracle_prices,
             get_defi_positions,
+            relay_chains,
+            relay_quote,
+            relay_status,
             okx_dex_supported_chains,
             okx_dex_tokens,
             okx_dex_quote,
@@ -10336,6 +10341,9 @@ mod e2e {
                 safe_pending_transactions,
                 safe_confirm_transaction,
                 wallet_send,
+                relay_chains,
+                relay_quote,
+                relay_status,
                 okx_connection_status,
                 okx_save_credentials,
                 okx_delete_credentials,
@@ -10438,6 +10446,34 @@ mod e2e {
             "wallet_request",
             json!({ "method": method, "params": params }),
         )
+    }
+
+    #[test]
+    fn e2e_relay_commands_are_shell_only() {
+        let app = build_app();
+        let shell = webview(app, "shell", tauri::WebviewUrl::App("index.html".into()));
+        // Invalid inputs prove dispatch reaches the registered shell command
+        // without requiring a key or sending an HTTP request.
+        assert_eq!(
+            invoke(&shell, "relay_quote", json!({"body": []})).unwrap_err(),
+            json!("Relay quote body must be an object")
+        );
+        assert_eq!(
+            invoke(&shell, "relay_status", json!({"requestId": ""})).unwrap_err(),
+            json!("Relay request id is required")
+        );
+        let dapp = dapp_webview(app);
+        for (command, args) in [
+            ("relay_chains", json!({})),
+            ("relay_quote", json!({"body": {}})),
+            ("relay_status", json!({"requestId": "test"})),
+        ] {
+            let error = invoke(&dapp, command, args).unwrap_err();
+            assert!(error.as_str().unwrap().contains("not allowed"), "{command}: {error}");
+        }
+        let approval = approval_webview(app);
+        let error = invoke(&approval, "relay_quote", json!({"body": {}})).unwrap_err();
+        assert!(error.as_str().unwrap().contains("not allowed"), "{error}");
     }
 
     /// Serialize every test that touches process-global wallet state and reset to a

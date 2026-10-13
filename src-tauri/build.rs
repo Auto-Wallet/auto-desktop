@@ -3,6 +3,7 @@ fn main() {
     // resolved at compile time — without this, a cached build would keep whatever
     // key it was first compiled with.
     println!("cargo:rerun-if-env-changed=PUBLIC_NODE_KEY");
+    println!("cargo:rerun-if-env-changed=RELAY_API_KEY");
     embed_test_manifest();
     tauri_build::build()
 }

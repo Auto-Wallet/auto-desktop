@@ -15,6 +15,12 @@ const BUILD_STEPS = [
   "Build executable + NSIS updater installer",
 ];
 
+test.each(BUILD_STEPS)("%s receives the Relay API key", (stepName) => {
+  expect(releaseStep(stepName)).toContain(
+    "RELAY_API_KEY: ${{ secrets.RELAY_API_KEY }}",
+  );
+});
+
 test.each(BUILD_STEPS)("%s receives the DeBank API key", (stepName) => {
   expect(releaseStep(stepName)).toContain(
     "DEBANK_APIKEY: ${{ secrets.DEBANK_APIKEY }}",
